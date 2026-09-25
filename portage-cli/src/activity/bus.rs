@@ -11,6 +11,9 @@ use super::event::ActivityEvent;
 /// Lagging UIs drop events; durable sinks never use this path.
 const BROADCAST_CAPACITY: usize = 1024;
 
+/// Maximum durable events retained by one background sink before producers wait.
+const BACKGROUND_QUEUE_CAPACITY: usize = 1024;
+
 /// Receives every event on the durable path (must not drop)
 pub trait ActivitySink: Send + Sync {
     fn on_event(&self, event: &ActivityEvent);
@@ -123,29 +126,30 @@ enum Msg {
 /// Wraps any [`ActivitySink`] so its (potentially blocking, disk-bound)
 /// `on_event` runs on a dedicated OS thread instead of the caller's thread.
 ///
-/// This keeps [`ActivityBus::emit`] non-blocking for the async merge scheduler
-/// and the ebuild phase loop: durable sinks (live FS, history, emerge.log) do
-/// real I/O on every phase transition, and without offload that I/O runs inline
-/// on the single-threaded runtime that also drives the compile subprocesses.
+/// This keeps [`ActivityBus::emit`] off the async merge scheduler and the
+/// ebuild phase loop: durable sinks (live FS, history, emerge.log) do real I/O
+/// on every phase transition, and without offload that I/O runs inline on the
+/// single-threaded runtime that also drives the compile subprocesses.
 ///
-/// Events reach the inner sink on one thread **in FIFO order** through an
-/// unbounded mpsc, so durable sinks keep their "must not drop" guarantee
-/// (the design's decision #4: durability never rides on the lossy broadcast
-/// path). [`Self::flush`] is a synchronous barrier; `Drop` joins the worker so
-/// a session's final events (e.g. `SessionEnd`) reach disk before return.
+/// Events reach the inner sink on one thread **in FIFO order** through a
+/// bounded mpsc. The queue preserves the durable sinks' "must not drop"
+/// guarantee; a slow sink applies backpressure once its bounded queue fills
+/// instead of retaining an unbounded event backlog. [`Self::flush`] is a
+/// synchronous barrier; `Drop` joins the worker so a session's final events
+/// (e.g. `SessionEnd`) reach disk before return.
 ///
 /// Cheap inline sinks (e.g. [`RecordingSink`] in tests, or a fast FD pipe) do
 /// not need wrapping.
 pub struct BackgroundSink {
     /// `None` once dropped / shutting down
-    tx: Mutex<Option<std::sync::mpsc::Sender<Msg>>>,
+    tx: Mutex<Option<std::sync::mpsc::SyncSender<Msg>>>,
     handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl BackgroundSink {
     /// Drain `inner` on a thread named `name` (e.g. `"em-activity-live"`)
     pub fn new(inner: Arc<dyn ActivitySink>, name: &str) -> Self {
-        let (tx, rx) = std::sync::mpsc::channel::<Msg>();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Msg>(BACKGROUND_QUEUE_CAPACITY);
         let handle = std::thread::Builder::new()
             .name(name.to_string())
             .spawn(move || {
@@ -167,7 +171,7 @@ impl BackgroundSink {
 
     /// Block until the worker has processed every event emitted before this call
     ///
-    /// Cheap and safe to call from the emit thread.
+    /// Waits for queue space if the worker is behind.
     pub fn flush(&self) {
         let ack = {
             let guard = self.tx.lock().unwrap_or_else(|e| e.into_inner());
@@ -202,5 +206,102 @@ impl Drop for BackgroundSink {
         if let Some(handle) = self.handle.lock().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = handle.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::activity::event::ACTIVITY_EVENT_VERSION;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Condvar, Mutex};
+    use std::time::{Duration, Instant};
+
+    struct BlockingSink {
+        started: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+        released: Mutex<bool>,
+        wake: Condvar,
+        count: AtomicUsize,
+    }
+
+    impl BlockingSink {
+        fn new(started: std::sync::mpsc::Sender<()>) -> Self {
+            Self {
+                started: Mutex::new(Some(started)),
+                released: Mutex::new(false),
+                wake: Condvar::new(),
+                count: AtomicUsize::new(0),
+            }
+        }
+
+        fn release(&self) {
+            *self.released.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            self.wake.notify_all();
+        }
+    }
+
+    impl ActivitySink for BlockingSink {
+        fn on_event(&self, _event: &ActivityEvent) {
+            let started = self
+                .started
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            if let Some(started) = started {
+                let _ = started.send(());
+            }
+            let mut released = self.released.lock().unwrap_or_else(|e| e.into_inner());
+            while !*released {
+                released = self.wake.wait(released).unwrap_or_else(|e| e.into_inner());
+            }
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn heartbeat(at: u32) -> ActivityEvent {
+        ActivityEvent::SessionHeartbeat {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: "bounded".into(),
+            parent_job_id: None,
+            at: f64::from(at),
+            completed: at,
+            failed: 0,
+        }
+    }
+
+    #[test]
+    fn background_queue_bounds_backlog_without_dropping_events() {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let inner = Arc::new(BlockingSink::new(started_tx));
+        let background = Arc::new(BackgroundSink::new(inner.clone(), "test-bg-bounded"));
+        background.on_event(&heartbeat(0));
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker must enter the blocking sink");
+
+        let sent = Arc::new(AtomicUsize::new(0));
+        let producer_background = Arc::clone(&background);
+        let producer_sent = Arc::clone(&sent);
+        let producer = std::thread::spawn(move || {
+            for at in 1..=BACKGROUND_QUEUE_CAPACITY + 1 {
+                producer_background.on_event(&heartbeat(at as u32));
+                producer_sent.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+
+        let target = BACKGROUND_QUEUE_CAPACITY + 1;
+        let deadline = Instant::now() + Duration::from_millis(250);
+        while sent.load(Ordering::Relaxed) < target && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let completed_while_blocked = sent.load(Ordering::Relaxed) >= target;
+        inner.release();
+        producer.join().unwrap();
+        background.flush();
+        assert!(
+            !completed_while_blocked,
+            "a full durable queue must apply backpressure"
+        );
+        assert_eq!(inner.count.load(Ordering::Relaxed), target + 1);
     }
 }

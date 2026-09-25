@@ -735,6 +735,19 @@ per-step ids (default), resume is per-step. Document this on `ActivitySessionOpt
 
 ---
 
+## BF-406 follow-up — bounded durable queues
+
+A nine-phase package produces 21 live-FS atomic rewrites (plus two session
+writes); a 1,000-package burst on the NVMe-backed test filesystem took about
+1.3 s. That is small compared with real package phase durations, so phase
+updates remain lossless rather than being coalesced.
+
+The old background sink used an unbounded channel. With a deliberately slow
+10 µs sink, a 100,000-event burst left a multi-second producer/consumer backlog.
+`BackgroundSink` now uses a 1,024-event `sync_channel`; producers wait when the
+queue is full, preserving every event while bounding retained memory. The
+tradeoff is intentional backpressure, not a claimed throughput improvement.
+
 ## Relation to recent work
 
 - Resume markers (`em-resume.done/<job_id>/…`) remain “completed for this job.”  

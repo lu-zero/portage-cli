@@ -130,8 +130,9 @@ impl ActivityPkgCtx {
 /// Build the default CLI bus: live FS + history JSONL under `merge_root` (no emerge.log —
 /// opt-in only)
 ///
-/// Both disk sinks are offloaded to background threads so [`ActivityBus::emit`] never
-/// blocks the async merge scheduler on phase-transition I/O.
+/// Both disk sinks are offloaded to background threads so [`ActivityBus::emit`] does not
+/// perform phase-transition I/O inline. A slow sink applies bounded backpressure rather
+/// than growing an unbounded event queue.
 pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
     let bus = ActivityBus::new();
     bus.add_sink(Arc::new(BackgroundSink::new(
