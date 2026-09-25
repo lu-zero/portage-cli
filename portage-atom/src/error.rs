@@ -17,7 +17,8 @@ pub enum Error {
     #[error("invalid package: {0}")]
     InvalidPackage(String),
 
-    /// The version string does not conform to [PMS 3.2]
+    /// The version string does not conform to [PMS 3.2], or a numeric
+    /// component does not fit in a `u64`.
     ///
     /// [PMS 3.2]: https://projects.gentoo.org/pms/9/pms.html#version-specifications
     #[error("invalid version: {0}")]

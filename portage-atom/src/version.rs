@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 use winnow::Parser;
 use winnow::ascii::digit1;
-use winnow::combinator::{alt, cut_err, opt, preceded, repeat, separated};
+use winnow::combinator::{alt, cut_err, fail, opt, preceded, repeat, separated};
 use winnow::error::StrContext;
 use winnow::prelude::*;
 use winnow::token::one_of;
@@ -608,15 +608,32 @@ impl Ord for Version {
 
 // Winnow parsers
 
+/// A run of digits that does not fit in `u64` is a committed error.
+///
+/// Backtracking would let an operator-less atom keep the digits as part of
+/// the package name, and a later component would report trailing input
+/// instead of the overflow.
+fn overflow_number<T>(input: &mut &str) -> ModalResult<T> {
+    cut_err(fail)
+        .context(StrContext::Label("number too large to fit in target type"))
+        .parse_next(input)
+}
+
 fn parse_number(input: &mut &str) -> ModalResult<u64> {
-    digit1.try_map(|s: &str| s.parse::<u64>()).parse_next(input)
+    let digits = digit1.parse_next(input)?;
+    match digits.parse::<u64>() {
+        Ok(n) => Ok(n),
+        Err(_) => overflow_number(input),
+    }
 }
 
 /// Parse one version component, keeping the original digit text for PMS 3.3
 fn parse_component(input: &mut &str) -> ModalResult<(SmolStr, u64)> {
-    digit1
-        .try_map(|s: &str| s.parse::<u64>().map(|n| (SmolStr::new(s), n)))
-        .parse_next(input)
+    let digits = digit1.parse_next(input)?;
+    match digits.parse::<u64>() {
+        Ok(n) => Ok((SmolStr::new(digits), n)),
+        Err(_) => overflow_number(input),
+    }
 }
 
 fn parse_letter(input: &mut &str) -> ModalResult<char> {
@@ -917,6 +934,13 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(over.contains("number too large"), "{over}");
+        let later = Version::parse("1.18446744073709551616")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            later.contains("number too large"),
+            "a later component must commit the overflow, got {later}"
+        );
     }
 
     #[test]

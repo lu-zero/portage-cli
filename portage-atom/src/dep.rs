@@ -343,6 +343,17 @@ mod tests {
     }
 
     #[test]
+    fn an_operatorless_atom_rejects_a_component_past_u64() {
+        let err = Dep::parse("cat/pkg-18446744073709551616")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("number too large"),
+            "overflow must not become part of the package name, got {err}"
+        );
+    }
+
+    #[test]
     fn test_dep_versioned() {
         let dep = Dep::parse(">=dev-lang/rust-1.75.0").unwrap();
         assert!(dep.version.is_some());

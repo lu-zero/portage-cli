@@ -2,9 +2,8 @@ use std::fmt;
 use std::hash::Hash;
 use std::str::FromStr;
 
-use gentoo_interner::Interned;
-use winnow::combinator::cut_err;
-use winnow::error::StrContext;
+use winnow::combinator::{cut_err, fail};
+use winnow::error::ErrMode;
 use winnow::prelude::*;
 
 use crate::cpn::{Cpn, parse_category, parse_package};
@@ -134,47 +133,86 @@ pub(crate) fn parse_cpv(input: &mut &str) -> ModalResult<Cpv> {
 }
 
 pub(crate) fn parse_cpv_with_glob(input: &mut &str) -> ModalResult<(Cpv, bool)> {
-    (parse_category, '/', cut_err(parse_ident_with_dot_star))
-        .verify_map(|(category, _, pkg_ver): (Interned<_>, char, &str)| {
-            let version_pos = find_last_hyphen_digit(pkg_ver)?;
-            let pkg_str = &pkg_ver[..version_pos];
-            let ver_str = &pkg_ver[version_pos + 1..];
-
-            let package = parse_package.parse(pkg_str).ok()?;
-            let (version, glob) = parse_version_no_raw.parse(ver_str).ok()?;
-
-            Some((
-                Cpv {
-                    cpn: Cpn { category, package },
-                    version,
-                },
-                glob,
-            ))
-        })
-        .context(StrContext::Label("cpv"))
-        .parse_next(input)
+    let checkpoint = *input;
+    let (category, _, pkg_ver) =
+        (parse_category, '/', cut_err(parse_ident_with_dot_star)).parse_next(input)?;
+    let Some((pkg_str, ver_str)) = split_name_version(pkg_ver) else {
+        *input = checkpoint;
+        return fail.parse_next(input);
+    };
+    let package = match parse_whole(pkg_str, parse_package) {
+        Ok(package) => package,
+        Err(ErrMode::Cut(err)) => return Err(ErrMode::Cut(err)),
+        Err(_) => {
+            *input = checkpoint;
+            return fail.parse_next(input);
+        }
+    };
+    let (version, glob) = match parse_whole(ver_str, parse_version_no_raw) {
+        Ok(parsed) => parsed,
+        Err(ErrMode::Cut(err)) => return Err(ErrMode::Cut(err)),
+        Err(_) => {
+            *input = checkpoint;
+            return fail.parse_next(input);
+        }
+    };
+    Ok((
+        Cpv {
+            cpn: Cpn { category, package },
+            version,
+        },
+        glob,
+    ))
 }
 
 fn parse_cpv_impl(
     input: &mut &str,
-    mut version_parser: impl Fn(&mut &str) -> ModalResult<Version>,
+    version_parser: impl Fn(&mut &str) -> ModalResult<Version>,
 ) -> ModalResult<Cpv> {
-    (parse_category, '/', cut_err(parse_ident_with_dot_star))
-        .verify_map(move |(category, _, pkg_ver): (Interned<_>, char, &str)| {
-            let version_pos = find_last_hyphen_digit(pkg_ver)?;
-            let pkg_str = &pkg_ver[..version_pos];
-            let ver_str = &pkg_ver[version_pos + 1..];
+    let checkpoint = *input;
+    let (category, _, pkg_ver) =
+        (parse_category, '/', cut_err(parse_ident_with_dot_star)).parse_next(input)?;
+    let Some((pkg_str, ver_str)) = split_name_version(pkg_ver) else {
+        *input = checkpoint;
+        return fail.parse_next(input);
+    };
+    let package = match parse_whole(pkg_str, parse_package) {
+        Ok(package) => package,
+        Err(ErrMode::Cut(err)) => return Err(ErrMode::Cut(err)),
+        Err(_) => {
+            *input = checkpoint;
+            return fail.parse_next(input);
+        }
+    };
+    let version = match parse_whole(ver_str, version_parser) {
+        Ok(version) => version,
+        Err(ErrMode::Cut(err)) => return Err(ErrMode::Cut(err)),
+        Err(_) => {
+            *input = checkpoint;
+            return fail.parse_next(input);
+        }
+    };
+    Ok(Cpv {
+        cpn: Cpn { category, package },
+        version,
+    })
+}
 
-            let package = parse_package.parse(pkg_str).ok()?;
-            let version = version_parser.parse(ver_str).ok()?;
+fn split_name_version(pkg_ver: &str) -> Option<(&str, &str)> {
+    let version_pos = find_last_hyphen_digit(pkg_ver)?;
+    Some((&pkg_ver[..version_pos], &pkg_ver[version_pos + 1..]))
+}
 
-            Some(Cpv {
-                cpn: Cpn { category, package },
-                version,
-            })
-        })
-        .context(StrContext::Label("cpv"))
-        .parse_next(input)
+/// `Parser::parse` hides whether a failure was committed. `parse_next` plus
+/// a full-consume check keeps a `u64` overflow as `ErrMode::Cut`.
+fn parse_whole<T>(text: &str, parser: impl Fn(&mut &str) -> ModalResult<T>) -> ModalResult<T> {
+    let mut rest = text;
+    let value = parser(&mut rest)?;
+    if rest.is_empty() {
+        Ok(value)
+    } else {
+        fail.parse_next(&mut rest)
+    }
 }
 
 fn parse_cpv_with_raw(input: &mut &str) -> ModalResult<Cpv> {
