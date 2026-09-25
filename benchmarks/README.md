@@ -21,6 +21,7 @@ Benchmarks for the Gentoo Portage Rust ecosystem.
 | `repo_cache_lookup` | Exact CPV cache construction and lookup scaling |
 | `provider_postprocess` | Provider construction with complete versus missing dependency branches |
 | `source_reuse` | Worker-local shell reuse during synthetic ebuild sourcing |
+| `eclass_memo` | Eclass digest/path memo during fresh-repository live sourcing |
 
 `pkgcraft-compare` is off by default (it pulls in `gix`, a sizeable compile) —
 enable it explicitly whenever you actually want the pkgcraft comparison

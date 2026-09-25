@@ -115,3 +115,7 @@ harness = false
 [[bench]]
 name = "source_reuse"
 harness = false
+
+[[bench]]
+name = "eclass_memo"
+harness = false

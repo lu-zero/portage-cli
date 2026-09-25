@@ -676,6 +676,26 @@ cargo bench -p portage-bench --bench source_reuse -- --noplot --warm-up-time 1 -
 
 The baseline was run from a detached worktree at `cd0b37d2` with the same fixture.
 
+### 21. Eclass digest/path memo (thalia, 2026-09-25)
+
+`eclass_memo` creates a fresh repository for every iteration and live-sources 32/128/512 ebuilds that inherit one shared eclass. The baseline is the BF-302 parent at `d10ec9a4`; the current tree memoizes eclass digests by resolved path and seeds the name memo used by cache validation. Criterion used 10 samples, a one-second warm-up, and a two-second measurement window.
+
+| Ebuilds | BF-302 parent | Eclass memo | Difference |
+|--------:|--------------:|------------:|-----------:|
+| 32 | 5.198 ms | 5.330 ms | +2.5% |
+| 128 | 17.879 ms | 17.449 ms | -2.4% |
+| 512 | 67.848 ms | 67.958 ms | +0.2% |
+
+The result is neutral/noisy for this end-to-end sourcing fixture; the shell work dominates the saved digest reads. No speedup is claimed.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench -p portage-bench --bench eclass_memo -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
+```
+
+The baseline was run from a detached worktree at `d10ec9a4` with the same fresh-repository fixture.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

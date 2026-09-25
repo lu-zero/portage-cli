@@ -61,11 +61,12 @@ policy-fact evaluation; `policy_lists` measures full acceptance filtering with
 CPN-indexed final policy lists; `repo_cache_lookup` measures exact-CPV cache
 construction and lookup scaling; `provider_postprocess` measures provider
 construction with complete versus missing branches; `source_reuse` measures
-worker-local shell reuse during synthetic sourcing; `resolve` measures the
-in-memory adapter and solver path:
+worker-local shell reuse during synthetic sourcing; `eclass_memo` measures
+path-keyed eclass digest reuse during fresh-repository live sourcing; `resolve`
+measures the in-memory adapter and solver path:
 
 ```sh
-# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot, policy_facts, policy_lists, repo_cache_lookup, provider_postprocess, source_reuse)
+# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot, policy_facts, policy_lists, repo_cache_lookup, provider_postprocess, source_reuse, eclass_memo)
 cargo bench -p portage-bench
 
 # One
@@ -80,6 +81,7 @@ cargo bench -p portage-bench --bench policy_lists
 cargo bench -p portage-bench --bench repo_cache_lookup
 cargo bench -p portage-bench --bench provider_postprocess
 cargo bench -p portage-bench --bench source_reuse
+cargo bench -p portage-bench --bench eclass_memo
 
 # Alternative interner (see benchmarks/Cargo.toml's [features])
 cargo bench -p portage-bench --no-default-features --features lasso

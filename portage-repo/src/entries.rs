@@ -57,10 +57,14 @@ use crate::cache::{
 };
 use crate::repo::Repository;
 
-type EclassDigests = HashMap<
-    portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
-    Option<md5::Digest>,
->;
+#[derive(Default)]
+struct EclassMemo {
+    by_name: HashMap<
+        portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
+        Option<md5::Digest>,
+    >,
+    by_path: HashMap<camino::Utf8PathBuf, Option<md5::Digest>>,
+}
 
 /// Name of the sidecar listing the CPVs the in-tree cache does not serve
 const GAP_INDEX: &str = "gap-index";
@@ -81,7 +85,7 @@ const GAP_INDEX: &str = "gap-index";
 pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     let stamp = repo.sync_stamp();
     let index = repo.sidecar_path(GAP_INDEX);
-    let mut eclass_digests = EclassDigests::new();
+    let mut eclass_digests = EclassMemo::default();
 
     // Unchanged tree: the suspects are known, and their entries are already in
     // the secondary store from the run that discovered them. Gated on
@@ -103,7 +107,7 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
             .into_iter()
             .filter_map(|(cpv, e)| {
                 let entry = e.ok()?;
-                if repo.is_fresh_cached(&entry, &mut eclass_digests) {
+                if repo.is_fresh_cached(&entry, &mut eclass_digests.by_name) {
                     Some((cpv, entry))
                 } else {
                     stale = true;
@@ -119,7 +123,7 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
                 continue;
             }
             if let Ok(Some(entry)) = repo.cache_entry(cpv)
-                && repo.is_fresh_cached(&entry, &mut eclass_digests)
+                && repo.is_fresh_cached(&entry, &mut eclass_digests.by_name)
             {
                 recovered += 1;
                 out.push((cpv.clone(), entry));
@@ -205,7 +209,7 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
             cache_mtime.insert(cpv.clone(), m);
         }
         if let Ok(entry) = entry
-            && repo.is_fresh_cached(&entry, &mut eclass_digests)
+            && repo.is_fresh_cached(&entry, &mut eclass_digests.by_name)
         {
             covered.insert(cpv.clone());
             out.push((cpv, entry));
@@ -333,14 +337,14 @@ pub async fn gap_entries(
     ebuilds: Vec<crate::repo::Ebuild>,
     covered: &std::collections::HashSet<Cpv>,
 ) -> Vec<(Cpv, CacheEntry)> {
-    gap_entries_with_digests(repo, ebuilds, covered, &mut EclassDigests::new()).await
+    gap_entries_with_digests(repo, ebuilds, covered, &mut EclassMemo::default()).await
 }
 
 async fn gap_entries_with_digests(
     repo: &Repository,
     ebuilds: Vec<crate::repo::Ebuild>,
     covered: &std::collections::HashSet<Cpv>,
-    digests: &mut EclassDigests,
+    digests: &mut EclassMemo,
 ) -> Vec<(Cpv, CacheEntry)> {
     let missing: Vec<_> = ebuilds
         .into_iter()
@@ -363,7 +367,7 @@ async fn resolve_ebuilds(
     repo: &Repository,
     ebuilds: impl IntoIterator<Item = crate::repo::Ebuild>,
     cached: &mut HashMap<Cpv, CacheEntry>,
-    digests: &mut EclassDigests,
+    digests: &mut EclassMemo,
 ) -> Vec<(Cpv, CacheEntry)> {
     let masters = repo.masters();
     let mut out: Vec<(Cpv, CacheEntry)> = Vec::new();
@@ -375,12 +379,12 @@ async fn resolve_ebuilds(
             continue;
         };
         let digest = format!("{:x}", md5::compute(&bytes));
-        let valid = |entry: &CacheEntry, digests: &mut EclassDigests| {
+        let valid = |entry: &CacheEntry, digests: &mut EclassMemo| {
             entry
                 .md5
                 .as_deref()
                 .is_some_and(|m| m.eq_ignore_ascii_case(&digest))
-                && repo.is_fresh_cached(entry, digests)
+                && repo.is_fresh_cached(entry, &mut digests.by_name)
                 && !entry.metadata.has_parse_failure()
         };
 
@@ -426,18 +430,22 @@ async fn resolve_ebuilds(
         };
         match sh.source_ebuild(&ebuild).await {
             Ok(sourced) => {
-                let eclasses = sourced
-                    .eclasses
-                    .iter()
-                    .filter_map(|(name, path)| {
-                        std::fs::read(path).ok().map(|b| {
-                            (
-                                portage_atom::interner::Interned::intern(name),
-                                md5::compute(&b),
-                            )
+                let mut eclasses = Vec::with_capacity(sourced.eclasses.len());
+                for (name, path) in &sourced.eclasses {
+                    let digest = digests
+                        .by_path
+                        .entry(path.clone())
+                        .or_insert_with(|| {
+                            std::fs::read(path).ok().map(|bytes| md5::compute(&bytes))
                         })
-                    })
-                    .collect();
+                        .as_ref()
+                        .copied();
+                    if let Some(digest) = digest {
+                        let name = portage_atom::interner::Interned::intern(name);
+                        digests.by_name.insert(name, Some(digest));
+                        eclasses.push((name, digest));
+                    }
+                }
                 let entry = CacheEntry {
                     metadata: sourced.metadata,
                     md5: Some(digest),
