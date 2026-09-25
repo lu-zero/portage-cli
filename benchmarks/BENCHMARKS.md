@@ -915,4 +915,68 @@ cargo test --release -p portage-binpkg benchmark_extract_image_streams_large_mem
 
 ---
 
+### 33. Post-review measurement pass (thalia, 2026-09-26)
+
+Machine: **thalia** (Ampere-1a, 128c, 4 NUMA nodes), all runs under
+`numactl -N 0 -m 0` per `machines/thalia.md`. Criterion for the microbenchmarks,
+`hyperfine` for wall-clock.
+
+**Targeted re-measurement of the paths changed by the 2026-09-26 review fixes.**
+
+| bench | median | criterion verdict |
+|---|---|---|
+| `dep_parsing/DepEntry::parse/dep/simple` | 447.6 ns | -0.2%, within noise |
+| `dep_parsing/DepEntry::parse/dep/medium` | 2.274 us | -1.5%, improved |
+| `dep_parsing/DepEntry::parse/dep/complex` | 5.273 us | -0.7%, within noise |
+| `dep_parsing/RequiredUseExpr::parse/required_use` | 1.186 us | +0.5%, within noise |
+| `repo_load/repository/load/repo_entries` | 675.6 ms | no change (p = 0.64) |
+
+The parse numbers matter because the `u64` overflow fix replaced `parse_cpv`'s
+`verify_map` (which swallowed every error through `.ok()?`) with explicit
+sequencing and `parse_whole`. That is a rewrite of the hot atom path, and it
+costs nothing measurable.
+
+`repo_entries` is **not** evidence for the gap-index change: this host has no gap
+sidecar at all, so `read_gap_index` returns `None` and the fast path never runs.
+The `out.iter().position` to positional-index change is O(gap x primary) to O(n)
+and its cost here was a handful of comparisons against 33,121 primary entries. No
+speedup is claimed for it; the claim is only that it removes a cliff for hosts
+whose gap list reaches thousands after a mass eclass change.
+
+**A session-level wall-clock A/B is not available, and the reason is structural.**
+Timing `em -p --emptytree @system` and `-vp --emptytree dev-libs/openssl` at
+`d737929e` (the commit before the session) against `b1bcf570` gives *different
+plans*, not just different times: same ebuild count (351) but a different set --
+`llvm-runtimes/clang-*-config-23` multi-slot entries in place of
+`sys-devel/binutils-config-5.6` and others. The session contained nine `fix:`
+commits, and `b122fc18` ("retain selected virtual branches") changes which
+packages the graph keeps. Any timing delta between the endpoints therefore mixes
+"faster" with "different work", and cannot be attributed.
+
+**The resolve bench shows no signal above this machine's noise floor.** Repeated
+runs of the identical binary disagree in sign: `targets/gcc` read -0.2% on one
+run and +0.7% on the next, `targets/firefox` spanned +0.09% to +12.9% with
+p = 0.23. Current medians for the record -- `load/load_repo` 1.002 s,
+`load/build_provider` 529.9 ms, and per-target 4.22 ms (openssh), 4.51 ms (gcc),
+5.79 ms (python), 9.32 ms (rust), 26.33 ms (firefox). Criterion's single-run
+comparison against its own previous save is not a usable instrument for sub-1%
+effects here; the same conclusion as the BF-512 `Adjacency` measurement, where 12
+interleaved runs put the spread (88-137 ms) above the effect.
+
+**The aggregate question stays open, and this is the experiment that would settle
+it:** replay only the 19 `perf:` commits onto `d737929e`, excluding the nine
+`fix:` commits, then A/B that against `d737929e`. Both ends would compute the same
+plan, so the delta is attributable. It needs two `--release` builds of a 19-commit
+series and is not cheap, which is why it is proposed rather than run.
+
+Reproduction on the current tree:
+
+```sh
+numactl -N 0 -m 0 cargo bench -p portage-bench --bench dep_parsing
+numactl -N 0 -m 0 cargo bench -p portage-bench --bench repo_load
+numactl -N 0 -m 0 cargo bench -p portage-bench --bench resolve
+```
+
+---
+
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*
