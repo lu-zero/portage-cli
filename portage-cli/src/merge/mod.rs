@@ -64,23 +64,33 @@ pub(crate) struct ActivityTrack {
     pub live_root: camino::Utf8PathBuf,
 }
 
-/// Activity kind for `PkgStart`/`PkgEnd` banners (`Emerging` vs `Emerging binary` vs
-/// `Fetching`)
-///
-/// Binpkg reuse is decided here with the same `find_reusable` rules as [`act_on_package`],
-/// so the status line and human sink colour match what the merge path will actually do —
-/// not a conservative `Source` default that made `PkgKind::Binpkg` unreachable.
-fn pkg_kind_for_entry(
-    flags: &ActionFlags,
+/// The one binpkg lookup shared by status rendering and the action path.
+#[derive(Debug)]
+struct BinpkgReuse {
+    local: Option<std::path::PathBuf>,
+    /// Remote URL and its binrepo's signature-verification setting.
+    remote: Option<(String, bool)>,
+}
+
+impl BinpkgReuse {
+    fn kind(&self, flags: &ActionFlags) -> crate::activity::PkgKind {
+        if flags.fetchonly || flags.fetch_all_uri {
+            crate::activity::PkgKind::FetchOnly
+        } else if self.local.is_some() || self.remote.is_some() {
+            crate::activity::PkgKind::Binpkg
+        } else {
+            crate::activity::PkgKind::Source
+        }
+    }
+}
+
+fn find_binpkg_reuse(
     planned: &query::depgraph::PlannedMerge,
     binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     desired_chost: &str,
     desired_build_env_key: &str,
-) -> crate::activity::PkgKind {
-    if flags.fetchonly || flags.fetch_all_uri {
-        return crate::activity::PkgKind::FetchOnly;
-    }
+) -> BinpkgReuse {
     let desired_use: Vec<String> = planned
         .use_flags
         .iter()
@@ -94,23 +104,20 @@ fn pkg_kind_for_entry(
             desired_build_env_key,
         )
     });
-    if local.is_some() {
-        return crate::activity::PkgKind::Binpkg;
-    }
-    let remote = remote_indices.iter().any(|idx| {
-        idx.find_reusable(
-            &planned.cpv.to_string(),
-            &desired_use,
-            desired_chost,
-            desired_build_env_key,
-        )
-        .is_some()
-    });
-    if remote {
-        crate::activity::PkgKind::Binpkg
+    let remote = if local.is_none() {
+        remote_indices.iter().find_map(|idx| {
+            idx.find_reusable(
+                &planned.cpv.to_string(),
+                &desired_use,
+                desired_chost,
+                desired_build_env_key,
+            )
+            .map(|url| (url, idx.verify_signature()))
+        })
     } else {
-        crate::activity::PkgKind::Source
-    }
+        None
+    };
+    BinpkgReuse { local, remote }
 }
 
 fn emit_pkg_start(
@@ -238,6 +245,11 @@ impl MergeRun<'_> {
             self_contained_bootstrap: self.roots.installed_view_target_only(),
         }
     }
+
+    fn has_binpkg_candidates(&self) -> bool {
+        self.binpkg_index.is_some_and(|idx| !idx.is_empty())
+            || self.remote_indices.iter().any(|idx| !idx.is_empty())
+    }
 }
 
 /// Everything needed to act on one plan entry (fetch / binpkg / source)
@@ -251,10 +263,7 @@ struct PackageAction<'a> {
     flags: &'a ActionFlags,
     extra_path: &'a [camino::Utf8PathBuf],
     merge_gate: Option<&'a ebuild::MergeGate>,
-    binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
-    remote_indices: &'a [portage_binpkg::RemoteBinpkgIndex],
-    desired_chost: &'a str,
-    desired_build_env_key: &'a str,
+    reuse: BinpkgReuse,
     /// Phase enter/leave emitter for this package (if activity is enabled)
     activity_pkg: Option<crate::activity::ActivityPkgCtx>,
 }
@@ -686,10 +695,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
         flags,
         extra_path,
         merge_gate,
-        binpkg_index,
-        remote_indices,
-        desired_chost,
-        desired_build_env_key,
+        reuse,
         activity_pkg,
     } = a;
     let ActionFlags {
@@ -703,39 +709,10 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
         ..
     } = *flags;
 
-    let desired_use: Vec<String> = planned
-        .use_flags
-        .iter()
-        .map(|f| f.as_str().to_string())
-        .collect();
-
-    let reused = binpkg_index.and_then(|idx| {
-        idx.find_reusable(
-            &planned.cpv.to_string(),
-            &desired_use,
-            desired_chost,
-            desired_build_env_key,
-        )
-    });
-    // `(url, verify_signature)` — the per-repo `verify-signature` flag rides
-    // along with the match so the merge call below knows whether this
-    // specific binpkg's origin forces cryptographic signature verification
-    // (`binrepos.conf`'s per-repo knob, independent of the global
-    // `FEATURES=binpkg-request-signature`).
-    let remote_match: Option<(String, bool)> = reused
-        .is_none()
-        .then(|| {
-            remote_indices.iter().find_map(|idx| {
-                idx.find_reusable(
-                    &planned.cpv.to_string(),
-                    &desired_use,
-                    desired_chost,
-                    desired_build_env_key,
-                )
-                .map(|url| (url, idx.verify_signature()))
-            })
-        })
-        .flatten();
+    let BinpkgReuse {
+        local: reused,
+        remote: remote_match,
+    } = reuse;
     let remote_url = remote_match.as_ref().map(|(url, _)| url.clone());
 
     let root_ctx = ebuild::RootContext {
@@ -1158,16 +1135,6 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
         let merge_root = entry_roots.merge_root();
         let entry_index = entry_binpkg_index(planned, run.binpkg_index, run.host_binpkg_index);
 
-        // Per-entry desired build_env_key (S6: package.env-aware) and CHOST
-        // — proper binpkg reuse across cross-compilation and multi-arch
-        // scenarios, host vs target selected the same way entry_roots is.
-        let (desired_env, desired_dirs) = entry_desired_env(
-            planned,
-            (run.target_env, run.target_dirs),
-            (run.host_env, run.host_dirs),
-        );
-        let desired_build_env_key = desired_env.key_for(desired_dirs, &planned.cpv).await;
-
         // VDB-presence skip for non-emptytree non-reinstall entries (an
         // interrupted ordinary install/upgrade). `--emptytree` must not use
         // this path — the tree starts installed — resume completion is
@@ -1184,16 +1151,33 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             continue;
         }
 
+        let reuse = if run.has_binpkg_candidates() {
+            // Per-entry desired build_env_key (S6: package.env-aware) and CHOST
+            // — proper binpkg reuse across cross-compilation and multi-arch
+            // scenarios, host vs target selected the same way entry_roots is.
+            let (desired_env, desired_dirs) = entry_desired_env(
+                planned,
+                (run.target_env, run.target_dirs),
+                (run.host_env, run.host_dirs),
+            );
+            let desired_build_env_key = desired_env.key_for(desired_dirs, &planned.cpv).await;
+            find_binpkg_reuse(
+                planned,
+                entry_index,
+                run.remote_indices,
+                &desired_env.chost,
+                &desired_build_env_key,
+            )
+        } else {
+            BinpkgReuse {
+                local: None,
+                remote: None,
+            }
+        };
+
         // `>>> Emerging (N of M)` is rendered by `HumanStdoutSink` from the
         // `PkgStart` event emitted below — no ad-hoc print here.
-        let kind = pkg_kind_for_entry(
-            &flags,
-            planned,
-            entry_index,
-            run.remote_indices,
-            &desired_env.chost,
-            &desired_build_env_key,
-        );
+        let kind = reuse.kind(&flags);
         let pkg_started =
             emit_pkg_start(&run.activity, planned, (i + 1) as u32, total as u32, kind);
         let activity_pkg = activity_pkg_ctx(&run.activity, planned);
@@ -1207,10 +1191,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             flags: &flags,
             extra_path: run.extra_path,
             merge_gate: Some(&merge_gate),
-            binpkg_index: entry_index,
-            remote_indices: run.remote_indices,
-            desired_chost: &desired_env.chost,
-            desired_build_env_key: &desired_build_env_key,
+            reuse,
             activity_pkg: activity_pkg.clone(),
         })
         .instrument(tracing::info_span!("pkg", cpv = %planned.cpv))
@@ -1454,15 +1435,6 @@ async fn merge_parallel(
             inflight_workdirs.insert(work_key.clone());
             let entry_index = entry_binpkg_index(planned, run.binpkg_index, run.host_binpkg_index);
 
-            // Per-entry desired build_env_key (S6: package.env-aware) and
-            // CHOST — see the matching comment in `merge_sequential`.
-            let (desired_env, desired_dirs) = entry_desired_env(
-                planned,
-                (run.target_env, run.target_dirs),
-                (run.host_env, run.host_dirs),
-            );
-            let desired_build_env_key = desired_env.key_for(desired_dirs, &planned.cpv).await;
-
             if !flags.emptytree
                 && !planned.reinstall
                 && merge_root
@@ -1477,23 +1449,37 @@ async fn merge_parallel(
                 sched.complete(i);
                 continue;
             }
+
+            let reuse = if run.has_binpkg_candidates() {
+                // Per-entry desired build_env_key (S6: package.env-aware) and
+                // CHOST — see the matching comment in `merge_sequential`.
+                let (desired_env, desired_dirs) = entry_desired_env(
+                    planned,
+                    (run.target_env, run.target_dirs),
+                    (run.host_env, run.host_dirs),
+                );
+                let desired_build_env_key = desired_env.key_for(desired_dirs, &planned.cpv).await;
+                find_binpkg_reuse(
+                    planned,
+                    entry_index,
+                    run.remote_indices,
+                    &desired_env.chost,
+                    &desired_build_env_key,
+                )
+            } else {
+                BinpkgReuse {
+                    local: None,
+                    remote: None,
+                }
+            };
             started += 1;
             // `>>> Emerging (N of M)` is rendered by `HumanStdoutSink` from the
             // `PkgStart` event emitted below — no ad-hoc print here.
-            let kind = pkg_kind_for_entry(
-                &flags,
-                planned,
-                entry_index,
-                run.remote_indices,
-                &desired_env.chost,
-                &desired_build_env_key,
-            );
+            let kind = reuse.kind(&flags);
             let pkg_started =
                 emit_pkg_start(&run.activity, planned, started as u32, total as u32, kind);
             let gate = &merge_gate;
             let entry_roots_clone = entry_roots.clone();
-            let desired_chost_entry_clone = desired_env.chost.clone();
-            let desired_build_env_key_clone = desired_build_env_key.clone();
             let flags_ref = &flags;
             let activity_pkg = activity_pkg_ctx(&run.activity, planned);
             let pkg_span = tracing::info_span!("pkg", cpv = %planned.cpv);
@@ -1509,10 +1495,7 @@ async fn merge_parallel(
                         flags: flags_ref,
                         extra_path: run.extra_path,
                         merge_gate: Some(gate),
-                        binpkg_index: entry_index,
-                        remote_indices: run.remote_indices,
-                        desired_chost: &desired_chost_entry_clone,
-                        desired_build_env_key: &desired_build_env_key_clone,
+                        reuse,
                         activity_pkg: activity_pkg.clone(),
                     })
                     .await;
@@ -1743,6 +1726,133 @@ mod entry_roots_tests {
         let target_idx = portage_binpkg::BinpkgIndex::open(target_dir.path()).unwrap();
         let host_entry = planned(MergeRoot::Host)?;
         assert!(entry_binpkg_index(&host_entry, Some(&target_idx), None).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn binpkg_reuse_decision_is_shared_with_action_kind() -> Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        seed_index(dir.path());
+        let local = portage_binpkg::BinpkgIndex::open(dir.path()).unwrap();
+        let remote = portage_binpkg::RemoteBinpkgIndex::new(
+            "VERSION: 0\n\nCPV: dev-python/jinja2-3.1.6\nPATH: remote.gpkg.tar\nUSE:\n",
+            "https://binhost.example/",
+        );
+        let p = planned(MergeRoot::Target)?;
+        let flags = ActionFlags {
+            keep_going: false,
+            emptytree: false,
+            buildpkg: false,
+            buildpkgonly: false,
+            fetchonly: false,
+            fetch_all_uri: false,
+            enforce_no_source: false,
+            quiet: false,
+            self_contained_bootstrap: false,
+        };
+
+        let reuse = find_binpkg_reuse(&p, Some(&local), &[remote], "", "");
+        assert!(reuse.local.is_some());
+        assert!(reuse.remote.is_none(), "local reuse must retain precedence");
+        assert_eq!(reuse.kind(&flags), crate::activity::PkgKind::Binpkg);
+
+        let fetch_flags = ActionFlags {
+            fetchonly: true,
+            ..flags
+        };
+        assert_eq!(
+            reuse.kind(&fetch_flags),
+            crate::activity::PkgKind::FetchOnly
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "explicit performance benchmark"]
+    fn benchmark_binpkg_key_and_reuse_lookup() -> Result<()> {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::try_from(tmp.path().to_owned())?;
+        let etc = root.join("etc/portage");
+        std::fs::create_dir_all(etc.join("env"))?;
+        std::fs::write(
+            etc.join("make.conf"),
+            "CFLAGS='-O2'\nCHOST='x86_64-pc-linux-gnu'\n",
+        )?;
+        std::fs::write(
+            etc.join("package.env"),
+            "dev-python/jinja2-3.1.6 jinja.env\n",
+        )?;
+        std::fs::write(etc.join("env/jinja.env"), "CFLAGS=\"${CFLAGS} -pipe\"\n")?;
+        let roots = portage_resolve::Roots::for_test(root.as_str());
+        let cpv = portage_atom::Cpv::parse("dev-python/jinja2-3.1.6")?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let (env, dirs) = runtime.block_on(async {
+            (
+                binpkg::DesiredBuildEnv::for_roots(&roots).await,
+                binpkg::DesiredBuildEnv::portage_dirs(&roots),
+            )
+        });
+        let index_dir = tempfile::tempdir().unwrap();
+        seed_index(index_dir.path());
+        let index = portage_binpkg::BinpkgIndex::open(index_dir.path())?;
+        let p = planned(MergeRoot::Target)?;
+        let env_key = env.key();
+
+        let mut key_samples = Vec::new();
+        let mut lookup_samples = Vec::new();
+        let mut duplicate_lookup_samples = Vec::new();
+        for _ in 0..5 {
+            let start = Instant::now();
+            runtime.block_on(async {
+                for _ in 0..128 {
+                    black_box(env.key_for(&dirs, &cpv).await);
+                }
+            });
+            key_samples.push(start.elapsed());
+
+            let start = Instant::now();
+            for _ in 0..128 {
+                black_box(find_binpkg_reuse(
+                    &p,
+                    Some(&index),
+                    &[],
+                    &env.chost,
+                    &env_key,
+                ));
+            }
+            lookup_samples.push(start.elapsed());
+
+            let start = Instant::now();
+            for _ in 0..128 {
+                black_box(find_binpkg_reuse(
+                    &p,
+                    Some(&index),
+                    &[],
+                    &env.chost,
+                    &env_key,
+                ));
+                black_box(find_binpkg_reuse(
+                    &p,
+                    Some(&index),
+                    &[],
+                    &env.chost,
+                    &env_key,
+                ));
+            }
+            duplicate_lookup_samples.push(start.elapsed());
+        }
+        key_samples.sort();
+        lookup_samples.sort();
+        duplicate_lookup_samples.sort();
+        println!(
+            "binpkg benchmark: key*128={:?}, reuse*128={:?}, duplicate-reuse*128={:?}",
+            key_samples[2], lookup_samples[2], duplicate_lookup_samples[2]
+        );
         Ok(())
     }
 

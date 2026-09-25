@@ -889,6 +889,18 @@ cargo bench -p portage-bench --bench vdb_snapshot -- --noplot --sample-size 10 -
 
 The historical row was reproduced from a temporary detached worktree at `450e3bf9`; it was removed after the run.
 
+### 31. Binpkg reuse prerequisites (thalia, 2026-09-25)
+
+The ignored `portage-cli` test `merge::entry_roots_tests::benchmark_binpkg_key_and_reuse_lookup` measures the two per-entry prerequisites involved in binpkg action selection. Its release median over five samples was 6.459 ms for 128 package-environment keys, 72.0 µs for one reuse lookup per entry, and 138.8 µs for a modeled duplicate lookup. The duplicate is a control for the old two-lookup shape, not an end-to-end historical benchmark.
+
+The current merge path skips key calculation for VDB-present entries and source-only runs, and passes one local/remote reuse decision to both activity classification and the action path. No separate allocation profile was run; the decision retains at most one local path or one remote URL per active entry.
+
+Reproduction on the current tree:
+
+```sh
+cargo test --release -p portage-cli benchmark_binpkg_key_and_reuse_lookup -- --ignored --nocapture
+```
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*
