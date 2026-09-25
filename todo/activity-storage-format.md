@@ -1,9 +1,12 @@
 # Activity storage format — is JSON/JSONL good enough long-term?
 
-STATUS: 🔵 not started — raised 2026-08-09 after fixing the `em regen` O(N²)
-`LiveFsSink` hang (see `todo/for-sonnet.md` 2026-08-09, [[activity-status]]).
-That fix removed the *quadratic* cost; this note is about whether the
-*linear* cost of the current formats is itself going to bite next.
+STATUS: 🟡 measured 2026-09-25 — the unnecessary orphan-history load is avoided;
+the JSONL format remains intentionally unchanged pending stronger growth data.
+
+Raised 2026-08-09 after fixing the `em regen` O(N²) `LiveFsSink` hang (see
+`todo/for-sonnet.md` 2026-08-09, [[activity-status]]). That fix removed the
+*quadratic* cost; this note is about whether the *linear* cost of the current
+formats is itself going to bite next.
 
 ## Where it's used today
 
@@ -38,6 +41,21 @@ That fix removed the *quadratic* cost; this note is about whether the
 - `live/*.json` (session/progress/inflight) are small and write-mostly;
   no evidence they need anything other than what they have now. Don't
   conflate them with the `merges.jsonl` growth question.
+
+## Measurement — 2026-09-25
+
+The host has 38 persisted `merges.jsonl` files under
+`~/.cache/crossdev-stages/sandboxes` (the ordinary host VDB path has no history
+file). Together they contain 1,886 records / 1,234,068 bytes. The largest file
+contains 630 records / 411,000 bytes; the files span 2026-08-09 through
+2026-09-15. These are real crossdev-stage merge histories, but not a
+long-lived production host.
+
+The resolver-side fix skips `DurationStore::load` unless an orphaned
+`AfterBlocker` unmerge needs its `job_id` completion set. No format rotation,
+tail reader, or index is justified by this sample yet; keep BF-904 open and
+revisit if a real host crosses materially larger history sizes or the full-file
+parse appears in a profile.
 
 ## Non-goal for now
 

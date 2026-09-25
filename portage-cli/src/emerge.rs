@@ -849,7 +849,7 @@ async fn emerge_atoms_inner(
     // failing must not silently, permanently drop a pending unmerge whose
     // real trigger already succeeded. Checked against `DurationStore`
     // (what actually completed this job_id), not `plan_result`.
-    let after_unmerge_result = if skip_unmerge {
+    let after_unmerge_result = if skip_unmerge || !needs_after_blocker_history(&orphaned_unmerges) {
         Ok(())
     } else {
         let done = crate::activity::DurationStore::load(roots.merge_root()).successful_set(&job_id);
@@ -1336,6 +1336,12 @@ async fn execute_unmerge_batch(
     Ok(())
 }
 
+fn needs_after_blocker_history(unmerges: &[portage_resolve::conflicts::PlannedUnmerge]) -> bool {
+    unmerges
+        .iter()
+        .any(|u| u.order == portage_resolve::conflicts::UnmergeOrder::AfterBlocker)
+}
+
 /// PMS 8.3.2 auto-unmerge of classified WouldUnmerge victims at `order`
 ///
 /// Already-gone packages (resume, a prior run) are skipped. Empty at this
@@ -1623,6 +1629,25 @@ mod tests {
         let err =
             match_installed_atoms(&vdb, &["app-misc/foo".to_string()], "-P/--prune").unwrap_err();
         assert!(err.to_string().contains("-P/--prune"));
+    }
+
+    #[test]
+    fn history_is_needed_only_for_orphaned_after_blocker_unmerges() {
+        let cpv = portage_atom::Cpv::parse("sys-apps/victim-1.0").unwrap();
+        let before = portage_resolve::conflicts::PlannedUnmerge {
+            cpv: cpv.clone(),
+            order: portage_resolve::conflicts::UnmergeOrder::BeforeBlocker,
+            owners: vec![],
+        };
+        let after = portage_resolve::conflicts::PlannedUnmerge {
+            cpv: cpv.clone(),
+            order: portage_resolve::conflicts::UnmergeOrder::AfterBlocker,
+            owners: vec![],
+        };
+
+        assert!(!needs_after_blocker_history(&[]));
+        assert!(!needs_after_blocker_history(&[before.clone()]));
+        assert!(needs_after_blocker_history(&[before, after]));
     }
 
     #[test]
