@@ -411,8 +411,15 @@ async fn resolve_ebuilds(
             continue;
         }
 
-        let Ok(content) = String::from_utf8(bytes) else {
-            continue;
+        let content = match String::from_utf8(bytes) {
+            Ok(content) => content,
+            Err(error) => {
+                tracing::error!(
+                    "repo '{}': failed to source {cpv}: ebuild is not valid UTF-8: {error}",
+                    repo.name()
+                );
+                continue;
+            }
         };
 
         // Source the ebuild (shell started lazily, masters' eclasses visible).
