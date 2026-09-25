@@ -120,15 +120,23 @@ impl fmt::Display for Slot {
 /// Represents the slot constraint portion of a dependency atom
 /// (everything after the `:`), e.g. `:0`, `:0/2.1`, `:0=`, `:=`, `:*`.
 ///
+/// A bare operator — one with no slot name — has two spellings:
+/// [`Operator`](Self::Operator), which the parser produces, and
+/// `Slot { slot: None, op: Some(op) }`. PMS 8.3.3 makes that the *common* case
+/// (`:=` outnumbers every named form in the Gentoo tree), so both spellings
+/// are kept and [`PartialEq`]/[`Hash`] treat them as the same atom: they render
+/// identically, so they must not compare unequal.
+///
 /// See [PMS 8.3.3](https://projects.gentoo.org/pms/9/pms.html#slot-dependencies).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy)]
 pub enum SlotDep {
     /// A named slot with optional sub-slot and optional operator,
     /// e.g. `0`, `0/1.2`, `0=`
     Slot {
         /// The slot and optional sub-slot (e.g. `0`, `0/1.2`)
         ///
-        /// `None` only when a bare operator is present (e.g. `:=`).
+        /// `None` only when a bare operator is present (e.g. `:=`), which is
+        /// then equal to [`Operator`](Self::Operator) with the same operator.
         slot: Option<Slot>,
         /// The slot operator (`=` for rebuild-on-change, `*` for any-slot)
         ///
@@ -141,7 +149,47 @@ pub enum SlotDep {
     Operator(SlotOperator),
 }
 
+/// [`SlotDep`] in its one spelling per atom, for `PartialEq`/`Hash`
+#[derive(PartialEq, Eq, Hash)]
+enum Canonical<'a> {
+    /// A bare operator, however it was spelled
+    Bare(SlotOperator),
+    /// A named slot, with or without an operator
+    Named {
+        slot: Option<&'a Slot>,
+        op: Option<SlotOperator>,
+    },
+}
+
+impl PartialEq for SlotDep {
+    fn eq(&self, other: &Self) -> bool {
+        self.canonical() == other.canonical()
+    }
+}
+
+impl Eq for SlotDep {}
+
+impl std::hash::Hash for SlotDep {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.canonical().hash(state);
+    }
+}
+
 impl SlotDep {
+    fn canonical(&self) -> Canonical<'_> {
+        match self {
+            SlotDep::Operator(op) => Canonical::Bare(*op),
+            SlotDep::Slot {
+                slot: None,
+                op: Some(op),
+            } => Canonical::Bare(*op),
+            SlotDep::Slot { slot, op } => Canonical::Named {
+                slot: slot.as_ref(),
+                op: *op,
+            },
+        }
+    }
+
     /// Parse the slot dependency portion of an atom (without the leading `:`)
     ///
     /// Accepts forms like `0`, `0/1.2`, `0=`, `=`, `*`.
@@ -355,5 +403,55 @@ mod tests {
             let dep = SlotDep::parse(input).unwrap();
             assert_eq!(dep.to_string(), input, "round-trip failed for: {input}");
         }
+    }
+
+    // `:=` and `:*` are the most common slot deps in the Gentoo tree and have
+    // no slot name, so the `Slot { slot: None, op }` spelling is a second
+    // rendering of a real atom, not a distinct one. Both render as the bare
+    // operator, so they must compare and hash equal.
+    #[test]
+    fn a_bare_operator_is_the_same_atom_however_it_is_spelled() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        for (op, text) in [(SlotOperator::Equal, "="), (SlotOperator::Star, "*")] {
+            let via_operator = SlotDep::Operator(op);
+            let via_slot = SlotDep::Slot {
+                slot: None,
+                op: Some(op),
+            };
+            assert_eq!(via_slot.to_string(), text);
+            assert_eq!(via_operator.to_string(), text);
+            assert_eq!(via_slot, via_operator, "the two spellings are one atom");
+            assert_eq!(via_slot, via_slot);
+
+            let hash = |d: &SlotDep| {
+                let mut h = DefaultHasher::new();
+                d.hash(&mut h);
+                h.finish()
+            };
+            assert_eq!(
+                hash(&via_slot),
+                hash(&via_operator),
+                "equal values must hash equal"
+            );
+        }
+
+        // Different operators, and a named slot, stay distinct.
+        assert_ne!(
+            SlotDep::Slot {
+                slot: None,
+                op: Some(SlotOperator::Star)
+            },
+            SlotDep::Operator(SlotOperator::Equal)
+        );
+        assert_ne!(
+            SlotDep::Slot {
+                slot: Some(Slot::new("0")),
+                op: Some(SlotOperator::Equal)
+            },
+            SlotDep::Operator(SlotOperator::Equal),
+            "a named slot is not a bare operator"
+        );
     }
 }
