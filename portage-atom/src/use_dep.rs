@@ -151,18 +151,6 @@ impl fmt::Display for UseDep {
     }
 }
 
-impl PartialOrd for UseDep {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for UseDep {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.flag.cmp(&other.flag)
-    }
-}
-
 impl FromStr for UseDep {
     type Err = Error;
 

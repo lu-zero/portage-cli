@@ -120,12 +120,9 @@ impl fmt::Display for Slot {
 /// Represents the slot constraint portion of a dependency atom
 /// (everything after the `:`), e.g. `:0`, `:0/2.1`, `:0=`, `:=`, `:*`.
 ///
-/// A bare operator — one with no slot name — has two spellings:
-/// [`Operator`](Self::Operator), which the parser produces, and
-/// `Slot { slot: None, op: Some(op) }`. PMS 8.3.3 makes that the *common* case
-/// (`:=` outnumbers every named form in the Gentoo tree), so both spellings
-/// are kept and [`PartialEq`]/[`Hash`] treat them as the same atom: they render
-/// identically, so they must not compare unequal.
+/// The parser spells a bare operator as [`Operator`](Self::Operator).
+/// `Slot { slot: None, op: Some(op) }` renders the same string, so
+/// [`PartialEq`] and [`Hash`] treat the two as one atom.
 ///
 /// See [PMS 8.3.3](https://projects.gentoo.org/pms/9/pms.html#slot-dependencies).
 #[derive(Debug, Clone, Copy)]

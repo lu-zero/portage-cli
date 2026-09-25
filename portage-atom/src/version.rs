@@ -543,10 +543,10 @@ impl Version {
         Ordering::Equal
     }
 
-    /// Return the version stripped of suffixes and revision, for `*` glob
-    /// comparison per [PMS 8.3.1]
+    /// Version with suffixes and revision removed.
     ///
-    /// [PMS 8.3.1]: https://projects.gentoo.org/pms/9/pms.html#operators
+    /// Numeric components and the letter stay. `=V*` matching is
+    /// [`Self::glob_matches`], which keeps only the pattern's numeric prefix.
     pub fn without_suffix(&self) -> Self {
         Version {
             numbers: self.numbers.clone(),
