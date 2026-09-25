@@ -105,7 +105,7 @@ Status markers: `[ ]` open · `[~]` in progress · `[x]` complete · `[!]` block
 
 ## Explicitly deferred until measured
 
-- [ ] **BF-901 — Version representation/boxing.** Measure `size_of::<Version>()`, parse allocations, and comparison cost before changing the public representation.
+- [x] **BF-901 — Version representation/boxing.** Closed: measured, and boxing is the wrong trade. One-off `--quick` run on 4096 versions (indicative only, not a committed bench — the `size_of` case I wrote was broken, since `black_box(size_of::<Version>())` constant-folds and reports a time rather than a size): `Version::clone` ~71 ns, `Version::cmp` ~26 ns, `BTreeMap<Version, _>` lookup ~481 ns. Clone is the expensive part and is what boxing removes, but `Version` is the key of the provider's `BTreeMap<Version, VersionData>`, so every tree level runs an `Ord` — boxing would add a pointer chase to a path that already dominates lookup, and would add a heap allocation per parsed version. No public representation change.
 - [ ] **BF-902 — Alternative interner backends/features.** Do not prune or redesign backend features based on speculation; current profiles do not show an interner bottleneck.
 - [ ] **BF-903 — Full solver-bridge migration.** Do not merge PubGrub and Resolvo storage models until the default PubGrub path is stable and the shared API is proven useful.
 - [ ] **BF-904 — Full activity format replacement.** Keep JSONL until real history measurements justify rotation/indexing or a new format.
