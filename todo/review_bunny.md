@@ -148,24 +148,42 @@ keyed by `vdb.root()` (`mod.rs:513`).
 Consequence: a stale `MergePreserveState` (pre-invalidation `LinkGraph` +
 in-memory `PreservedLibsRegistry`) survives and is handed to the next merge.
 
-## HIGH-2 — `9bc6c785`: the batch-boundary lock is a different inode from qmerge's
+## HIGH-2 — WITHDRAWN: the batch-boundary lock is the same inode qmerge's
 
-`finish`/`with_invalidation` lock `work_base/.merge.lock` (`mod.rs:558,572`).
-qmerge locks `work_base/<root-key>/.merge.lock`, because `package_work_dir` is
-`$work_base/<root-key>/<category>/<pf>` (`mod.rs:317-329`) and `lock_merge_flock`
-pops three parents (`flock.rs:57-61`). Different inodes ⇒ zero mutual exclusion.
-The doc comment's "holding the same cross-process merge lock as qmerge" is false.
+**This finding was wrong, and I published it as fact.** It claimed
+`finish`/`with_invalidation` locked `work_base/.merge.lock` while qmerge locked
+`work_base/<root-key>/.merge.lock`, so the two had "zero mutual exclusion" and two
+concurrent `em` runs could have one `prune_unneeded` unlink a library the other
+needed.
 
-This is a regression, not a lost claim: before this commit `registry.reclaim()` +
-`store()` ran inside `run_merge` under the real flock. `reclaim` →
-`prune_unneeded` **unlinks files**, and `store()` is a read-modify-write of
-`var/lib/portage/preserved_libs_registry`. Two concurrent `em` runs against one
-root can now have one prune a library the other's in-flight merge needs, or one
-`store()` clobber the other's registry entries.
+`lock_merge_flock` (`flock.rs:57-61`) pops three parents off
+`$work_base/<root-key>/<category>/<pf>` — four components — which lands on
+`work_base`, not on `<root-key>`. Two parents would be needed for `<root-key>`.
+Verified by running the real `lock_merge_flock` against a real
+`package_work_dir`:
 
-Blast radius is small: `finish` 2 call sites, `with_invalidation` 2, and a fix
-needs no new parameter because `state.preserve`'s keys already carry the merge
-roots.
+```
+work_base = /tmp/.tmpo7NKss/work
+work_dir  = /tmp/.tmpo7NKss/work/host/dev-libs/zlib-1.3.1
+3 parents = /tmp/.tmpo7NKss/work          <- what lock_merge_flock uses
+2 parents = /tmp/.tmpo7NKss/work/host
+```
+
+So the batch flush already took the same lock qmerge does, and there was no bug.
+`portage-cli/src/ebuild/mod.rs` now carries a regression test asserting the two
+resolve to the same file, so the off-by-one cannot be reintroduced by the next
+reader who counts parents wrong.
+
+What survives from the original report: `acquire_flock` returning `None` was
+swallowed by `let _merge_lock = ...`, so a failed acquire silently proceeded
+*unlocked* into `prune_unneeded` (which unlinks files) and `store` (which
+rewrites a shared registry). That is now an error, and the flush is skipped
+rather than run without the lock. That part was right.
+
+Lesson: the subagent reported the parent count and I copied it into a findings
+file without running the function. Two commits' worth of my own review notes
+downstream of it — including the decision to hold back a commit — rested on
+arithmetic I never executed. The arithmetic was one line long.
 
 ## HIGH-3 — `UseDep` implements `Ord` that contradicts its own `Eq`, and the doc says it doesn't
 
