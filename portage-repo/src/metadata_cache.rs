@@ -81,24 +81,20 @@ impl DirMetadataCache {
         };
         rd.next().is_some()
     }
-}
 
-impl MetadataCache for DirMetadataCache {
-    fn get(&self, cpv: &Cpv) -> Result<Option<CacheEntry>> {
-        let path = self.entry_path(cpv);
-        match std::fs::read_to_string(path.as_std_path()) {
-            Ok(contents) => Ok(Some(CacheEntry::parse(&contents)?)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(util::io_err(&path, e)),
-        }
+    // `stage_dir_target` has already created each category directory.
+    pub(crate) fn put_prepared(&self, cpv: &Cpv, entry: &CacheEntry) -> Result<()> {
+        self.put_inner(cpv, entry, false)
     }
 
-    fn put(&self, cpv: &Cpv, entry: &CacheEntry) -> Result<()> {
+    fn put_inner(&self, cpv: &Cpv, entry: &CacheEntry, create_parent: bool) -> Result<()> {
         let path = self.entry_path(cpv);
         let parent = path
             .parent()
             .ok_or_else(|| Error::InvalidRepository(path.clone().into_std_path_buf()))?;
-        std::fs::create_dir_all(parent.as_std_path()).map_err(|e| util::io_err(parent, e))?;
+        if create_parent {
+            std::fs::create_dir_all(parent.as_std_path()).map_err(|e| util::io_err(parent, e))?;
+        }
         // Atomic replace. The temp name has to be unique, not `<entry>.tmp`:
         // two workers regenerating the same cpv would otherwise write the same
         // scratch file and race each other's rename, and a failure would leave
@@ -122,6 +118,21 @@ impl MetadataCache for DirMetadataCache {
             .map_err(|e| util::io_err(&path, e.error))?;
         self.populated.store(1, Ordering::Relaxed);
         Ok(())
+    }
+}
+
+impl MetadataCache for DirMetadataCache {
+    fn get(&self, cpv: &Cpv) -> Result<Option<CacheEntry>> {
+        let path = self.entry_path(cpv);
+        match std::fs::read_to_string(path.as_std_path()) {
+            Ok(contents) => Ok(Some(CacheEntry::parse(&contents)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(util::io_err(&path, e)),
+        }
+    }
+
+    fn put(&self, cpv: &Cpv, entry: &CacheEntry) -> Result<()> {
+        self.put_inner(cpv, entry, true)
     }
 
     fn is_populated(&self) -> bool {

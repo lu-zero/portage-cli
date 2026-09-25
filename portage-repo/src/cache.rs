@@ -16,7 +16,7 @@ use std::time::SystemTime;
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_metadata::CacheEntry;
 
-use crate::metadata_cache::{DirMetadataCache, MetadataCache};
+use crate::metadata_cache::DirMetadataCache;
 use crate::source::{SourceContext, SourceOpts, SourcedEbuild};
 use crate::{Ebuild, Repository, Result};
 
@@ -38,6 +38,12 @@ pub enum RegenWriteTarget {
     Repository,
     /// Force writes into this directory (PMS entry layout)
     Dir(PathBuf),
+}
+
+enum PreparedWriteTarget {
+    None,
+    Dir(Arc<DirMetadataCache>),
+    Repository,
 }
 
 /// Options for [`regen_cache`]
@@ -107,8 +113,8 @@ pub async fn regen_cache(
 
     // A Dir target's writes go into a fresh staging directory, swapped into
     // place only once every entry is written — see `swap_dir_target`'s doc
-    // for why. `write` points at the staging path so the closure below
-    // needs no further changes; `dir_swap` remembers the real target.
+    // for why. The prepared writer below points at that staging root;
+    // `dir_swap` remembers the real target.
     //
     // The default Repository target gets the same treatment against
     // whichever of primary/secondary is writable — otherwise it'd be the
@@ -125,8 +131,9 @@ pub async fn regen_cache(
         RegenWriteTarget::Dir(ref dir) => {
             let cats = ebuilds.iter().map(Ebuild::category);
             let staging = stage_dir_target(dir, cats)?;
+            let writer = Arc::new(DirMetadataCache::new(staging.clone()));
             (
-                RegenWriteTarget::Dir(staging.clone().into_std_path_buf()),
+                PreparedWriteTarget::Dir(writer),
                 Some((dir.clone(), staging)),
             )
         }
@@ -136,26 +143,30 @@ pub async fn regen_cache(
                 ebuilds.iter().map(Ebuild::category),
             );
             match staged_primary {
-                Ok(staging) => (
-                    RegenWriteTarget::Dir(staging.clone().into_std_path_buf()),
-                    Some((primary_dir.clone().into_std_path_buf(), staging)),
-                ),
+                Ok(staging) => {
+                    let writer = Arc::new(DirMetadataCache::new(staging.clone()));
+                    (
+                        PreparedWriteTarget::Dir(writer),
+                        Some((primary_dir.clone().into_std_path_buf(), staging)),
+                    )
+                }
                 Err(_) => match repo.secondary_cache_dir() {
                     Some(secondary_dir) => {
                         let staging = stage_dir_target(
                             secondary_dir.as_std_path(),
                             ebuilds.iter().map(Ebuild::category),
                         )?;
+                        let writer = Arc::new(DirMetadataCache::new(staging.clone()));
                         (
-                            RegenWriteTarget::Dir(staging.clone().into_std_path_buf()),
+                            PreparedWriteTarget::Dir(writer),
                             Some((secondary_dir.to_path_buf().into_std_path_buf(), staging)),
                         )
                     }
-                    None => (RegenWriteTarget::Repository, None),
+                    None => (PreparedWriteTarget::Repository, None),
                 },
             }
         }
-        other => (other, None),
+        RegenWriteTarget::None => (PreparedWriteTarget::None, None),
     };
 
     let reconcile_repo_cache = requested_repository
@@ -182,11 +193,11 @@ pub async fn regen_cache(
                 Err(e) => Err(e),
                 Ok(sourced) => {
                     let write_err = match &write {
-                        RegenWriteTarget::None => None,
-                        RegenWriteTarget::Dir(dir) => {
-                            write_entry_to_dir(&ebuild, sourced, dir, &checksum_cache).err()
+                        PreparedWriteTarget::None => None,
+                        PreparedWriteTarget::Dir(writer) => {
+                            write_entry_to_dir(&ebuild, sourced, writer, &checksum_cache).err()
                         }
-                        RegenWriteTarget::Repository => {
+                        PreparedWriteTarget::Repository => {
                             build_entry(&ebuild, sourced, &checksum_cache)
                                 .and_then(|entry| {
                                     repo_for_write
@@ -380,14 +391,12 @@ fn build_entry(
 fn write_entry_to_dir(
     ebuild: &Ebuild,
     sourced: SourcedEbuild,
-    out_dir: &Path,
+    writer: &DirMetadataCache,
     checksum_cache: &ChecksumCache,
 ) -> std::result::Result<(), String> {
     let entry = build_entry(ebuild, sourced, checksum_cache)?;
-    let root = Utf8Path::from_path(out_dir)
-        .ok_or_else(|| format!("output dir is not valid UTF-8: {}", out_dir.display()))?;
-    DirMetadataCache::new(root.to_owned())
-        .put(ebuild.cpv(), &entry)
+    writer
+        .put_prepared(ebuild.cpv(), &entry)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

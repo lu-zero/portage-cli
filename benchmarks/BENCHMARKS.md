@@ -734,6 +734,24 @@ cargo bench --locked -p portage-bench --bench metadata_serialize -- --noplot --w
 
 The baseline was run from a detached worktree at `774ebef5` with the same fixture and lockfile.
 
+### 24. Prepared staging writer (thalia, 2026-09-25)
+
+`regen_reads` exercises the complete synthetic regeneration path and isolates the staging-writer change against the exact `b9eb8b11` worktree. The current tree constructs one shared writer after `stage_dir_target` has prepared the category directories, then uses its no-`create_dir_all` write path for each entry.
+
+| Ebuilds | `b9eb8b11` baseline | Current | Change |
+|--------:|--------------------:|--------:|-------:|
+| 32 | 4.9769 ms | 5.1832 ms | +4.1% |
+| 128 | 20.447 ms | 19.500 ms | -4.6% |
+| 512 | 78.097 ms | 77.193 ms | -1.2% |
+
+The result is mixed on this single-worker synthetic fixture, so no end-to-end speedup is claimed. Criterion used 10 samples, a one-second warm-up, and a two-second measurement window; the baseline used the same fixture and lockfile in a detached worktree.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench --locked -p portage-bench --bench regen_reads -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
+```
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*
