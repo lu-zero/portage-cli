@@ -123,14 +123,10 @@ impl Avail {
         Self::from_entries(out)
     }
 
-    /// `DEPEND` availability against a fixed sysroot (`ESYSROOT`)
+    /// `DEPEND` availability against a fixed sysroot (`ESYSROOT`) using
+    /// shared snapshots
     ///
     /// `None` is the host `/var/db/pkg`.
-    pub fn initial_sysroot_depend(sysroot: Option<&camino::Utf8Path>) -> Self {
-        Self::initial_sysroot_depend_with_cache(sysroot, &VdbSnapshotCache::default())
-    }
-
-    /// `DEPEND` availability against a fixed sysroot using shared snapshots.
     pub fn initial_sysroot_depend_with_cache(
         sysroot: Option<&camino::Utf8Path>,
         snapshots: &VdbSnapshotCache,

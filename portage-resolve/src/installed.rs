@@ -163,11 +163,8 @@ impl BrootSnapshot {
 /// `roots.installed_view_target_only()` drops the `base` side of the union
 /// (see `Roots::with_target_only_installed_view`'s doc comment for why this
 /// is a dedicated flag rather than reusing `base` itself).
-pub fn load_target_installed(roots: &crate::Roots) -> Vec<VdbEntry> {
-    load_target_installed_with_cache(roots, &VdbSnapshotCache::default())
-}
-
-/// Load the target installed view through a shared invocation snapshot cache.
+///
+/// The VDBs are read through a shared invocation snapshot cache.
 pub fn load_target_installed_with_cache(
     roots: &crate::Roots,
     snapshots: &VdbSnapshotCache,
@@ -302,12 +299,8 @@ fn host_installed_entry(pkg: &InstalledPackage) -> HostInstalledEntry {
     }
 }
 
-/// VDB entries from a cross sysroot (`ESYSROOT`) for `DEPEND` satisfaction
-pub fn load_sysroot_entries(sysroot: &camino::Utf8Path) -> Vec<VdbEntry> {
-    load_sysroot_entries_with_cache(sysroot, &VdbSnapshotCache::default())
-}
-
-/// Load cross-sysroot entries through a shared invocation snapshot cache.
+/// VDB entries from a cross sysroot (`ESYSROOT`) for `DEPEND` satisfaction,
+/// through a shared invocation snapshot cache
 pub fn load_sysroot_entries_with_cache(
     sysroot: &camino::Utf8Path,
     snapshots: &VdbSnapshotCache,

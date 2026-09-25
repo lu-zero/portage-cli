@@ -187,11 +187,6 @@ pub fn worker_activity_bus(live_root: &Utf8Path, reemit_path: Option<&str>) -> A
     bus
 }
 
-/// Back-compat alias: LiveFs only (no re-emit)
-pub fn worker_live_bus(live_root: &Utf8Path) -> ActivityBus {
-    worker_activity_bus(live_root, None)
-}
-
 /// Attach the emerge-style terminal renderer
 ///
 /// Renders `PkgStart`/`PhaseEnter` banners from the bus (a direct, inline sink so output is

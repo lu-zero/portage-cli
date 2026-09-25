@@ -9,8 +9,7 @@ use portage_resolve::Avail;
 use portage_resolve::Roots;
 use portage_resolve::installed::{
     BrootSnapshot, VdbSnapshotCache, load_host_installed, load_host_installed_from_snapshot,
-    load_sysroot_entries, load_sysroot_entries_with_cache, load_target_installed,
-    load_target_installed_with_cache,
+    load_sysroot_entries_with_cache, load_target_installed_with_cache,
 };
 
 struct Fixture {
@@ -81,8 +80,8 @@ impl TargetFixture {
         let roots = Roots::for_test_board_root(sysroot.as_str(), board.to_str().unwrap());
         // Warm the filesystem before comparing cold snapshot construction with
         // the independent-adapter control; otherwise benchmark order dominates.
-        let _ = load_target_installed(&roots);
-        let _ = load_sysroot_entries(&sysroot);
+        let _ = load_target_installed_with_cache(&roots, &VdbSnapshotCache::default());
+        let _ = load_sysroot_entries_with_cache(&sysroot, &VdbSnapshotCache::default());
         let _ = Avail::initial_depend(&roots);
         let _ = Avail::initial_base_depend(&roots);
         let snapshots = Arc::new(VdbSnapshotCache::default());
@@ -143,8 +142,13 @@ fn bench_target_sysroot_snapshot(c: &mut Criterion) {
         });
         group.bench_with_input(BenchmarkId::new("scan_each_view", size), &size, |b, _| {
             b.iter(|| {
-                let target = load_target_installed(&fixture.roots);
-                let sysroot = load_sysroot_entries(&fixture.sysroot);
+                // The pre-BF-404 control: no snapshot shared between views, so
+                // each one re-reads its VDB. A default cache per call is
+                // exactly what the removed non-caching wrappers did.
+                let target =
+                    load_target_installed_with_cache(&fixture.roots, &VdbSnapshotCache::default());
+                let sysroot =
+                    load_sysroot_entries_with_cache(&fixture.sysroot, &VdbSnapshotCache::default());
                 let depend = Avail::initial_depend(&fixture.roots);
                 let base = Avail::initial_base_depend(&fixture.roots);
                 std::hint::black_box((target, sysroot, depend, base));
