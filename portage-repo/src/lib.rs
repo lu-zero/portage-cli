@@ -112,3 +112,16 @@ pub use repo::{
     Profile, ProfileDesc, ProfileEnv, ProfileEnvLayer, ProfileStack, ProfileStatus, UseFlags,
 };
 pub use source::{SourceContext, SourceItem, SourceOpts, source_parallel, source_single};
+
+const DEFAULT_WORKER_CAP: usize = 16;
+
+pub(crate) fn default_worker_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, DEFAULT_WORKER_CAP)
+}
+
+pub(crate) fn resolve_worker_count(jobs: Option<usize>) -> usize {
+    jobs.unwrap_or_else(default_worker_count).max(1)
+}

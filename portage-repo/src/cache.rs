@@ -404,7 +404,7 @@ fn write_entry_to_dir(
 /// Options for [`cache_entries_parallel`]
 #[derive(Debug, Clone, Default)]
 pub struct CacheReadOpts {
-    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`].
+    /// Number of parallel workers. `None` uses a conservative default capped at 16.
     /// Values below one are treated as one worker.
     pub jobs: Option<usize>,
     /// When `true`, only the highest-cpv entry per Cpn is parsed
@@ -418,13 +418,7 @@ pub struct CacheReadOpts {
 }
 
 fn cache_jobs(opts: &CacheReadOpts) -> usize {
-    opts.jobs
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-        })
-        .max(1)
+    crate::resolve_worker_count(opts.jobs)
 }
 
 /// List every `(Cpv, file path)` pair found under each repo's
@@ -741,6 +735,11 @@ mod tests {
             portage_atom::Cpv::parse("cat/pkg-2.0").unwrap()
         );
         assert_eq!(entries[1].1.as_ref().unwrap(), "new");
+    }
+
+    #[test]
+    fn default_worker_count_is_bounded() {
+        assert!((1..=16).contains(&crate::default_worker_count()));
     }
 
     #[tokio::test]

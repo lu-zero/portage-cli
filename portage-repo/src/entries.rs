@@ -85,6 +85,10 @@ const GAP_INDEX: &str = "gap-index";
 pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     let stamp = repo.sync_stamp();
     let index = repo.sidecar_path(GAP_INDEX);
+    let cache_opts = CacheReadOpts {
+        jobs: Some(crate::default_worker_count()),
+        ..CacheReadOpts::default()
+    };
     let mut eclass_digests = EclassMemo::default();
 
     // Unchanged tree: the suspects are known, and their entries are already in
@@ -97,10 +101,9 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         && let (Some(stamp), Some(index)) = (&stamp, &index)
         && let Some(cpvs) = read_gap_index(index, stamp)
     {
-        let opts = CacheReadOpts::default();
         let mut stale = false;
         let mut out: Vec<(Cpv, CacheEntry)> =
-            cache_entries_parallel(std::slice::from_ref(repo), &opts, |text| {
+            cache_entries_parallel(std::slice::from_ref(repo), &cache_opts, |text| {
                 CacheEntry::parse(text).map_err(crate::Error::from)
             })
             .await
@@ -158,9 +161,8 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     }
 
     let scan = repo.ebuilds().ok();
-    let opts = CacheReadOpts::default();
     let (bulk, secondary_bulk, ebuilds) = tokio::join!(
-        cache_entries_parallel_with_mtime(std::slice::from_ref(repo), &opts, |text| {
+        cache_entries_parallel_with_mtime(std::slice::from_ref(repo), &cache_opts, |text| {
             CacheEntry::parse(text).map_err(crate::Error::from)
         }),
         // The durable secondary store's own entries — without this, a repo
@@ -169,7 +171,7 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         // full suspect chain on every call even once the secondary already
         // holds a fresh answer for it (previously only consulted one cpv at
         // a time, deep inside that chain).
-        secondary_cache_entries_with_mtime(repo, &opts, |text| {
+        secondary_cache_entries_with_mtime(repo, &cache_opts, |text| {
             CacheEntry::parse(text).map_err(crate::Error::from)
         }),
         async {

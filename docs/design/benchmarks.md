@@ -64,16 +64,18 @@ construction with complete versus missing branches; `source_reuse` measures
 worker-local shell reuse during synthetic sourcing; `eclass_memo` measures
 path-keyed eclass digest reuse during fresh-repository live sourcing; `regen_reads`
 measures ebuild content reuse during synthetic cache regeneration;
-`metadata_serialize` measures direct-buffer metadata serialization; `resolve`
-measures the in-memory adapter and solver path:
+`metadata_serialize` measures direct-buffer metadata serialization; `cache_workers`
+measures real-tree cache reads at explicit worker counts and the capped default;
+`resolve` measures the in-memory adapter and solver path:
 
 ```sh
-# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot, policy_facts, policy_lists, repo_cache_lookup, provider_postprocess, source_reuse, eclass_memo, regen_reads, metadata_serialize)
+# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, cache_workers, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot, policy_facts, policy_lists, repo_cache_lookup, provider_postprocess, source_reuse, eclass_memo, regen_reads, metadata_serialize)
 cargo bench -p portage-bench
 
 # One
 cargo bench -p portage-bench --bench resolve
 cargo bench -p portage-bench --bench repo_load
+cargo bench -p portage-bench --bench cache_workers
 cargo bench -p portage-bench --bench avail_lookup
 cargo bench -p portage-bench --bench trim_scaling
 cargo bench -p portage-bench --bench graph_scaling

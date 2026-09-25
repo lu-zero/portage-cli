@@ -82,6 +82,10 @@ name = "repo_load"
 harness = false
 
 [[bench]]
+name = "cache_workers"
+harness = false
+
+[[bench]]
 name = "avail_lookup"
 harness = false
 

@@ -18,6 +18,8 @@ Benchmarks for the Gentoo Portage Rust ecosystem.
 | `vdb_snapshot` | Shared versus independent BROOT/prefix VDB enumeration |
 | `policy_facts` | Uncached, cold/warm cached, and multi-generation policy facts |
 | `policy_lists` | Full acceptance filtering with CPN-indexed policy lists |
+| `repo_load` | Real-tree repository discovery, cache parsing, and freshness validation |
+| `cache_workers` | Real-tree cache read/decode across worker counts |
 | `repo_cache_lookup` | Exact CPV cache construction and lookup scaling |
 | `provider_postprocess` | Provider construction with complete versus missing dependency branches |
 | `source_reuse` | Worker-local shell reuse during synthetic ebuild sourcing |

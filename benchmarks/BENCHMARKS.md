@@ -770,6 +770,30 @@ GENTOO_REPO=/var/db/repos/gentoo cargo bench --locked -p portage-bench --bench r
 
 The baseline used the same command and lockfile in a detached worktree at `6b76d606`.
 
+### 26. Cache worker budget (thalia, 2026-09-25)
+
+`cache_workers` reads and parses the real `/var/db/repos/gentoo` metadata cache (33,121 entries) at explicit worker counts and at the default. The baseline is the exact `3c873f62` worktree; the current tree caps automatic cache/source workers at 16 and reuses that budget for the overlapping primary and secondary cache reads in `repo_entries`.
+
+| Worker setting | `3c873f62` baseline | Current | Change |
+|----------------|--------------------:|--------:|-------:|
+| Default | 160.29 ms | 197.58 ms | +23.3% |
+| 1 | 515.16 ms | 481.14 ms | -6.6% |
+| 4 | 273.71 ms | 218.86 ms | -20.0% |
+| 16 | 196.26 ms | 207.20 ms | +5.6% |
+| 32 | 206.80 ms | 187.99 ms | -9.1% |
+| 64 | 202.40 ms | 180.49 ms | -10.8% |
+| 128 | 170.62 ms | 172.88 ms | +1.3% |
+
+The default row is the policy comparison; the explicit rows are diagnostic scaling measurements and are noisy across separate runs. The cap intentionally trades isolated cache-read throughput for bounded concurrency. The matched real-tree `repository/load/repo_entries` benchmark is 663.10 ms at the baseline and 672.48 ms currently (+1.4%), so no speedup is claimed.
+
+Reproduction on the current tree:
+
+```sh
+GENTOO_REPO=/var/db/repos/gentoo cargo bench --locked -p portage-bench --bench cache_workers -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
+```
+
+The baseline used the same fixture, benchmark, and lockfile in a detached worktree at `3c873f62`.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

@@ -54,7 +54,7 @@ impl SourceContext {
 /// Options for sourcing operations
 #[derive(Debug, Clone, Default)]
 pub struct SourceOpts {
-    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`].
+    /// Number of parallel workers. `None` uses a conservative default capped at 16.
     /// Values below one are treated as one worker.
     pub jobs: Option<usize>,
     /// Deduplicate top-level dep tokens before returning metadata
@@ -109,14 +109,7 @@ pub(crate) async fn source_parallel_join<F>(
 where
     F: Fn(Ebuild, Result<SourcedEbuild>) + Send + Sync + 'static,
 {
-    let jobs = opts
-        .jobs
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-        })
-        .max(1);
+    let jobs = crate::resolve_worker_count(opts.jobs);
     let dedup = opts.dedup;
     let repo = Arc::new(repo.clone());
     let ctx = ctx.clone();
