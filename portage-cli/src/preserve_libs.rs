@@ -65,7 +65,7 @@ pub(crate) fn package_needed(pkg: &InstalledPackage) -> Vec<NeededRecord> {
 /// `paths` are stored as plain `String`s (not `Utf8PathBuf`) since `camino` doesn't
 /// implement `serde` traits without an extra feature flag on a shared workspace dep —
 /// converted at the [`PreservedLibsRegistry`] API boundary instead.
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct RegistryEntry {
     cpv: String,
     counter: u64,
@@ -80,18 +80,28 @@ struct RegistryEntry {
 pub struct PreservedLibsRegistry {
     path: Utf8PathBuf,
     data: HashMap<String, RegistryEntry>,
+    /// The file as loaded, so [`Self::store`] can send only what changed here
+    /// rather than this registry's whole view of it.
+    original: HashMap<String, RegistryEntry>,
 }
 
 impl PreservedLibsRegistry {
     /// Load the registry under `root` (the merge root / EROOT), or start
     /// empty if it doesn't exist yet or fails to parse.
     pub fn load(root: &Utf8Path) -> Self {
-        let path = root.join("var/lib/portage/preserved_libs_registry");
-        let data = std::fs::read_to_string(&path)
+        Self::load_path(&root.join("var/lib/portage/preserved_libs_registry"))
+    }
+
+    fn load_path(path: &Utf8Path) -> Self {
+        let data: HashMap<String, RegistryEntry> = std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        Self { path, data }
+        Self {
+            path: path.to_owned(),
+            original: data.clone(),
+            data,
+        }
     }
 
     /// Whether the registry has no tracked preserved paths.
@@ -103,7 +113,23 @@ impl PreservedLibsRegistry {
     ///
     /// Best-effort: a failure here shouldn't abort an unmerge that already completed on disk.
     pub fn store(&self) {
-        match serde_json::to_string_pretty(&self.data) {
+        // Re-read and apply only this registry's delta. Writing `self.data`
+        // wholesale would drop anything a `__worker` child registered through
+        // its own one-shot path since this load; the delta also leaves a
+        // concurrent writer's removals and updates intact, which a plain
+        // merge of `self.data` over the file would not.
+        let mut disk = Self::load_path(&self.path).data;
+        for key in self.original.keys() {
+            if !self.data.contains_key(key) {
+                disk.remove(key);
+            }
+        }
+        for (key, entry) in &self.data {
+            if self.original.get(key) != Some(entry) {
+                disk.insert(key.clone(), entry.clone());
+            }
+        }
+        match serde_json::to_string_pretty(&disk) {
             Ok(json) => {
                 if let Err(e) = write_atomic(&self.path, json) {
                     crate::style::warn_line!("could not write {}: {e:#}", self.path);
@@ -677,6 +703,47 @@ mod tests {
         reg2.store();
         let reloaded2 = PreservedLibsRegistry::load(&root);
         assert_eq!(reloaded2.all_paths().count(), 0);
+    }
+
+    #[test]
+    fn store_keeps_keys_another_load_wrote_after_this_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(dir.path().to_owned()).unwrap();
+        let first = Cpv::parse("sys-libs/foo-1.0").unwrap();
+        let second = Cpv::parse("sys-libs/bar-1.0").unwrap();
+        let third = Cpv::parse("sys-libs/baz-1.0").unwrap();
+
+        let mut older = PreservedLibsRegistry::load(&root);
+        older.register(
+            &first,
+            "0",
+            1,
+            vec![Utf8PathBuf::from("/usr/lib/libfoo.so")],
+        );
+        older.store();
+
+        let mut other = PreservedLibsRegistry::load(&root);
+        other.register(
+            &second,
+            "0",
+            1,
+            vec![Utf8PathBuf::from("/usr/lib/libbar.so")],
+        );
+        other.store();
+
+        older.register(
+            &third,
+            "0",
+            1,
+            vec![Utf8PathBuf::from("/usr/lib/libbaz.so")],
+        );
+        older.store();
+
+        let reloaded = PreservedLibsRegistry::load(&root);
+        let paths: Vec<_> = reloaded.all_paths().map(|p| p.to_string()).collect();
+        assert!(paths.iter().any(|p| p.ends_with("libfoo.so")), "{paths:?}");
+        assert!(paths.iter().any(|p| p.ends_with("libbar.so")), "{paths:?}");
+        assert!(paths.iter().any(|p| p.ends_with("libbaz.so")), "{paths:?}");
     }
 
     #[test]
