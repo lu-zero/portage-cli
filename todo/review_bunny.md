@@ -28,26 +28,27 @@ Concretely: I'd like a before/after on the real tree. I can produce a binary at
 needs a release-ish build of both and that's a long build — but it's the obvious
 next measurement and I'd rather someone else decide it matters.
 
-## 1b. Two perf commits shipped with no measurement at all
+## 1b. BF-405's code change is unmeasured at runtime (much smaller than I first claimed)
 
-Checking this prompted by the commit count, and it's the sharpest thing I found.
-Of 19 `perf(...)` commits, 17 carry a number in `benchmarks/BENCHMARKS.md` or a
-paired `bench(...)` commit. Two carry nothing:
+**Correction.** I initially wrote that `1a52b6b1` and `0c30acb1` shipped with "no
+measurement at all." That was wrong — I grepped only `benchmarks/BENCHMARKS.md`
+and `benchmarks/benches/` and inferred absence from that narrow search. Both
+findings carry real measurements, recorded in `todo/bunny-findings.md`:
 
-- `1a52b6b1 perf(activity): bound background sink queues`
-- `0c30acb1 perf(activity): skip unused orphan history`
+- BF-406 measured a slow-sink 100,000-event burst: producer enqueue time went
+  17.98 ms → 6.65 s while still delivering every event, which is the argument
+  for the bounded channel. It also adds a blocked-sink regression proving the
+  queue applies backpressure *without drops* — which directly answers the
+  correctness worry I raised below.
+- BF-405 measured 38 real history files (1,886 lines / 1,234,068 bytes) and
+  used that to defer BF-904, which is exactly what its title promised.
 
-Neither appears in `BENCHMARKS.md`, and neither has a follow-up bench commit —
-unlike `cd0b37d2`/`02018404`, whose measurements landed in `29458ac1` and
-`0cb67883` respectively. These two went in on reasoning alone ("skip unused
-work", "bound the queue") and broke the discipline the other seventeen kept.
-
-They're also the pair I trust *least*. Both touch `portage-activity`, both are
-about not doing work, and "we no longer do this work" is exactly the shape of
-change that produces a wrong answer rather than a slow one. A bounded queue can
-also silently drop or reorder entries, which is a correctness question, not just
-a throughput one. I should not have shipped them unmeasured and I can't
-retroactively vouch for them.
+The genuine, much narrower gap: **BF-405's actual code change** — lazily loading
+`DurationStore` only when an orphaned `AfterBlocker` needs the `job_id` set — has
+no runtime measurement. The finding says so itself ("No runtime speedup or
+allocation claim is made"). The reasoning is sound and the change is on a rare
+path, so this is a documented absence rather than an oversight, but it is the
+one perf change today whose justification is argument rather than number.
 
 ## 2. `depgraph()` refactor — oracle coverage is narrower than it looks
 
