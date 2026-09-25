@@ -148,7 +148,7 @@ async fn run_desc(
             };
             Ok::<_, portage_repo::Error>(Some(info))
         })
-        .await
+        .await?
         .into_iter()
         .filter_map(|(cpv, r)| r.ok().flatten().map(|info| (cpv, info)))
         .collect();
@@ -253,7 +253,7 @@ pub async fn run_emerge_style(
                     &pat_owned,
                 ))
             })
-            .await;
+            .await?;
             for (cpv, hit) in desc_hits {
                 if hit.unwrap_or(false) {
                     let key = format!("{}/{}", cpv.cpn.category, cpv.cpn.package);

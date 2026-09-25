@@ -548,16 +548,16 @@ pub async fn cache_entries_parallel<T, F>(
     repos: &[Repository],
     opts: &CacheReadOpts,
     decode: F,
-) -> Vec<(portage_atom::Cpv, Result<T>)>
+) -> Result<Vec<(portage_atom::Cpv, Result<T>)>>
 where
     T: Send + 'static,
     F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
 {
-    cache_entries_parallel_inner(repos, opts, false, decode)
-        .await
+    Ok(cache_entries_parallel_inner(repos, opts, false, decode)
+        .await?
         .into_iter()
         .map(|(cpv, _, result)| (cpv, result))
-        .collect()
+        .collect())
 }
 
 /// [`cache_entries_parallel`], also returning each cache file's own mtime
@@ -570,7 +570,7 @@ pub async fn cache_entries_parallel_with_mtime<T, F>(
     repos: &[Repository],
     opts: &CacheReadOpts,
     decode: F,
-) -> Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>
+) -> Result<Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>>
 where
     T: Send + 'static,
     F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
@@ -583,7 +583,7 @@ async fn cache_entries_parallel_inner<T, F>(
     opts: &CacheReadOpts,
     with_mtime: bool,
     decode: F,
-) -> Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>
+) -> Result<Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>>
 where
     T: Send + 'static,
     F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
@@ -597,7 +597,7 @@ where
         cache_cpvs_in_dirs(dirs.into_iter(), &discovery_opts, with_mtime)
     })
     .await
-    .unwrap_or_default();
+    .map_err(|e| crate::Error::SourceWorker(format!("cache discovery failed: {e}")))?;
     read_and_decode(items, jobs, decode).await
 }
 
@@ -615,13 +615,13 @@ pub(crate) async fn secondary_cache_entries_with_mtime<T, F>(
     repo: &Repository,
     opts: &CacheReadOpts,
     decode: F,
-) -> Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>
+) -> Result<Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>>
 where
     T: Send + 'static,
     F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
 {
     let Some(dir) = repo.secondary_cache_dir() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let jobs = cache_jobs(opts);
     let dir = dir.to_owned();
@@ -630,7 +630,7 @@ where
         cache_cpvs_in_dirs(std::iter::once(dir), &discovery_opts, true)
     })
     .await
-    .unwrap_or_default();
+    .map_err(|e| crate::Error::SourceWorker(format!("secondary cache discovery failed: {e}")))?;
     read_and_decode(items, jobs, decode).await
 }
 
@@ -645,13 +645,13 @@ async fn read_and_decode<T, F>(
     items: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)>,
     jobs: usize,
     decode: F,
-) -> Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>
+) -> Result<Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>>
 where
     T: Send + 'static,
     F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
 {
     if items.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let total = items.len();
@@ -684,11 +684,16 @@ where
 
     let mut all = Vec::with_capacity(total);
     for h in handles {
-        if let Ok(v) = h.await {
-            all.extend(v);
+        match h.await {
+            Ok(v) => all.extend(v),
+            Err(e) => {
+                return Err(crate::Error::SourceWorker(format!(
+                    "cache read failed: {e}"
+                )));
+            }
         }
     }
-    all
+    Ok(all)
 }
 
 #[cfg(test)]
@@ -721,7 +726,8 @@ mod tests {
         let mut entries = cache_entries_parallel(std::slice::from_ref(&repo), &opts, |text| {
             Ok(text.to_owned())
         })
-        .await;
+        .await
+        .unwrap();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         assert_eq!(entries.len(), 2);
@@ -758,7 +764,9 @@ mod tests {
             ..CacheReadOpts::default()
         };
 
-        let out = read_and_decode(items, cache_jobs(&opts), |text| Ok(text.to_owned())).await;
+        let out = read_and_decode(items, cache_jobs(&opts), |text| Ok(text.to_owned()))
+            .await
+            .unwrap();
 
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|(_, _, entry)| entry.is_ok()));

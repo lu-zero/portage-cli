@@ -28,6 +28,7 @@ fn bench_cache_workers(c: &mut Criterion) {
             &CacheReadOpts::default(),
             |text| CacheEntry::parse(text).map_err(portage_repo::Error::from),
         ))
+        .expect("cache discovery")
         .len();
     if entry_count == 0 {
         eprintln!("skipping cache-worker benchmarks: {repo_path} has no metadata entries");
@@ -53,11 +54,13 @@ fn bench_cache_workers(c: &mut Criterion) {
         };
         group.bench_with_input(BenchmarkId::new("read", &label), &label, |b, _| {
             b.iter(|| {
-                let entries = runtime.block_on(cache_entries_parallel(
-                    std::slice::from_ref(&repo),
-                    &opts,
-                    |text| CacheEntry::parse(text).map_err(portage_repo::Error::from),
-                ));
+                let entries = runtime
+                    .block_on(cache_entries_parallel(
+                        std::slice::from_ref(&repo),
+                        &opts,
+                        |text| CacheEntry::parse(text).map_err(portage_repo::Error::from),
+                    ))
+                    .expect("cache discovery");
                 assert_eq!(entries.len(), entry_count);
                 black_box(entries)
             })

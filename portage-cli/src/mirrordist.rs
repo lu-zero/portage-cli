@@ -425,7 +425,7 @@ async fn build_plan(
         latest_per_cpn: false,
     };
     let raw =
-        cache_entries_parallel(std::slice::from_ref(repo), &cache_opts, decode_raw_meta).await;
+        cache_entries_parallel(std::slice::from_ref(repo), &cache_opts, decode_raw_meta).await?;
     let mut by_cpv: HashMap<Cpv, portage_repo::Result<RawMeta>> = raw.into_iter().collect();
 
     let mut plan = MirrorPlan {
