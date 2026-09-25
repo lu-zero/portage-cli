@@ -1396,21 +1396,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // installed package's `<` bound). Computed here (pure, no report yet)
             // so the `--complete-graph` repair loop can decide whether another
             // round is needed before anything is printed or written.
-            //
-            // Target-routed entries only: `order` also carries BROOT build entries
-            // (`root_closure::host`, above), and those install into the host, not
-            // the VDB `target_installed` was read from. Counting one as replacing a
-            // target package would hide a real conflict on that name.
-            let proposed: Vec<conflicts::ProposedPkg> = order
-                .iter()
-                .filter(|(pkg, _)| !pkg.is_virtual() && pkg.merge_root() == MergeRoot::Target)
-                .map(|(pkg, ver)| conflicts::ProposedPkg {
-                    cpn: *pkg.cpn(),
-                    slot: pkg.slot(),
-                    version: ver.clone(),
-                })
-                .collect();
-            let dep_conflicts = conflicts::find_conflicts(&target_installed, &proposed);
+            let (proposed, dep_conflicts) = target_conflicts(&order, &target_installed);
 
             Ok(RoundOutcome {
                 provider,
@@ -2071,6 +2057,35 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 /// version satisfies — checked structurally (like `repo::cpns_for`, not
 /// USE-evaluated, since this candidate's resolved USE isn't computed yet).
 /// Falls back to `rb.version` untouched otherwise.
+/// The target-routed packages this round proposes, and the reverse-dependency
+/// conflicts they would cause against what is installed.
+///
+/// A complete-graph check that emerge's default targeted `-p` skips (e.g.
+/// upgrading docutils past an installed package's `<` bound). Computed during
+/// the round, before anything is printed or written, so the `--complete-graph`
+/// repair loop can decide whether another round is needed.
+///
+/// Target-routed entries only: `order` also carries BROOT build entries from
+/// [`root_closure::host`], and those install into the host, not the VDB
+/// `target_installed` was read from. Counting one as replacing a target package
+/// would hide a real conflict on that name.
+fn target_conflicts(
+    order: &[(PortagePackage, Version)],
+    target_installed: &[installed::VdbEntry],
+) -> (Vec<conflicts::ProposedPkg>, Vec<conflicts::Conflict>) {
+    let proposed: Vec<conflicts::ProposedPkg> = order
+        .iter()
+        .filter(|(pkg, _)| !pkg.is_virtual() && pkg.merge_root() == MergeRoot::Target)
+        .map(|(pkg, ver)| conflicts::ProposedPkg {
+            cpn: *pkg.cpn(),
+            slot: pkg.slot(),
+            version: ver.clone(),
+        })
+        .collect();
+    let conflicts = conflicts::find_conflicts(target_installed, &proposed);
+    (proposed, conflicts)
+}
+
 /// Re-append reinstalls the solver never routed through `install_order`, then
 /// drop what the invocation asked to skip. Returns the filtered order and how
 /// many entries `--exclude` and `--resume` each removed.
