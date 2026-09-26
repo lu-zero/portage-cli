@@ -962,10 +962,25 @@ Two findings, both inconvenient for the change:
    than an index, so this is not the lookup -- it is almost certainly code layout
    between two builds differing in one function. Reproducible, not signal.
 
-So: the index is at best neutral and at worst indistinguishable, and this fixture
-cannot resolve it. The change is kept because it removes a genuine unbounded term
-and the loop is a small share of `repo_entries` either way, but **no speedup is
-claimed**, and the earlier "removes a cliff" phrasing was unsupported.
+**The index turned out to be a regression, and the `gap_0` control is what proved
+it.** With an empty gap list the changed code never runs, yet the indexed build
+was still 11.3% slower there -- so the cost is not the lookup but the
+`HashMap<Cpv, usize>` built unconditionally over every primary entry, which is
+dearer to construct than the `HashSet` it replaced. A `Cpv` comparison fails on an
+interned pointer almost immediately, so 32M comparisons of the old scan cost less
+than one 8,000-entry hash map.
+
+The index was reverted; the accompanying ordering fix was kept. Re-measured
+against the indexed build over 5 interleaved rounds, the revert is 14.6-18.7%
+faster at every gap size, and `gap_0` is the *fastest* case precisely because
+there is no lookup left to do. Full data, both binaries' checksums and the
+methodology are in
+[`results/20260926-gap-index-6154f5f2-vs-c3c29af3/`](results/20260926-gap-index-6154f5f2-vs-c3c29af3/README.md).
+
+The lesson generalises past this change: **a data-structure swap inside a fast
+path needs a case where the new structure's construction is free**, or the
+measurement just measures the construction. The `gap_0` case is that control, and
+it was the only reason this was caught rather than shipped as a win.
 
 A harness note worth keeping: `cargo build -p portage-bench --benches` defaults to
 the **dev** profile. Copying `target/release/deps/<bench>` after such a build
