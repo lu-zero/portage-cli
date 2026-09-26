@@ -1,0 +1,126 @@
+== resolve modes bench
+   EM=target/release/em
+   PKG=www-client/firefox
+   MODES=-p -up -uNp -uDp -uNDp
+   RUNS=5 WARMUP=1
+
+### Package counts and set parity (em vs emerge)
+
+| mode | emerge n | em n | cpn diffs | notes |
+|------|----------|------|-----------|-------|
+| `-p` | 82 | 73 | 9 | shallow |
+| `-up` | 82 | 73 | 9 | shallow |
+| `-uNp` | 83 | 79 | 16 | shallow+newuse |
+| `-uDp` | 238 | 304 | 74 | deep updates |
+| `-uNDp` | 249 | 309 | 80 | deep+newuse cleanup |
+
+### em mode-to-mode deltas (cpn set)
+
+| from → to | only in from | only in to | shared |
+|-----------|--------------|------------|--------|
+| `-up` → `-uNp` | 0 | 6 | 73 |
+| `-up` → `-uDp` | 0 | 226 | 73 |
+| `-uDp` → `-uNDp` | 0 | 5 | 299 |
+| `-uNp` → `-uNDp` | 0 | 225 | 79 |
+
+### Wall-clock (hyperfine, warmup=1 runs=5)
+
+Benchmark 1: em -p
+  Time (mean ± σ):      1.006 s ±  0.030 s    [User: 1.257 s, System: 0.616 s]
+  Range (min … max):    0.987 s …  1.058 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: emerge -p
+  Time (mean ± σ):      2.990 s ±  0.013 s    [User: 2.876 s, System: 0.107 s]
+  Range (min … max):    2.973 s …  3.009 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 3: em -up
+  Time (mean ± σ):      1.016 s ±  0.062 s    [User: 1.241 s, System: 0.438 s]
+  Range (min … max):    0.982 s …  1.126 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
+ 
+Benchmark 4: emerge -up
+  Time (mean ± σ):      2.972 s ±  0.028 s    [User: 2.881 s, System: 0.083 s]
+  Range (min … max):    2.941 s …  3.004 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 5: em -uNp
+  Time (mean ± σ):      1.053 s ±  0.026 s    [User: 1.304 s, System: 0.499 s]
+  Range (min … max):    1.034 s …  1.099 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
+ 
+Benchmark 6: emerge -uNp
+  Time (mean ± σ):      3.023 s ±  0.043 s    [User: 2.895 s, System: 0.109 s]
+  Range (min … max):    2.984 s …  3.092 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 7: em -uDp
+  Time (mean ± σ):      1.126 s ±  0.038 s    [User: 1.430 s, System: 0.433 s]
+  Range (min … max):    1.079 s …  1.174 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 8: emerge -uDp
+  Time (mean ± σ):      5.474 s ±  0.140 s    [User: 5.303 s, System: 0.141 s]
+  Range (min … max):    5.324 s …  5.640 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 9: em -uNDp
+  Time (mean ± σ):      1.165 s ±  0.030 s    [User: 1.472 s, System: 0.477 s]
+  Range (min … max):    1.140 s …  1.217 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 10: emerge -uNDp
+  Time (mean ± σ):      5.506 s ±  0.193 s    [User: 5.356 s, System: 0.133 s]
+  Range (min … max):    5.363 s …  5.837 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Summary
+  em -p ran
+    1.01 ± 0.07 times faster than em -up
+    1.05 ± 0.04 times faster than em -uNp
+    1.12 ± 0.05 times faster than em -uDp
+    1.16 ± 0.05 times faster than em -uNDp
+    2.95 ± 0.09 times faster than emerge -up
+    2.97 ± 0.09 times faster than emerge -p
+    3.00 ± 0.10 times faster than emerge -uNp
+    5.44 ± 0.21 times faster than emerge -uDp
+    5.47 ± 0.25 times faster than emerge -uNDp
+
+### Timing table
+| Command | Mean [s] | Min [s] | Max [s] | Relative |
+|:---|---:|---:|---:|---:|
+| `em -p` | 1.006 ± 0.030 | 0.987 | 1.058 | 1.00 |
+| `emerge -p` | 2.990 ± 0.013 | 2.973 | 3.009 | 2.97 ± 0.09 |
+| `em -up` | 1.016 ± 0.062 | 0.982 | 1.126 | 1.01 ± 0.07 |
+| `emerge -up` | 2.972 ± 0.028 | 2.941 | 3.004 | 2.95 ± 0.09 |
+| `em -uNp` | 1.053 ± 0.026 | 1.034 | 1.099 | 1.05 ± 0.04 |
+| `emerge -uNp` | 3.023 ± 0.043 | 2.984 | 3.092 | 3.00 ± 0.10 |
+| `em -uDp` | 1.126 ± 0.038 | 1.079 | 1.174 | 1.12 ± 0.05 |
+| `emerge -uDp` | 5.474 ± 0.140 | 5.324 | 5.640 | 5.44 ± 0.21 |
+| `em -uNDp` | 1.165 ± 0.030 | 1.140 | 1.217 | 1.16 ± 0.05 |
+| `emerge -uNDp` | 5.506 ± 0.193 | 5.363 | 5.837 | 5.47 ± 0.25 |
+
+### Timing summary (em vs emerge per mode)
+
+| mode | em mean | emerge mean | speedup (emerge/em) |
+|------|---------|-------------|---------------------|
+| `-p` | 1.006 s | 2.990 s | 2.97× |
+| `-up` | 1.016 s | 2.972 s | 2.93× |
+| `-uNp` | 1.053 s | 3.023 s | 2.87× |
+| `-uDp` | 1.126 s | 5.474 s | 4.86× |
+| `-uNDp` | 1.165 s | 5.506 s | 4.73× |
+
+== done
