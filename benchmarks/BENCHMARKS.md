@@ -1036,11 +1036,25 @@ comparison against its own previous save is not a usable instrument for sub-1%
 effects here; the same conclusion as the BF-512 `Adjacency` measurement, where 12
 interleaved runs put the spread (88-137 ms) above the effect.
 
-**The aggregate question stays open, and this is the experiment that would settle
-it:** replay only the 19 `perf:` commits onto `d737929e`, excluding the nine
-`fix:` commits, then A/B that against `d737929e`. Both ends would compute the same
-plan, so the delta is attributable. It needs two `--release` builds of a 19-commit
-series and is not cheap, which is why it is proposed rather than run.
+**The aggregate question is settled, and the answer is no.**
+[`results/20260926-session-perf-d737929e-vs-8704e49e/`](results/20260926-session-perf-d737929e-vs-8704e49e/README.md)
+runs the A/B this section used to call for, using `www-client/firefox` rather
+than `@system` -- `b122fc18` changed the `@system` plan set, but both binaries emit
+a **byte-identical 112-line firefox plan**, so the timing is attributable.
+
+| method | baseline `d737929e` | current | delta |
+|---|---|---|---|
+| interleaved, one invocation | 894.6 ms ± 52.4 | 918.9 ms ± 76.0 | +2.7% |
+| each alone, own invocation | 876.8 ms ± 67.3 | 888.0 ms ± 56.9 | +1.3% |
+| minimum of 10 runs | 818.7 ms | 813.7 ms | -0.6% |
+
+Mean and minimum **disagree in sign**, both far inside a 57-76 ms sigma. The
+session's 19 `perf:` commits are **not measurable at the CLI** on this workload,
+which `em -p` spends mostly on repo load and provider build. That does not make the
+individual commits wrong -- each was a targeted fix with its own evidence -- but
+their sum is invisible here, which is the usual outcome for this shape of work and
+only knowable by measuring. A workload that stresses the optimised paths would be
+needed to see them; finding it is the open item, not re-running this.
 
 Reproduction on the current tree:
 
