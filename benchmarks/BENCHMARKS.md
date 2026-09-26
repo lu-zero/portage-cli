@@ -936,12 +936,16 @@ The parse numbers matter because the `u64` overflow fix replaced `parse_cpv`'s
 sequencing and `parse_whole`. That is a rewrite of the hot atom path, and it
 costs nothing measurable.
 
-`repo_entries` is **not** evidence for the gap-index change: this host has no gap
-sidecar at all, so `read_gap_index` returns `None` and the fast path never runs.
-The `out.iter().position` to positional-index change is O(gap x primary) to O(n)
-and its cost here was a handful of comparisons against 33,121 primary entries. No
-speedup is claimed for it; the claim is only that it removes a cliff for hosts
-whose gap list reaches thousands after a mass eclass change.
+`repo_entries` is **not** evidence for the gap-index change. The gap index does
+exist on this host -- `~/.cache/em/md5-cache/gentoo/gap-index` -- and is opened on
+every resolve (`strace -e openat` shows exactly one open per run). But it holds
+only its sync-stamp line and **no CPVs**, so the per-CPV loop the index feeds
+executes zero times. The `out.iter().position` to positional-index change is
+O(gap x primary) to O(n); with an empty gap list it had nothing to cost. No
+speedup is claimed for it, and this run does not validate it: the claim is only
+that it removes a cliff for hosts whose gap list reaches thousands after a mass
+eclass change. Exercising it needs a fixture with a populated gap index, or a
+tree whose primary cache is deliberately stale.
 
 **A session-level wall-clock A/B is not available, and the reason is structural.**
 Timing `em -p --emptytree @system` and `-vp --emptytree dev-libs/openssl` at
