@@ -1,0 +1,56 @@
+--- round 1 baseline (linear) ---
+gap_index/primary_8000_gap_0
+                        time:   [42.574 ms 42.815 ms 43.032 ms]
+gap_index/primary_8000_gap_800
+                        time:   [43.100 ms 43.260 ms 43.428 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [42.845 ms 43.020 ms 43.183 ms]
+--- round 1 current (indexed) ---
+gap_index/primary_8000_gap_0
+                        time:   [47.983 ms 48.090 ms 48.196 ms]
+gap_index/primary_8000_gap_800
+                        time:   [47.812 ms 48.022 ms 48.217 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [45.795 ms 45.906 ms 46.016 ms]
+--- round 2 baseline (linear) ---
+gap_index/primary_8000_gap_0
+                        time:   [47.192 ms 47.324 ms 47.451 ms]
+gap_index/primary_8000_gap_800
+                        time:   [47.122 ms 47.237 ms 47.346 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [36.549 ms 36.692 ms 36.842 ms]
+--- round 2 current (indexed) ---
+gap_index/primary_8000_gap_0
+                        time:   [43.258 ms 43.417 ms 43.601 ms]
+gap_index/primary_8000_gap_800
+                        time:   [43.076 ms 43.156 ms 43.232 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [43.199 ms 43.264 ms 43.328 ms]
+--- round 3 baseline (linear) ---
+gap_index/primary_8000_gap_0
+                        time:   [32.930 ms 33.792 ms 34.650 ms]
+gap_index/primary_8000_gap_800
+                        time:   [30.880 ms 31.777 ms 32.670 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [30.480 ms 31.254 ms 32.032 ms]
+--- round 3 current (indexed) ---
+gap_index/primary_8000_gap_0
+                        time:   [39.060 ms 40.058 ms 41.037 ms]
+gap_index/primary_8000_gap_800
+                        time:   [41.056 ms 41.646 ms 42.195 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [43.243 ms 43.337 ms 43.427 ms]
+--- round 4 baseline (linear) ---
+gap_index/primary_8000_gap_0
+                        time:   [36.353 ms 36.538 ms 36.731 ms]
+gap_index/primary_8000_gap_800
+                        time:   [39.708 ms 40.112 ms 40.522 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [35.718 ms 35.788 ms 35.859 ms]
+--- round 4 current (indexed) ---
+gap_index/primary_8000_gap_0
+                        time:   [44.894 ms 45.025 ms 45.170 ms]
+gap_index/primary_8000_gap_800
+                        time:   [44.998 ms 45.253 ms 45.501 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [45.528 ms 45.689 ms 45.859 ms]
