@@ -66,16 +66,47 @@ which update set gets selected.
 whether the *relative* position improved is unanswerable from numbers taken two
 months apart with a different Portage underneath.
 
-## Noise on this host
+## Cache sensitivity: measured, and it is not what it looks like
 
-`em -p` measured 1.006 s in the `bench-resolve-modes.sh` run and 0.842 s in the
-bare `hyperfine` run twenty minutes later on the same binary — a 20% spread
-between sessions, larger than any effect this session's changes are claimed to
-have. The `results/` README convention already warns that the baseline drifts
-±30 ms run-to-run; this is the coarser, between-invocation version of the same
-problem. Single-session deltas below ~20% on this workload should not be
-believed, and `--warmup 2` with 10 runs only controls within-invocation variance,
-not this.
+`em -p` measured 1.006 s in the `bench-resolve-modes.sh` run and 0.842 s twenty
+minutes later on the same binary. The obvious explanation — the two tools
+contending for the same 33,121-file metadata cache — is **wrong**, and testing it
+directly says so.
+
+| condition | `em -p` | `emerge -p` |
+|---|---|---|
+| alone, one command per invocation (3 separate runs) | 834.4 / 837.4 / 833.7 ms, min 802–808 | 2.943 s ± 0.028 |
+| interleaved with `emerge -p`, one invocation | 848.0 ms ± 0.011 | 2.969 s ± 0.050 |
+| same 10-command set as the script, one invocation | 843 ms ± 0.017 | 3.336 s ± 0.488 |
+
+So mutual contention costs `em` about **1%** (834 → 848 ms). And the script's
+1.006 s does not reproduce: the identical 10-command set measures `em -p` at
+0.843 s. The real effect is in **`emerge`**, which is erratic *alone* in some
+sessions (σ 0.49, range 2.96–3.97 s) and tight in others (σ 0.03), while its
+`-uNp`/`-up`/`-uNDp` modes are consistently tight.
+
+The giveaway that a multi-command invocation is the problem: in the ten-command
+run, `em -up` (1.171 s) came out **slower** than `em -uDp` (0.978 s), and
+`em -p`/`-uNp`/`-uDp`/`-uNDp` reordered between runs. Those share no state that
+could invert their order, so a grouped hyperfine invocation is leaving each
+command in a cache state that is not reproducible between invocations — and
+`em`'s 33k-file metadata read is sensitive to it.
+
+**Therefore: one command per invocation, and report the minimum.** Taken that
+way `em -p www-client/firefox` is **834 / 837 / 834 ms across three independent
+invocations, min 800–808 ms** — a spread of 0.4%, not 20%.
+
+Practical rules this yields:
+
+- Never compare a figure from a heterogeneous command set against one from a
+  single-command set. The 2026-07-25 history came from
+  `bench-em-vs-emerge.sh` (a multi-benchmark invocation); the 0.834–0.848 s
+  figures came from single-command invocations. Those two are not directly
+  comparable, and the honest comparison is `1.290 s` vs `~0.84 s` with a
+  systematic bias favouring whichever was measured in a cleaner cache.
+- `em -p` is ~0.84 s and `emerge -p` is ~2.94 s, so the honest single-repo
+  speedup is **~3.5x**, not the 2.97x the grouped run reported.
+- Absolute minima are stable across invocations; means are not. Quote the min.
 
 ## Files
 
