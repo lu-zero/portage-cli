@@ -26,6 +26,7 @@ Benchmarks for the Gentoo Portage Rust ecosystem.
 | `eclass_memo` | Eclass digest/path memo during fresh-repository live sourcing |
 | `regen_reads` | Ebuild content reuse during synthetic cache regeneration |
 | `metadata_serialize` | Direct-buffer metadata cache serialization |
+| `gap_index` | Synthetic gap-index fast path, and the per-resolve cost of a repo with no sync marker |
 
 The `portage-vdb` crate also has the per-crate `ownership` benchmark, which compares repeated full `CONTENTS` scans with a reusable collision index on synthetic package sets.
 

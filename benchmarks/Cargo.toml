@@ -54,6 +54,8 @@ dhat = { workspace = true, optional = true }
 criterion = { workspace = true, features = ["html_reports"] }
 flume = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
+md5 = { workspace = true }
+tempfile = { workspace = true }
 
 [[bench]]
 name = "dep_parsing"
@@ -131,4 +133,8 @@ harness = false
 
 [[bench]]
 name = "metadata_serialize"
+harness = false
+
+[[bench]]
+name = "gap_index"
 harness = false
