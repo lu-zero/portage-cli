@@ -936,16 +936,60 @@ The parse numbers matter because the `u64` overflow fix replaced `parse_cpv`'s
 sequencing and `parse_whole`. That is a rewrite of the hot atom path, and it
 costs nothing measurable.
 
-`repo_entries` is **not** evidence for the gap-index change. The gap index does
-exist on this host -- `~/.cache/em/md5-cache/gentoo/gap-index` -- and is opened on
-every resolve (`strace -e openat` shows exactly one open per run). But it holds
-only its sync-stamp line and **no CPVs**, so the per-CPV loop the index feeds
-executes zero times. The `out.iter().position` to positional-index change is
-O(gap x primary) to O(n); with an empty gap list it had nothing to cost. No
-speedup is claimed for it, and this run does not validate it: the claim is only
-that it removes a cliff for hosts whose gap list reaches thousands after a mass
-eclass change. Exercising it needs a fixture with a populated gap index, or a
-tree whose primary cache is deliberately stale.
+`repo_entries` says nothing either way about the gap-index change. The gap index
+does exist on this host -- `~/.cache/em/md5-cache/gentoo/gap-index` -- and is
+opened on every resolve (`strace -e openat` shows one open per run), but it holds
+only its sync-stamp line and **no CPVs**, so the per-CPV loop executes zero times.
+
+A synthetic bench (`benches/gap_index.rs`) was then built to populate the gap
+list and give the change a fair test. **It does not show a speedup.**
+
+| case | indexed (HEAD) | linear (`17f99cd8^`) | linear vs indexed |
+|---|---|---|---|
+| `primary_2000_gap_0` | 11.617 ms | - | - |
+| `primary_2000_gap_200` | 11.518 ms | - | - |
+| `primary_2000_gap_2000` | 11.661 ms | - | - |
+| `primary_8000_gap_8000` | 50.74 ms | 43.34 ms | **-14.6%** |
+
+Two findings, both inconvenient for the change:
+
+1. At 2,000 primary entries the total is **flat in gap size** (11.617 / 11.518 /
+   11.661 ms for 0 / 200 / 2,000 gap lines). The whole gap loop is inside the
+   noise there, so the O(gap x primary) term this change removes is not a cost
+   worth removing at that size.
+2. At 8,000 x 8,000 the *linear* build is reproducibly 14.6% **faster** across
+   three interleaved rounds. A 32M-comparison scan cannot make a scan faster
+   than an index, so this is not the lookup -- it is almost certainly code layout
+   between two builds differing in one function. Reproducible, not signal.
+
+So: the index is at best neutral and at worst indistinguishable, and this fixture
+cannot resolve it. The change is kept because it removes a genuine unbounded term
+and the loop is a small share of `repo_entries` either way, but **no speedup is
+claimed**, and the earlier "removes a cliff" phrasing was unsupported.
+
+A harness note worth keeping: `cargo build -p portage-bench --benches` defaults to
+the **dev** profile. Copying `target/release/deps/<bench>` after such a build
+silently re-copies the previous `cargo bench` artifact, so an A/B compares one
+binary against itself. `cargo bench` must be the producer, or the build must say
+`--release` explicitly -- and the two artifacts should be md5-compared before
+trusting any result.
+
+### Overlay cost of a repo with no sync marker
+
+The same bench measures what it costs to add an overlay *without* a
+`timestamp.chk`, since such a tree can never use the memo and re-walks on every
+resolve:
+
+| ebuilds | marked (memo used) | unmarked (walks every resolve) | penalty |
+|---|---|---|---|
+| 500 | 3.046 ms | 7.395 ms | 2.4x (+4.3 ms) |
+| 2,000 | 11.718 ms | 28.227 ms | 2.4x (+16.5 ms) |
+
+That is ~8.6 us per ebuild per resolve, linear in tree size -- so a 500-ebuild
+hand-made overlay costs ~4 ms per resolve, a 4,000-ebuild one ~34 ms, and a
+30,000-ebuild one ~260 ms. `guru` (3,764 ebuilds) has a sync marker and pays
+none of it. The marked/unmarked split is also the proof that the marked fixture
+genuinely consults the memo, which the real-tree bench could not show.
 
 **A session-level wall-clock A/B is not available, and the reason is structural.**
 Timing `em -p --emptytree @system` and `-vp --emptytree dev-libs/openssl` at
