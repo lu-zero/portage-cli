@@ -39,12 +39,27 @@ all cases, n=4), so no single row is significant on its own. What makes this
 conclusive is the sign agreeing across all three cases *including* a control
 where the changed code is inert.
 
-## Outcome
+## Outcome: index reverted, ordering fix kept
 
-The positional index is reverted. The determinism fix that came with it is kept:
+Reverting the index (keeping only the descending-index removal that replaced
+`swap_remove`) and re-measuring against the indexed build, 5 interleaved rounds:
+
+| case | indexed | reverted | delta |
+|---|---|---|---|
+| `primary_8000_gap_0` | 43.51 ms | **35.39 ms** | **-18.7%** |
+| `primary_8000_gap_800` | 43.72 ms | **37.34 ms** | **-14.6%** |
+| `primary_8000_gap_8000` | 44.80 ms | **37.05 ms** | **-17.3%** |
+
+`gap_0` being the *fastest* reverted case is the control working in the other
+direction too: with nothing in the gap list there is no lookup to do, so the
+reverted build does the least work of all three. The indexed build's cost is
+flat across all three (~44 ms) precisely because it is the fixed hash-map build,
+independent of what the loop then does.
+
+The surviving change is a one-line ordering fix, not a data-structure change:
 removals are applied in descending index order rather than by `swap_remove`, so
-the surviving entries keep the primary cache's order. That is the part with
-evidence behind it.
+the surviving entries keep the primary cache's order and `repo_entries` output no
+longer depends on the gap list's order.
 
 ## Harness note
 

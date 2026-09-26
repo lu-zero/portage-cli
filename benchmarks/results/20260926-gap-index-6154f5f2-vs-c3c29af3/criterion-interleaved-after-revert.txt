@@ -1,0 +1,70 @@
+--- indexed round 1 ---
+gap_index/primary_8000_gap_0
+                        time:   [36.390 ms 36.536 ms 36.675 ms]
+gap_index/primary_8000_gap_800
+                        time:   [41.056 ms 41.478 ms 41.969 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [51.205 ms 51.579 ms 52.008 ms]
+--- reverted round 1 ---
+gap_index/primary_8000_gap_0
+                        time:   [33.514 ms 33.989 ms 34.478 ms]
+gap_index/primary_8000_gap_800
+                        time:   [30.337 ms 30.655 ms 30.959 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [31.405 ms 31.609 ms 31.803 ms]
+--- indexed round 2 ---
+gap_index/primary_8000_gap_0
+                        time:   [46.777 ms 47.171 ms 47.595 ms]
+gap_index/primary_8000_gap_800
+                        time:   [49.596 ms 50.514 ms 51.359 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [38.154 ms 38.640 ms 39.167 ms]
+--- reverted round 2 ---
+gap_index/primary_8000_gap_0
+                        time:   [36.868 ms 37.133 ms 37.460 ms]
+gap_index/primary_8000_gap_800
+                        time:   [44.692 ms 44.770 ms 44.849 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [44.823 ms 44.957 ms 45.107 ms]
+--- indexed round 3 ---
+gap_index/primary_8000_gap_0
+                        time:   [46.646 ms 46.723 ms 46.803 ms]
+gap_index/primary_8000_gap_800
+                        time:   [42.698 ms 43.218 ms 43.722 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [41.259 ms 41.664 ms 42.109 ms]
+--- reverted round 3 ---
+gap_index/primary_8000_gap_0
+                        time:   [34.046 ms 34.690 ms 35.392 ms]
+gap_index/primary_8000_gap_800
+                        time:   [37.117 ms 37.222 ms 37.340 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [36.173 ms 36.616 ms 37.055 ms]
+--- indexed round 4 ---
+gap_index/primary_8000_gap_0
+                        time:   [36.012 ms 36.559 ms 37.117 ms]
+gap_index/primary_8000_gap_800
+                        time:   [40.008 ms 40.750 ms 41.516 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [44.537 ms 44.665 ms 44.801 ms]
+--- reverted round 4 ---
+gap_index/primary_8000_gap_0
+                        time:   [31.341 ms 31.519 ms 31.704 ms]
+gap_index/primary_8000_gap_800
+                        time:   [37.522 ms 37.810 ms 38.137 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [33.867 ms 34.181 ms 34.504 ms]
+--- indexed round 5 ---
+gap_index/primary_8000_gap_0
+                        time:   [42.356 ms 42.939 ms 43.509 ms]
+gap_index/primary_8000_gap_800
+                        time:   [50.825 ms 51.352 ms 52.080 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [46.842 ms 47.502 ms 48.148 ms]
+--- reverted round 5 ---
+gap_index/primary_8000_gap_0
+                        time:   [37.130 ms 37.432 ms 37.744 ms]
+gap_index/primary_8000_gap_800
+                        time:   [36.305 ms 36.465 ms 36.647 ms]
+gap_index/primary_8000_gap_8000
+                        time:   [36.182 ms 36.567 ms 37.069 ms]
