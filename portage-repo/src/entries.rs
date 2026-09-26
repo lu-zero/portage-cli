@@ -131,16 +131,12 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
             .collect();
         let mut md5_covered: HashSet<Cpv> = HashSet::new();
         let mut recovered = 0usize;
-        // Positional index, not a scan: the primary cache runs to tens of
-        // thousands of entries and the gap list to thousands of lines.
-        let primary_at: HashMap<Cpv, usize> = out
-            .iter()
-            .enumerate()
-            .map(|(i, (cpv, _))| (cpv.clone(), i))
-            .collect();
+        // A linear scan, not an index: the gap list is small in practice, and
+        // `Cpv` equality fails on an interned pointer almost immediately, so a
+        // scan beats building a hash map over every primary entry up front.
         let mut drop_primary: Vec<usize> = Vec::new();
         for cpv in &cpvs {
-            if let Some(&pos) = primary_at.get(cpv) {
+            if let Some(pos) = out.iter().position(|(candidate, _)| candidate == cpv) {
                 // Eclass freshness is not enough: a gap line exists because the
                 // primary `_md5_` did not match the ebuild. Drop the line only
                 // when that file now matches. Otherwise serve secondary.
