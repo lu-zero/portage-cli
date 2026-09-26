@@ -989,6 +989,16 @@ binary against itself. `cargo bench` must be the producer, or the build must say
 `--release` explicitly -- and the two artifacts should be md5-compared before
 trusting any result.
 
+A second harness note, from the CLI wall-clock work in
+[`results/20260926-cli-firefox-56a16bc-vs-c23215b4/`](results/20260926-cli-firefox-56a16bc-vs-c23215b4/README.md):
+**one command per hyperfine invocation, and quote the minimum.** In a grouped
+ten-command invocation `em -p firefox` read 0.843 s in one run and 1.006 s in
+another on the same binary, and `em -up` came out slower than `em -uDp` -- an
+ordering no shared state can produce. Single-command invocations give
+834/837/834 ms, a 0.4% spread. `em` and `emerge` contending for the same
+33,121-file metadata cache is **not** the cause: interleaving them costs `em`
+about 1%.
+
 ### Overlay cost of a repo with no sync marker
 
 The same bench measures what it costs to add an overlay *without* a
