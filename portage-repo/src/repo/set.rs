@@ -12,6 +12,7 @@ use super::ebuild::Ebuild;
 use super::repos_conf::RepoEntry;
 use super::repository::{EbuildsIter, Repository};
 use crate::error::Result;
+use crate::metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
 
 /// Every repository one invocation searches or merges across, in priority
 /// order, plus the virtual (alias) repos configured alongside them.
@@ -127,6 +128,15 @@ impl RepoSet {
     /// `Location::Alias` entries configured alongside this set
     pub fn aliases(&self) -> &[RepoEntry] {
         &self.aliases
+    }
+
+    /// The metadata cache owned by `alias`: a sibling of the main repo's
+    /// durable secondary (`<root>/<alias name>`), in-memory when main has none
+    pub fn alias_cache(&self, alias: &RepoEntry) -> Arc<dyn MetadataCache> {
+        match self.main().secondary_cache_dir().and_then(|d| d.parent()) {
+            Some(root) => Arc::new(DirMetadataCache::new(root.join(alias.name.as_str()))),
+            None => Arc::new(MemoryMetadataCache::new()),
+        }
     }
 
     /// Union of [`Repository::find_cpns`] across the set, deduplicated and

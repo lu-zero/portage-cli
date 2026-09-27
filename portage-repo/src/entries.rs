@@ -55,6 +55,7 @@ use crate::cache::{
     CacheReadOpts, cache_entries_parallel, cache_entries_parallel_with_mtime,
     secondary_cache_entries_with_mtime,
 };
+use crate::metadata_cache::MetadataCache;
 use crate::repo::Repository;
 
 #[derive(Default)]
@@ -441,13 +442,45 @@ async fn gap_entries_with_digests(
         repo.name(),
         missing.len()
     );
-    resolve_ebuilds(repo, missing, &mut HashMap::new(), digests).await
+    resolve_ebuilds(repo, Store::Repo, missing, &mut HashMap::new(), digests).await
+}
+
+/// Metadata for alias cpvs, each an [`Ebuild::with_cpv`] of the alias cpv onto
+/// `source`'s real ebuild, kept in the alias's own `store`
+///
+/// Sourced under the alias category rather than reusing `source`'s entry:
+/// ebuilds branch on `CATEGORY` at global scope (`crossdev.eclass`).
+///
+/// [`Ebuild::with_cpv`]: crate::repo::Ebuild::with_cpv
+pub async fn alias_entries(
+    source: &Repository,
+    store: &dyn MetadataCache,
+    ebuilds: Vec<crate::repo::Ebuild>,
+) -> Vec<(Cpv, CacheEntry)> {
+    resolve_ebuilds(
+        source,
+        Store::Alias(store),
+        ebuilds,
+        &mut HashMap::new(),
+        &mut EclassMemo::default(),
+    )
+    .await
+}
+
+/// Where [`resolve_ebuilds`] looks up and persists what it sources
+#[derive(Clone, Copy)]
+enum Store<'a> {
+    /// The repo's own primary-then-secondary cache
+    Repo,
+    /// An alias's own cache; its cpvs have no in-tree entry
+    Alias(&'a dyn MetadataCache),
 }
 
 /// Run the four-step chain over `ebuilds`, consuming matching entries out of
 /// `cached` (the primary bulk walk) as it goes.
 async fn resolve_ebuilds(
     repo: &Repository,
+    store: Store<'_>,
     ebuilds: impl IntoIterator<Item = crate::repo::Ebuild>,
     cached: &mut HashMap<Cpv, CacheEntry>,
     digests: &mut EclassMemo,
@@ -481,7 +514,11 @@ async fn resolve_ebuilds(
 
         // Layered lookup: primary miss path already tried above for bulk;
         // this hits secondary (and any primary entry not in the bulk map).
-        if let Ok(Some(entry)) = repo.cache_entry(&cpv)
+        let stored = match store {
+            Store::Repo => repo.cache_entry(&cpv),
+            Store::Alias(alias) => alias.get(&cpv),
+        };
+        if let Ok(Some(entry)) = stored
             && valid(&entry, digests)
         {
             out.push((cpv, entry));
@@ -579,7 +616,11 @@ async fn resolve_ebuilds(
                     );
                     continue;
                 }
-                if let Err(e) = repo.put_secondary(&cpv, &entry) {
+                let put = match store {
+                    Store::Repo => repo.put_secondary(&cpv, &entry),
+                    Store::Alias(alias) => alias.put(&cpv, &entry),
+                };
+                if let Err(e) = put {
                     tracing::warn!(
                         "repo '{}': failed to write secondary cache for {cpv}: {e}",
                         repo.name()
