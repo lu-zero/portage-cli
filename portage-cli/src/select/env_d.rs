@@ -451,11 +451,17 @@ pub fn run_show<T: EnvDProfile>(globals: &Cli, target: &str) {
 /// `outer_roots()`, not `roots()` — see [`run_list`]'s doc comment.
 pub fn run_set<T: EnvDProfile>(
     globals: &Cli,
-    target: &str,
+    target: Option<&str>,
     profile: &str,
     base_dir: &Utf8PathBuf,
 ) -> Result<()> {
     let roots = globals.outer_roots();
+    // Only an explicit `--target` or a CHOST read from this config root says
+    // what the slot is for; the arch-derived default is a guess.
+    let known_target = target.map(str::to_owned).or_else(|| root_chost(&roots));
+    let target = target
+        .map(str::to_owned)
+        .unwrap_or_else(|| get_default_target(globals));
     let profiles_by_target = list_all_profiles::<T>(&roots)?;
 
     let resolved_profile = if let Ok(n) = profile.parse::<usize>() {
@@ -481,11 +487,26 @@ pub fn run_set<T: EnvDProfile>(
         profile.to_string()
     };
 
-    set_profile::<T>(&roots, target, &resolved_profile, base_dir)?;
+    if let Some(known) = known_target
+        && let Some(declared) = declared_target::<T>(base_dir, &resolved_profile)
+        && declared != known
+    {
+        crate::style::warn_line!(
+            "{} profile {resolved_profile} is for {declared}, activating it for {known}",
+            T::module_name()
+        );
+    }
+    set_profile::<T>(&roots, &target, &resolved_profile, base_dir)?;
     println!(">>> {} profile set: {}", T::module_name(), resolved_profile);
     println!("    for target: {}", target);
 
     Ok(())
+}
+
+/// The target a profile file declares on its own target line, if any
+fn declared_target<T: EnvDProfile>(base_dir: &Utf8Path, profile: &str) -> Option<String> {
+    let content = std::fs::read_to_string(base_dir.join(profile)).ok()?;
+    parse_env_vars(&content).remove(T::target_var_name().trim_end_matches('='))
 }
 
 /// Activate the newest profile installed *in this root* for `target` — used by

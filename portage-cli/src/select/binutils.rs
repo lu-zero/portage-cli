@@ -106,15 +106,6 @@ pub fn activate_latest(roots: &Roots, target: &str) -> Result<bool> {
 }
 
 pub fn run(action: &BinutilsAction, globals: &Cli) -> Result<()> {
-    let target = match action {
-        BinutilsAction::List { target, .. } | BinutilsAction::Show { target, .. } => target
-            .clone()
-            .unwrap_or_else(|| env_d::get_default_target(globals)),
-        BinutilsAction::Set { target, .. } => target
-            .clone()
-            .unwrap_or_else(|| env_d::get_default_target(globals)),
-    };
-
     // outer_roots(), not roots() -- see env_d::run_list's doc comment (the
     // --target flag collision between this subcommand's own field and the
     // global one).
@@ -122,12 +113,15 @@ pub fn run(action: &BinutilsAction, globals: &Cli) -> Result<()> {
 
     match action {
         BinutilsAction::List { .. } => env_d::run_list::<BinutilsProfileType>(globals),
-        BinutilsAction::Show { .. } => {
+        BinutilsAction::Show { target } => {
+            let target = target
+                .clone()
+                .unwrap_or_else(|| env_d::get_default_target(globals));
             env_d::run_show::<BinutilsProfileType>(globals, &target);
             Ok(())
         }
-        BinutilsAction::Set { profile, .. } => {
-            env_d::run_set::<BinutilsProfileType>(globals, &target, profile, &base_dir)
+        BinutilsAction::Set { profile, target } => {
+            env_d::run_set::<BinutilsProfileType>(globals, target.as_deref(), profile, &base_dir)
         }
     }
 }

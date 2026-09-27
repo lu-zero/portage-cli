@@ -35,15 +35,6 @@ impl env_d::EnvDProfile for LinkerProfileType {
 }
 
 pub fn run(action: &LinkerAction, globals: &Cli) -> Result<()> {
-    let target = match action {
-        LinkerAction::List { target, .. } | LinkerAction::Show { target, .. } => target
-            .clone()
-            .unwrap_or_else(|| env_d::get_default_target(globals)),
-        LinkerAction::Set { target, .. } => target
-            .clone()
-            .unwrap_or_else(|| env_d::get_default_target(globals)),
-    };
-
     // outer_roots(), not roots() -- see env_d::run_list's doc comment (the
     // --target flag collision between this subcommand's own field and the
     // global one).
@@ -51,12 +42,15 @@ pub fn run(action: &LinkerAction, globals: &Cli) -> Result<()> {
 
     match action {
         LinkerAction::List { .. } => env_d::run_list::<LinkerProfileType>(globals),
-        LinkerAction::Show { .. } => {
+        LinkerAction::Show { target } => {
+            let target = target
+                .clone()
+                .unwrap_or_else(|| env_d::get_default_target(globals));
             env_d::run_show::<LinkerProfileType>(globals, &target);
             Ok(())
         }
-        LinkerAction::Set { profile, .. } => {
-            env_d::run_set::<LinkerProfileType>(globals, &target, profile, &base_dir)
+        LinkerAction::Set { profile, target } => {
+            env_d::run_set::<LinkerProfileType>(globals, target.as_deref(), profile, &base_dir)
         }
     }
 }

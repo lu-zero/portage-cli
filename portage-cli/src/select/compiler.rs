@@ -182,15 +182,6 @@ pub fn current_slot(roots: &Roots, target: &str) -> Option<String> {
 }
 
 pub fn run(action: &CompilerAction, globals: &Cli) -> Result<()> {
-    let target = match action {
-        CompilerAction::List { target, .. } | CompilerAction::Show { target, .. } => target
-            .clone()
-            .unwrap_or_else(|| env_d::get_default_target(globals)),
-        CompilerAction::Set { target, .. } => target
-            .clone()
-            .unwrap_or_else(|| env_d::get_default_target(globals)),
-    };
-
     // outer_roots(), not roots() -- see env_d::run_list's doc comment (the
     // --target flag collision between this subcommand's own field and the
     // global one).
@@ -198,12 +189,15 @@ pub fn run(action: &CompilerAction, globals: &Cli) -> Result<()> {
 
     match action {
         CompilerAction::List { .. } => env_d::run_list::<GccProfileType>(globals),
-        CompilerAction::Show { .. } => {
+        CompilerAction::Show { target } => {
+            let target = target
+                .clone()
+                .unwrap_or_else(|| env_d::get_default_target(globals));
             env_d::run_show::<GccProfileType>(globals, &target);
             Ok(())
         }
-        CompilerAction::Set { profile, .. } => {
-            env_d::run_set::<GccProfileType>(globals, &target, profile, &base_dir)
+        CompilerAction::Set { profile, target } => {
+            env_d::run_set::<GccProfileType>(globals, target.as_deref(), profile, &base_dir)
         }
     }
 }
