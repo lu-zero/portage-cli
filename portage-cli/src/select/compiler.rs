@@ -50,28 +50,12 @@ impl env_d::EnvDProfile for GccProfileType {
     }
 
     fn sync_foreign_config(roots: &Roots, vars: &BTreeMap<String, String>) -> Result<()> {
-        write_clang_configs(&env_d::eprefix(roots), vars, root_chost(roots).as_deref())
+        write_clang_configs(
+            &env_d::eprefix(roots),
+            vars,
+            env_d::root_chost(roots).as_deref(),
+        )
     }
-}
-
-/// `CHOST` for the root being operated on — root-aware the same way
-/// [`super::get_chost`] is, but taking [`Roots`] directly since crossdev's
-/// entry points hand this `Cli::base_roots`, not a `&Cli`. Reading the
-/// *host's* `/etc/portage/make.conf` unconditionally (the previous
-/// approach) misjudges a `--root`/`--local` root's own native gcc as
-/// foreign, since it compares against the wrong CHOST entirely.
-fn root_chost(roots: &Roots) -> Option<String> {
-    let mut paths = vec![super::config_portage_dir_for(roots).join("make.conf")];
-    // `--prefix`/`--local` deliberately don't carry their own CHOST (see
-    // `get_chost`'s doc comment) — fall back to the host's real make.conf.
-    if super::is_prefix_context_for(roots) {
-        paths.push(Utf8PathBuf::from("/etc/portage/make.conf"));
-    }
-    paths.iter().find_map(|p| {
-        portage_repo::MakeConf::load(p)
-            .ok()
-            .and_then(|mc| mc.get("CHOST").map(str::to_owned))
-    })
 }
 
 /// Route clang's gcc-install hand-off to the right config file.
@@ -227,47 +211,6 @@ pub fn run(action: &CompilerAction, globals: &Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // `root_chost` must read the *target* root's own make.conf, not the
-    // host's — the bug this guards against: `--root`/`--config-root` at a
-    // different CHOST than the host previously got compared against the
-    // host's CHOST, misrouting that root's own native gcc as foreign.
-    #[test]
-    fn root_chost_reads_the_explicit_config_root() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_str().unwrap();
-        std::fs::create_dir_all(dir.path().join("etc/portage")).unwrap();
-        std::fs::write(
-            dir.path().join("etc/portage/make.conf"),
-            "CHOST=\"i586-pc-linux-gnu\"\n",
-        )
-        .unwrap();
-
-        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", root, "--config-root", root]);
-        assert_eq!(
-            root_chost(&cli.outer_roots()),
-            Some("i586-pc-linux-gnu".to_string())
-        );
-    }
-
-    // No config root recorded at all (no `--config-root`, no `--local`
-    // overlay): `config_portage_dir_for` resolves to `/etc/portage` (the
-    // host's own), matching real eselect's own bare-`--root` behavior.
-    #[test]
-    fn root_chost_falls_back_to_host_without_an_explicit_config_root() {
-        let Ok(host) =
-            portage_repo::MakeConf::load(camino::Utf8Path::new("/etc/portage/make.conf"))
-                .map(|mc| mc.get("CHOST").map(str::to_owned))
-        else {
-            eprintln!("skipping: host /etc/portage/make.conf unreadable here");
-            return;
-        };
-
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_str().unwrap();
-        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", root]);
-        assert_eq!(root_chost(&cli.outer_roots()), host);
-    }
 
     // `em select`'s config-root resolution deliberately does NOT infer a
     // config root from bare `--root` (matching real eselect, which only
