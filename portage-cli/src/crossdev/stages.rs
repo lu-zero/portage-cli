@@ -243,18 +243,38 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
                 into_sysroot: false,
             });
         }
+        // compiler-rt's builtins need the libc headers, and the full libc
+        // links against those builtins (long-double helpers on aarch64).
         steps.push(StageStep {
-            label: "libc".into(),
+            label: "libc headers".into(),
             atoms: vec![atom("sys-libs", kind.libc_pkg())],
+            use_override: owned(&["headers-only"]),
+            nodeps: false,
+            into_sysroot: false,
+        });
+        steps.push(StageStep {
+            label: "compiler-rt".into(),
+            atoms: vec![kind.llvm_atom("llvm-runtimes", "compiler-rt")],
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
         });
-        for rt in ["compiler-rt", "libunwind", "libcxxabi", "libcxx"] {
+        steps.push(StageStep {
+            label: "libc".into(),
+            atoms: vec![atom("sys-libs", kind.libc_pkg())],
+            use_override: owned(&["-headers-only"]),
+            nodeps: false,
+            into_sysroot: false,
+        });
+        for (rt, use_override) in [
+            ("libunwind", owned(&["static-libs"])),
+            ("libcxxabi", vec![]),
+            ("libcxx", vec![]),
+        ] {
             steps.push(StageStep {
                 label: rt.into(),
                 atoms: vec![kind.llvm_atom("llvm-runtimes", rt)],
-                use_override: vec![],
+                use_override,
                 nodeps: false,
                 into_sysroot: false,
             });
@@ -783,6 +803,16 @@ mod tests {
         assert!(l.contains(&"compiler-rt"));
         assert!(!l.iter().any(|s| s.starts_with("gcc-stage")));
         assert!(plan.steps.iter().any(|s| s.atoms[0].ends_with("/musl")));
+    }
+
+    #[test]
+    fn llvm_plan_builds_compiler_rt_between_libc_headers_and_libc() {
+        let t = CrossTarget::parse("aarch64-unknown-linux-musl", true).unwrap();
+        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        let l = labels(&plan);
+        let pos = |name: &str| l.iter().position(|s| *s == name).unwrap();
+        assert!(pos("libc headers") < pos("compiler-rt"));
+        assert!(pos("compiler-rt") < pos("libc"));
     }
 
     #[test]
