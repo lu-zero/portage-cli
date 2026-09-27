@@ -10,8 +10,7 @@ pitfalls: [`em-prefix-experiment.md`](../design/em-prefix-experiment.md).
 
 ```sh
 em setup --prefix P
-em toolchain --prefix P --setup    # baselayout → binutils → headers → gcc
-                                   # (no glibc: USE=prefix-guest links the host libc)
+em toolchain --prefix P --setup    # baselayout → binutils → headers → glibc → gcc
 em select gcc set --prefix P N     # activate P's gcc
 em --prefix P llvm-core/clang      # builds with P's gcc, not the host's
 em active set --prefix P           # register P as the active context
@@ -19,13 +18,13 @@ eval "$(em active env)"            # PATH + LD_LIBRARY_PATH for this shell
 ```
 
 `em toolchain --setup` resolves against the prefix VDB only (host packages do
-not count as already installed). `--prefix` still borrows the host libc via
-`prefix-guest`; it does not need `package.provided`.
+not count as already installed). The libc step runs unless the active profile
+has `USE=prefix-guest`. It does not need `package.provided`.
 
 ## Why `em active env` matters
 
-A binary under `P` uses the **host** ELF interpreter — this is not a relocatable
-Gentoo Prefix with its own loader:
+Packages built into `P` record `EPREFIX=P`. Runtime search still has to find
+`P`'s libraries:
 
 - **`PATH`**: LLVM installs under `usr/lib/llvm/<slot>/bin`, only reachable
   via the prefix's `etc/env.d`.

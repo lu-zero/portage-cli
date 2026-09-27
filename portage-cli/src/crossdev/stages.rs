@@ -187,7 +187,7 @@ impl BootstrapKind {
 /// `virtual/libc`'s RDEPEND already collapses to a bare blocker under it, so
 /// kernel-headers needs no change; the libc step merges `sys-libs/<libc>`
 /// with `--nodeps` (breaking the glibc-needs-gcc cycle), bypassing that
-/// RDEPEND, so it reads the flag itself. See [prefix-guest is host-OS-agnostic](../../../docs/user/root-model.md).
+/// RDEPEND, so it reads the flag itself.
 pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: bool) -> StagePlan {
     let atom = |real_cat: &str, pkg: &str| kind.atom(real_cat, pkg);
     let owned = |toks: &[&str]| toks.iter().map(|s| s.to_string()).collect::<Vec<_>>();

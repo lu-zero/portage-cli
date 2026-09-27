@@ -481,10 +481,10 @@ fn step_flags(step: &stages::StageStep) -> String {
 }
 
 /// Whether the active profile has `USE=prefix-guest` set: Gentoo Prefix's
-/// signal that the host, not `::gentoo`, owns the libc. `virtual/libc` and
+/// signal that the host, not this tree, owns the libc. `virtual/libc` and
 /// `virtual/os-headers` RDEPEND collapse to a bare blocker under it, and
-/// `toolchain.eclass` gates gcc's libc-linking on it. See [prefix-guest is
-/// host-OS-agnostic](../../../docs/user/root-model.md) for why it reads `true` on Linux too.
+/// `toolchain.eclass` gates gcc's libc-linking on it. `em setup` leaves the
+/// flag to the selected profile.
 ///
 /// Read the same way `info.rs` reads USE for its own display (`main_repo` →
 /// `repo.shell()` → `apply_profile_env` → `shell.get_var`) rather than a
@@ -533,11 +533,9 @@ fn native_toolchain_package_use() -> Vec<(Dep, Vec<UseOverride>)> {
 /// `::gentoo` atoms, no cross overlay/wrapper ceremony.
 ///
 /// Under `USE=prefix-guest` (see [`native_prefix_guest`]) the libc step is
-/// skipped: `virtual/libc`/`toolchain.eclass` already expect gcc to link
-/// against the host's own libc/headers instead. `prefix-guest` is on by
-/// default for the whole standard "rpath" Prefix profile family regardless
-/// of host OS (`features/prefix/rpath/use.force`, real upstream Gentoo
-/// Prefix, not FreeBSD/Darwin-specific).
+/// skipped: `virtual/libc` and `toolchain.eclass` already expect gcc to link
+/// against the host libc. The flag comes from the profile; `em setup` does
+/// not set it.
 ///
 /// This is the *toolchain* primitive only — the compiler the stages build
 /// against. The actual stage production (stage1 `packages.build`, stage3

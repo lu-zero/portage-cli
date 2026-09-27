@@ -62,19 +62,13 @@ example: without `prefix-guest` it builds with `-DDEFAULT_SYSROOT=${EPREFIX}`
 and patches its ELF-interpreter path to `${EPREFIX}/` (`clang-22.1.8.ebuild:88`
 and `:263`).
 
-An **overlay `--prefix` is semantically a prefix-guest** — it has no libc of its
-own by construction, since `R = /`. Presenting `EPREFIX` without that flavor
-makes a toolchain bake standalone-prefix assumptions into a tree that will never
-satisfy them: the resulting compiler looks for headers, `crt*.o` and its loader
-under `P`, finds none, and cannot build a hello-world. A `--local` prefix, which
-does own its libc, wants the standalone behaviour it already gets.
-
-`USE=prefix-guest` itself is **not FreeBSD/Darwin-specific** — upstream Gentoo
-Prefix force-sets it for the entire standard "rpath" profile family regardless
-of host OS (`features/prefix/rpath/use.force`), so `em`'s
-`native_prefix_guest` reads `true` for essentially every `--local`/`--prefix`
-bootstrap, Linux included — live-confirmed on both a real Debian 12 and a real
-FreeBSD 14.4 host.
+`prefix-guest` means the host owns the libc: `virtual/os-headers` blocks
+`sys-kernel/linux-headers`, and `em toolchain --setup` skips its libc step.
+Upstream Gentoo Prefix rpath profiles force the flag on any host OS.
+`em setup --prefix` and `em setup --local` leave it to the selected profile,
+so a normal Gentoo profile keeps it masked. `--local` owns its libc and
+wants the flag unset. `--prefix` is an overlay on the host's installed set
+and leaves the flag unset the same way.
 
 Neither `--root` nor `--prefix` ever changes `config_root` — only
 `--config-root` does (see above). `--prefix` additionally leaves `base_root`

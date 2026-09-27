@@ -351,13 +351,9 @@ pub(crate) async fn apply_profile_env(
         .context("building profile stack")?
         .with_user_profile(base.join("etc/portage/profile").into_std_path_buf())
         .context("loading the user profile")?;
-    // `--prefix`'s own config overlay (`<prefix>/etc/portage/profile`) layers
-    // on top of the host's, same as its `package.use`/`bashrc` already do —
-    // this is where `em setup --prefix` writes `use.force: prefix-guest`
-    // (real Gentoo Prefix's own `features/prefix/rpath/use.force`
-    // convention), so an eclass's `!use prefix-guest` checks (toolchain.eclass
-    // gcc configure flags, virtual/os-headers RDEPEND) see the host's libc
-    // as authoritative instead of assuming a self-hosted Prefix.
+    // `--prefix`'s config overlay (`<prefix>/etc/portage/profile`) layers on
+    // the host profile, same as its `package.use`/`bashrc`. Site
+    // `use.force`/`use.mask` there have to reach ebuild phases.
     if let Some(overlay) = config_overlay {
         stack = stack
             .with_user_profile(overlay.join("profile").into_std_path_buf())

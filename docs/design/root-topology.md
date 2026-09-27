@@ -396,10 +396,11 @@ shadowing a package's own version-matched headers with the root's libc
 
 ### Plain unprivileged toolchain (`em toolchain --setup`)
 
-Builds a native `baselayout → binutils → os-headers → glibc → gcc` into `--root`
-(`BootstrapKind::Native`, single-pass since `CHOST==CBUILD`). Under `--prefix`
-(`USE=prefix-guest`) the libc step is skipped. The compiler this produces is
-what `em stages --stage1` then builds `packages.build` against.
+Builds a native `baselayout → binutils → os-headers → glibc → gcc` into `--root`,
+`--prefix`, or `--local` (`BootstrapKind::Native`, single-pass since
+`CHOST==CBUILD`). The libc step is skipped only when the profile has
+`USE=prefix-guest`. The compiler this produces is what `em stages --stage1`
+then builds `packages.build` against.
 
 ```
 em toolchain --root /var/tmp/stage1 --setup
