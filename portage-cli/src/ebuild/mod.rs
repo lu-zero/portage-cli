@@ -1353,6 +1353,10 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         ld_library_path.as_deref(),
     );
     shell.set_extra_path(extra_path.to_vec());
+    // Like portage, env.d's PATH wins over the one em inherited, so a package
+    // merged earlier in this run (llvm's /usr/lib/llvm/N/bin) is on it.
+    let env_d = crate::maint::env::merged_env_d(broot.unwrap_or(Utf8Path::new("/")));
+    shell.set_base_path(env_d.get("PATH").cloned());
     shell.set_terminal(crate::style::terminal_config());
 
     if let Some(flags) = use_flags {

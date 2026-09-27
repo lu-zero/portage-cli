@@ -34,9 +34,8 @@ const COLON_SEPARATED: &[&str] = &[
 /// Variables joined with a space (portage's SPACE_SEPARATED)
 const SPACE_SEPARATED: &[&str] = &["CONFIG_PROTECT", "CONFIG_PROTECT_MASK"];
 
-/// Regenerate `etc/profile.env` and `etc/ld.so.conf` under `root`, then
-/// refresh the `ld.so` cache.
-pub fn env_update(root: &Utf8Path) -> Result<()> {
+/// `root`'s env.d files merged in sorted order, as portage does
+pub fn merged_env_d(root: &Utf8Path) -> BTreeMap<String, String> {
     let env_d = root.join("etc/env.d");
     let mut merged: BTreeMap<String, String> = BTreeMap::new();
 
@@ -51,8 +50,7 @@ pub fn env_update(root: &Utf8Path) -> Result<()> {
                         .is_some_and(|n| !n.starts_with('.') && !n.ends_with('~'))
             })
             .collect(),
-        // No env.d at all (fresh prefix): nothing to merge, still write an
-        // empty profile.env so consumers can source it.
+        // No env.d at all (fresh prefix): nothing to merge.
         Err(_) => Vec::new(),
     };
     entries.sort();
@@ -91,6 +89,14 @@ pub fn env_update(root: &Utf8Path) -> Result<()> {
             }
         }
     }
+
+    merged
+}
+
+/// Regenerate `etc/profile.env` and `etc/ld.so.conf` under `root`, then
+/// refresh the `ld.so` cache.
+pub fn env_update(root: &Utf8Path) -> Result<()> {
+    let merged = merged_env_d(root);
 
     // etc/profile.env
     let mut profile_env =

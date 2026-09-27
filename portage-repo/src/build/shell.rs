@@ -253,6 +253,9 @@ pub struct EbuildShell {
     /// ([`phase_path_dirs`]) — the one way to reach a tool that sanitising
     /// would otherwise hide. Empty for an ordinary build.
     extra_path: Vec<Utf8PathBuf>,
+    /// The build root's current env.d `PATH`, used instead of the inherited
+    /// process `PATH` so merges earlier in the run can extend it
+    base_path: Option<String>,
     /// Portage `bashrc` hooks sourced per phase after the environment is set up
     /// (profile `profile.bashrc` files in stack order, then the user's
     /// `${PORTAGE_CONFIGROOT}/etc/portage/bashrc`). Not PMS; matches portage's
@@ -626,6 +629,7 @@ impl EbuildShell {
             build_ld_library_path: None,
             build_broot: None,
             extra_path: Vec::new(),
+            base_path: None,
             bashrc_files: Vec::new(),
             baseline: None,
             phase_sourced_ebuild: None,
@@ -690,6 +694,12 @@ impl EbuildShell {
     /// the caller's policy; empty (the default) leaves `PATH` untouched.
     pub fn set_extra_path(&mut self, dirs: Vec<Utf8PathBuf>) {
         self.extra_path = dirs;
+    }
+
+    /// Replace the inherited process `PATH` as the phase `PATH` base (still
+    /// sanitised); `None` keeps the inherited one
+    pub fn set_base_path(&mut self, path: Option<String>) {
+        self.base_path = path;
     }
 
     /// Set the `bashrc` hooks to source per phase (profile `profile.bashrc`
@@ -1168,7 +1178,11 @@ impl EbuildShell {
         //
         // Sanitised ([`phase_path_dirs`]), behind the caller's own extra dirs:
         // a --local prefix's own bin is re-added deliberately by its bashrc hook.
-        let raw_path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
+        let raw_path = self
+            .base_path
+            .clone()
+            .or_else(|| std::env::var("PATH").ok())
+            .unwrap_or_else(|| "/usr/bin:/bin".to_string());
         let home = std::env::var("HOME").unwrap_or_default();
         let base_path = self
             .extra_path

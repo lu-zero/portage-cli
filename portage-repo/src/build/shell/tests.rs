@@ -2151,6 +2151,31 @@ async fn extra_path_dirs_lead_the_phase_path() {
     );
 }
 
+// A caller-resolved base (the build root's env.d PATH) replaces the inherited
+// process PATH, still sanitised and still behind the extra dirs.
+#[tokio::test]
+async fn base_path_replaces_the_inherited_path() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().to_path_buf();
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "test-repo\n").unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+
+    let mut shell = repo.shell().await.unwrap();
+    shell.set_extra_path(vec![Utf8PathBuf::from("/opt/bootstrap-bin")]);
+    shell.set_base_path(Some("/usr/local/bin:/usr/bin:/usr/lib/llvm/23/bin".into()));
+    shell.init_build_env().await.unwrap();
+    assert_eq!(
+        shell.get_var("PATH").unwrap_or_default(),
+        "/opt/bootstrap-bin:/usr/bin:/usr/lib/llvm/23/bin"
+    );
+}
+
 #[tokio::test]
 async fn default_src_prepare_applies_patches_set_during_an_earlier_phase() {
     // Regression: `eapply` used to have a metadata-mode bash stub that
