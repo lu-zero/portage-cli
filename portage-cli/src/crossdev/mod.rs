@@ -1720,12 +1720,15 @@ fn cross_env_entries(
             path: env_dir.join("llvm.conf"),
             desired: llvm_env(&target.tuple),
         });
-        // The per-target clang wrappers run `clang --config=<this file>`.
+        // The per-target clang wrappers run `clang --config=<this file>`. The
+        // runtimes are the ones -L builds for the target, not the host clang's
+        // defaults (gentoo-runtimes.cfg), which may be libgcc/libstdc++/bfd.
         let cfg_dir = portage.parent().unwrap_or(&portage).join("clang/cross");
         entries.push(config_plan::ConfigEntry::File {
             path: cfg_dir.join(format!("{}.cfg", target.tuple)),
             desired: format!(
-                "--sysroot={}\n--target={}\n@../gentoo-runtimes.cfg\n",
+                "--sysroot={}\n--target={}\n--rtlib=compiler-rt\n--unwindlib=libunwind\n\
+                 --stdlib=libc++\n-fuse-ld=lld\n",
                 sysroot(target, globals),
                 target.tuple
             ),
