@@ -36,6 +36,9 @@ pub(crate) enum ConfigEntry {
     /// Regenerated every run: em owns the full content, so a rewrite always
     /// wins over whatever is currently on disk.
     File { path: Utf8PathBuf, desired: String },
+    /// Like `File`, but refreshed even under [`RefreshPolicy::FillGapsOnly`]:
+    /// computed from host state, so a stale copy contradicts the current plan.
+    Derived { path: Utf8PathBuf, desired: String },
     /// Written only if nothing is there yet; an existing file (any content)
     /// is left alone — either it never legitimately drifts (a bare location
     /// string), or it may belong to something else entirely em must not
@@ -78,7 +81,7 @@ pub(crate) enum RefreshPolicy {
     /// selection and re-detecting drift in a hand-edited file.
     Sync,
     /// Only create what's missing; anything already on disk — hand-edited or not — is left
-    /// untouched
+    /// untouched, except a [`ConfigEntry::Derived`] entry
     ///
     /// `--setup`'s implied config-laydown step: a hand edit made between an earlier
     /// `--init-target` and this `--setup` must survive. Trade-off: `--setup --ex-pkg X` against
@@ -91,6 +94,7 @@ impl ConfigEntry {
     fn path(&self) -> &Utf8Path {
         match self {
             ConfigEntry::File { path, .. }
+            | ConfigEntry::Derived { path, .. }
             | ConfigEntry::CreateOnly { path, .. }
             | ConfigEntry::Alias { path, .. }
             | ConfigEntry::Dir { path } => path,
@@ -103,6 +107,7 @@ impl ConfigEntry {
     fn present(&self) -> bool {
         match self {
             ConfigEntry::File { path, .. }
+            | ConfigEntry::Derived { path, .. }
             | ConfigEntry::CreateOnly { path, .. }
             | ConfigEntry::Alias { path, .. } => path.exists(),
             ConfigEntry::Dir { path } => path.is_dir(),
@@ -111,7 +116,7 @@ impl ConfigEntry {
     }
 
     fn change(&self, policy: RefreshPolicy) -> Change {
-        if policy == RefreshPolicy::FillGapsOnly {
+        if policy == RefreshPolicy::FillGapsOnly && !matches!(self, ConfigEntry::Derived { .. }) {
             return if self.present() {
                 Change::Unchanged
             } else {
@@ -119,11 +124,13 @@ impl ConfigEntry {
             };
         }
         match self {
-            ConfigEntry::File { path, desired } => match std::fs::read_to_string(path) {
-                Ok(existing) if &existing == desired => Change::Unchanged,
-                Ok(_) => Change::Update,
-                Err(_) => Change::Create,
-            },
+            ConfigEntry::File { path, desired } | ConfigEntry::Derived { path, desired } => {
+                match std::fs::read_to_string(path) {
+                    Ok(existing) if &existing == desired => Change::Unchanged,
+                    Ok(_) => Change::Update,
+                    Err(_) => Change::Create,
+                }
+            }
             ConfigEntry::CreateOnly { path, .. } => {
                 if path.exists() {
                     Change::Unchanged
@@ -174,7 +181,7 @@ impl ConfigEntry {
             std::fs::create_dir_all(parent).with_context(|| format!("creating {parent}"))?;
         }
         match self {
-            ConfigEntry::File { path, desired } => {
+            ConfigEntry::File { path, desired } | ConfigEntry::Derived { path, desired } => {
                 std::fs::write(path, desired).with_context(|| format!("writing {path}"))
             }
             ConfigEntry::CreateOnly { path, desired } => write_if_absent(path, desired),
@@ -470,6 +477,23 @@ mod tests {
         let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly)?;
         assert!(matches!(outcome, Outcome::NothingToApply));
         assert_eq!(std::fs::read_to_string(&path)?, "CHOST=hand-edited\n");
+        Ok(())
+    }
+
+    // A `Derived` entry is recomputed from host state, so even `FillGapsOnly`
+    // refreshes a stale copy instead of leaving it to contradict the plan.
+    #[test]
+    fn fill_gaps_only_still_refreshes_a_derived_file() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "cross_llvm-t")?;
+        std::fs::write(&path, "=cat/pkg-21* **\n")?;
+        let entries = vec![ConfigEntry::Derived {
+            path: path.clone(),
+            desired: "=cat/pkg-23* **\n".to_owned(),
+        }];
+        let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly)?;
+        assert!(matches!(outcome, Outcome::Applied));
+        assert_eq!(std::fs::read_to_string(&path)?, "=cat/pkg-23* **\n");
         Ok(())
     }
 

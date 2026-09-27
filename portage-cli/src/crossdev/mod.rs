@@ -1715,7 +1715,7 @@ fn cross_env_entries(
         path: portage.join("package.env").join(&category),
         desired: mappings,
     });
-    entries.push(config_plan::ConfigEntry::File {
+    entries.push(config_plan::ConfigEntry::Derived {
         path: portage.join("package.accept_keywords").join(&category),
         desired: keyword_entries,
     });
