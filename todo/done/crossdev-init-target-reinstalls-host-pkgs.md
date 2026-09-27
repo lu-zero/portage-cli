@@ -1,6 +1,6 @@
 # crossdev: `--init-target` reinstalls config-site + crossdev every run
 
-STATUS: open (found 2026-09-27, aarch64-unknown-linux-musl sandbox run).
+STATUS: ✅ fixed 2026-09-27 — requested with noreplace; live-verified on an installed and a fresh host.
 
 `init_target` (`portage-cli/src/crossdev/mod.rs`) calls
 `ensure_config_site_packages`, which runs `emerge_atoms` for

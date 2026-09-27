@@ -1329,6 +1329,9 @@ fn prefix_profile_entries(globals: &Cli) -> Result<Vec<config_plan::ConfigEntry>
 /// configure's RUN-tests while cross-compiling (e.g. gnulib's "whether
 /// strcasecmp works", dev-lang/python's `/dev/ptmx` device-file probe).
 async fn ensure_config_site_packages(globals: &Cli) -> Result<()> {
+    // Install when missing; an explicit atom would otherwise be rebuilt every run.
+    let mut merge_flags = globals.merge_flags().clone();
+    merge_flags.noreplace = true;
     crate::emerge_atoms(
         globals,
         &[
@@ -1339,7 +1342,7 @@ async fn ensure_config_site_packages(globals: &Cli) -> Result<()> {
             use_override: &[],
             nodeps: false,
             depgraph_flags: None,
-            merge_flags: None,
+            merge_flags: Some(merge_flags),
             use_outer_eroot: true,
             target_only_installed_view: false,
             update_world: false,
