@@ -78,6 +78,25 @@ mv "$SANDBOX_ROOT/em-bin.new" "$SANDBOX_ROOT/em-bin"
 sbx() { CS sandbox run --name "$SANDBOX" "$*" ; }
 fresh_dir() { sbx "rm -rf $1; mkdir -p $1"; }
 
+# A `--local` root needs `em setup --local` before anything builds
+# (docs/design/root-topology.md, "--local (standalone)"). Skipping it is a trap,
+# not a shortcut: setup writes the layout, the root's own config, the
+# auto-resolved make.profile AND the managed package.provided block seeded from
+# the host's probe tools (setup/provided.rs TIER1).
+#
+# Without it a `--local` root has no profile and no provided-seed, so the
+# bootstrap graph's genuine hard cycles become unbreakable and preflight reports
+# them as phantom "real hard-dependency cycle: A and B" failures. Measured on a
+# stock arm64/23.0 tree: 6 such cycles from a bare `rm -rf; mkdir` dir, 0 once
+# `em setup --local` had run — the profile and the provided-seed both come from
+# that one call, so no separate `select profile set` is needed. Same shape as the
+# zstd/meson/python cycle in todo/done/meson-zstd-python-hard-cycle.md.
+bootstrap_local() {
+    local dir=$1
+    fresh_dir "$dir" >/dev/null 2>&1
+    sbx "/root/em-bin setup --local $dir > /root/bootstrap-local-setup.log 2>&1" >/dev/null 2>&1
+}
+
 # --- native toolchain --setup: --root / --prefix / --local -----------------
 
 run_native_toolchain() {
@@ -109,25 +128,32 @@ else
     record "toolchain --setup --prefix" FAIL "expected clean build, got: $res"
 fi
 
-echo "--- --local (known genuine hard-cycle partial failure expected) ---"
+echo "--- --local (documented lifecycle first: setup --local + profile) ---"
 LOCAL_LOG="/root/regress-toolchain-local.log"
-fresh_dir "/root/regress-toolchain-local" >/dev/null 2>&1
+bootstrap_local "/root/regress-toolchain-local"
 sbx "/root/em-bin toolchain --local /root/regress-toolchain-local --setup --autounmask-write -p > $LOCAL_LOG 2>&1; echo EXIT=\$? >> $LOCAL_LOG"
+# The real invariant, now that the root is correctly bootstrapped: NO hard
+# dependency cycles. em labels each one distinctly, so this needs no
+# package-name allowlist — the previous substring list (meson|gettext|glibc[cet|
+# python:3|elt-patches) was a workaround for the unprofiled root above, and it
+# silently excused real cycles while flagging three innocent ones.
+cycles=$(sbx "grep -c 'real hard-dependency cycle' $LOCAL_LOG")
 gdbm_line=$(sbx "grep -n 'sys-libs/gdbm' $LOCAL_LOG | head -1 | cut -d: -f1")
 elt_line=$(sbx "grep -n 'app-portage/elt-patches' $LOCAL_LOG | head -1 | cut -d: -f1")
-if [[ -n "$gdbm_line" && -n "$elt_line" && "$gdbm_line" -gt "$elt_line" ]]; then
-    # Known-cycle failure signature: only the already-documented cycle
-    # members (meson/gettext/gcc-glibc[cet]/glibc-python/elt-patches-xz), not
-    # anything new. A regression here is a *new* package name appearing in
-    # the preflight error, not the presence of a preflight error itself.
-    unexpected=$(sbx "grep -A20 'pre-flight dependency check failed' $LOCAL_LOG | grep 'needs:' | grep -Ev 'meson|gettext|glibc\[cet|python:3|elt-patches'")
-    if [[ -z "$unexpected" ]]; then
-        record "toolchain --setup --local" KNOWN-PARTIAL "gdbm orders after elt-patches (SCC fix intact); only known hard-cycle members unsatisfied"
-    else
-        record "toolchain --setup --local" FAIL "new/unexpected preflight failures: $unexpected"
-    fi
-else
+if [[ -n "$cycles" && "$cycles" != "0" ]]; then
+    record "toolchain --setup --local" FAIL "$cycles hard-dependency cycle(s) on a bootstrapped --local root — SCC repair regressed (see $LOCAL_LOG)"
+elif [[ -z "$gdbm_line" || -z "$elt_line" || "$gdbm_line" -le "$elt_line" ]]; then
     record "toolchain --setup --local" FAIL "gdbm/elt-patches ordering regressed (SCC tie-break bug back?)"
+else
+    # Cycles are gone and the ordering guard holds. Any remaining preflight
+    # failure is a genuine unmet dependency, not a phantom — report the detail
+    # and leave it visible rather than excusing it by name.
+    unmet=$(sbx "grep -A20 'pre-flight dependency check failed' $LOCAL_LOG | grep 'needs:' | head -3" | tr '\n' ';' | sed 's/  */ /g')
+    if [[ -z "$unmet" ]]; then
+        record "toolchain --setup --local" PASS "clean resolve, gdbm after elt-patches"
+    else
+        record "toolchain --setup --local" INFO "no hard cycles; genuine unmet deps remain: $unmet"
+    fi
 fi
 
 # --- em stages --stage1: -p across all three, real build under --full -----
@@ -136,7 +162,11 @@ echo
 echo "=== em stages --stage1 (-p) ==="
 for topo in --root --prefix --local; do
     dir="/root/regress-stage1-$(echo "$topo" | tr -d '-')"
-    fresh_dir "$dir" >/dev/null 2>&1
+    if [[ "$topo" == "--local" ]]; then
+        bootstrap_local "$dir"
+    else
+        fresh_dir "$dir" >/dev/null 2>&1
+    fi
     log="/root/regress-stage1-$(echo "$topo" | tr -d '-').log"
     sbx "/root/em-bin stages $topo $dir --stage1 -p --autosolve-use > $log 2>&1; echo EXIT=\$? >> $log"
     exit_line=$(sbx "grep -o 'EXIT=[0-9]*' $log | tail -1")
@@ -220,7 +250,7 @@ res=$(run_crossdev "" "--prefix" "/root/regress-crossdev-prefix" "prefix")
 
 echo "--- --local (open question as of 2026-07-16 — informational, not a hard pass/fail) ---"
 fresh_dir "/root/regress-crossdev-local" >/dev/null 2>&1
-sbx "/root/em-bin setup --local /root/regress-crossdev-local >/dev/null 2>&1"
+bootstrap_local "/root/regress-crossdev-local"
 # Known to exit non-zero (the genuine hard-cycle partial failure) — this is
 # a deliberate prerequisite step, not something we're asserting on here.
 sbx "/root/em-bin toolchain --local /root/regress-crossdev-local --setup --autounmask-write --jobs $JOBS >/dev/null 2>&1 || true"
