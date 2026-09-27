@@ -1754,6 +1754,9 @@ impl EbuildShell {
             // sending the compiler into the still-headerless prefix.
             let esysroot = if let (true, Some(triple)) = (host_codegen, cross_triple.as_deref()) {
                 format!("{root_str}usr/{triple}/")
+            } else if cross_triple.is_some() && sysroot_trimmed.is_empty() && !eprefix.is_empty() {
+                // glibc's `${ESYSROOT}$(alt_headers)` already appends /usr/${CTARGET}.
+                root_str.clone()
             } else if eprefix.is_empty()
                 || self.build_sysroot.is_none()
                 || sysroot_trimmed.is_empty()

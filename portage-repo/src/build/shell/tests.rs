@@ -1525,6 +1525,77 @@ async fn ordinary_package_no_host_fallback_even_under_prefix() {
     );
 }
 
+// A cross ebuild under a --prefix overlay (SYSROOT is the host `/`, EPREFIX
+// is the prefix) must see headers at ${prefix}/usr/${CTARGET}/…, which is
+// what glibc builds as ${ESYSROOT}$(alt_headers).
+#[tokio::test]
+async fn cross_ebuild_under_prefix_gets_prefix_esysroot() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "cross-riscv64-unknown-linux-gnu", "glibc");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let prefix_dir = dir.path().join("prefix");
+    std::fs::create_dir_all(&prefix_dir).unwrap();
+    let prefix = Utf8PathBuf::from_path_buf(prefix_dir.clone()).unwrap();
+    let host = Utf8PathBuf::from("/");
+    shell.set_build_roots(None, Some(&host), Some(&prefix), None, None);
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, prefix_dir.as_path())
+        .await
+        .unwrap();
+
+    let esysroot = shell.get_var("ESYSROOT").unwrap_or_default();
+    assert_eq!(
+        esysroot.trim_end_matches('/'),
+        prefix.as_str().trim_end_matches('/'),
+        "cross ebuild under --prefix must set ESYSROOT to the prefix: {esysroot}"
+    );
+    assert_eq!(
+        shell.get_var("SYSROOT").unwrap_or_default(),
+        "",
+        "SYSROOT stays the host /"
+    );
+}
+
+// Same overlay, ordinary package: ESYSROOT stays the host so a native gcc
+// does not configure --with-sysroot=<prefix>.
+#[tokio::test]
+async fn ordinary_package_under_prefix_keeps_host_esysroot() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "sys-devel", "gcc");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let prefix_dir = dir.path().join("prefix");
+    std::fs::create_dir_all(&prefix_dir).unwrap();
+    let prefix = Utf8PathBuf::from_path_buf(prefix_dir.clone()).unwrap();
+    let host = Utf8PathBuf::from("/");
+    shell.set_build_roots(None, Some(&host), Some(&prefix), None, None);
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, prefix_dir.as_path())
+        .await
+        .unwrap();
+
+    assert_eq!(shell.get_var("ESYSROOT").unwrap_or_default(), "/");
+}
+
 // Ordinary target packages: ESYSROOT is the substituted sysroot alone,
 // never sysroot+outer-eprefix.
 #[tokio::test]
