@@ -130,6 +130,18 @@ impl BootstrapKind {
         }
     }
 
+    /// The atom for an LLVM-model component, bound to the resolved LLVM slot
+    fn llvm_atom(&self, real_cat: &str, pkg: &str) -> String {
+        let atom = self.atom(real_cat, pkg);
+        match self {
+            BootstrapKind::Cross(CrossTarget {
+                llvm_slot: Some(slot),
+                ..
+            }) => format!("={atom}-{slot}*"),
+            _ => atom,
+        }
+    }
+
     /// LLVM/Clang model (target runtimes, no two-stage gcc) vs the GCC
     /// two-stage.
     fn llvm(&self) -> bool {
@@ -217,7 +229,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
         // gcc. baselayout → wrappers → kernel headers → libc → runtimes.
         steps.push(StageStep {
             label: "clang wrappers".into(),
-            atoms: vec![atom("sys-devel", "clang-crossdev-wrappers")],
+            atoms: vec![kind.llvm_atom("sys-devel", "clang-crossdev-wrappers")],
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
@@ -241,7 +253,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
         for rt in ["compiler-rt", "libunwind", "libcxxabi", "libcxx"] {
             steps.push(StageStep {
                 label: rt.into(),
-                atoms: vec![atom("llvm-runtimes", rt)],
+                atoms: vec![kind.llvm_atom("llvm-runtimes", rt)],
                 use_override: vec![],
                 nodeps: false,
                 into_sysroot: false,
@@ -771,6 +783,27 @@ mod tests {
         assert!(l.contains(&"compiler-rt"));
         assert!(!l.iter().any(|s| s.starts_with("gcc-stage")));
         assert!(plan.steps.iter().any(|s| s.atoms[0].ends_with("/musl")));
+    }
+
+    #[test]
+    fn llvm_plan_binds_wrappers_and_runtimes_to_the_llvm_slot() {
+        let mut t = CrossTarget::parse("aarch64-unknown-linux-musl", true).unwrap();
+        t.llvm_slot = Some(21);
+        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        let atom = |label: &str| {
+            plan.steps
+                .iter()
+                .find(|s| s.label == label)
+                .map(|s| s.atoms[0].clone())
+                .unwrap()
+        };
+        let cat = "cross_llvm-aarch64-unknown-linux-musl";
+        assert_eq!(
+            atom("clang wrappers"),
+            format!("={cat}/clang-crossdev-wrappers-21*")
+        );
+        assert_eq!(atom("libcxx"), format!("={cat}/libcxx-21*"));
+        assert_eq!(atom("libc"), format!("{cat}/musl"));
     }
 
     #[test]

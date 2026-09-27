@@ -57,7 +57,7 @@ use std::io::Write;
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpn, Dep, Pf, Version};
+use portage_atom::{Cpn, Cpv, Dep, Pf, Version};
 use portage_atom_pubgrub::{DepClass, UseOverride};
 use portage_repo::{MakeConf, ProfileStack, ReposConf, Repository};
 use portage_vdb::{SlotName, Vdb};
@@ -100,7 +100,10 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
     let tuple = globals
         .target()
         .ok_or_else(|| anyhow::anyhow!("em crossdev needs a target tuple: pass --target/-T"))?;
-    let target = CrossTarget::parse(&tuple, args.llvm)?;
+    let mut target = CrossTarget::parse(&tuple, args.llvm)?;
+    if target.llvm {
+        target.llvm_slot = llvm_slot(&globals.base_roots(), &main_repo(globals)?);
+    }
 
     let extras = ex_pkg_atoms(args)?;
 
@@ -1035,9 +1038,13 @@ fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) {
     let row = |out: &mut dyn Write, k: &str, v: &str| {
         writeln!(out, "  {C_LABEL}{k:<9}{C_LABEL:#} {v}").ok();
     };
-    let model = if target.llvm { "LLVM/Clang" } else { "GCC" };
+    let model = match (target.llvm, target.llvm_slot) {
+        (true, Some(slot)) => format!("LLVM/Clang {slot}"),
+        (true, None) => "LLVM/Clang".to_owned(),
+        (false, _) => "GCC".to_owned(),
+    };
     row(&mut out, "Target", &target.tuple);
-    row(&mut out, "Model", model);
+    row(&mut out, "Model", &model);
     row(&mut out, "Category", &target.category());
     row(&mut out, "ARCH", &target.gentoo_arch());
     row(&mut out, "Profile", &target.profile_path());
@@ -1541,6 +1548,26 @@ fn branch_bound(version: &Version) -> String {
     format!("{major}.{minor}.9999")
 }
 
+/// The LLVM major the `-L` model binds to: the host's newest installed
+/// `llvm-core/clang` slot, else the newest `clang-crossdev-wrappers` that carries
+/// KEYWORDS (its live ebuilds have none but are versioned like releases).
+fn llvm_slot(roots: &portage_resolve::Roots, repo: &Repository) -> Option<u64> {
+    if let Some((_, slot)) = host_installed_versions(roots, "llvm-core", "clang").first() {
+        return slot.as_str().parse().ok();
+    }
+    let wrappers = Cpn::new("sys-devel", "clang-crossdev-wrappers");
+    ebuild_versions(repo.path(), "sys-devel", "clang-crossdev-wrappers")
+        .into_iter()
+        .filter(|version| {
+            repo.cache_entry(&Cpv::new(wrappers, version.clone()))
+                .ok()
+                .flatten()
+                .is_some_and(|entry| !entry.metadata.keywords.is_empty())
+        })
+        .max()
+        .and_then(|version| version.numbers.first().copied())
+}
+
 /// `package.accept_keywords` for a host-arch cross-category package: mirror
 /// what the host would select for the real package — not a blanket `**`
 /// (which prefers live `9999` ebuilds over dated releases).
@@ -1648,9 +1675,11 @@ fn cross_env_entries(
         });
         mappings.push_str(&format!("{category}/{pkg} {category}/{pkg}.conf\n"));
         if arch == target::PackageArch::Host {
-            keyword_entries.push_str(&host_arch_keyword_line(
-                &base, gentoo, &category, pkg, real_cat, pkg,
-            ));
+            let line = match target.llvm_slot {
+                Some(slot) => format!("={category}/{pkg}-{slot}* **\n"),
+                None => host_arch_keyword_line(&base, gentoo, &category, pkg, real_cat, pkg),
+            };
+            keyword_entries.push_str(&line);
         }
     }
     // `--ex-pkg`/`--ex-gdb` extras: always the host-ABI branch, matching real
@@ -2136,6 +2165,50 @@ mod tests {
             "gcc",
         );
         assert_eq!(line, "cross-riscv64-unknown-linux-gnu/gcc **\n");
+    }
+
+    /// A `gentoo` repo holding `clang-crossdev-wrappers` ebuilds, each with an
+    /// md5-cache entry carrying `KEYWORDS` only when given.
+    fn wrappers_repo(gentoo: &camino::Utf8Path, versions: &[(&str, &str)]) -> Repository {
+        std::fs::create_dir_all(gentoo.join("metadata/md5-cache/sys-devel")).unwrap();
+        std::fs::write(gentoo.join("metadata/layout.conf"), "masters =\n").unwrap();
+        std::fs::create_dir_all(gentoo.join("profiles")).unwrap();
+        std::fs::write(gentoo.join("profiles/repo_name"), "gentoo\n").unwrap();
+        for (version, keywords) in versions {
+            write_ebuild(gentoo, "sys-devel", "clang-crossdev-wrappers", version);
+            let mut entry = format!("EAPI=8\nDESCRIPTION=t\nSLOT={version}\n");
+            if !keywords.is_empty() {
+                entry.push_str(&format!("KEYWORDS={keywords}\n"));
+            }
+            std::fs::write(
+                gentoo.join(format!(
+                    "metadata/md5-cache/sys-devel/clang-crossdev-wrappers-{version}"
+                )),
+                entry,
+            )
+            .unwrap();
+        }
+        Repository::builder()
+            .in_memory_cache()
+            .open(gentoo)
+            .unwrap()
+    }
+
+    // The host's newest installed clang slot wins; without one, the newest
+    // wrappers release that has KEYWORDS (live ones are versioned like releases).
+    #[test]
+    fn llvm_slot_prefers_the_installed_clang_then_the_newest_keyworded_wrappers() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let repo = wrappers_repo(
+            &root.join("gentoo"),
+            &[("20", "arm64"), ("21", "~arm64"), ("23", "")],
+        );
+        let roots = portage_resolve::Roots::for_test(root.as_str());
+        assert_eq!(llvm_slot(&roots, &repo), Some(21));
+
+        write_vdb_entry(root, "llvm-core", "clang-20.1.8", "20");
+        assert_eq!(llvm_slot(&roots, &repo), Some(20));
     }
 
     // Nothing installed, but ebuilds exist: bound to the newest available

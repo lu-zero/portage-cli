@@ -47,6 +47,9 @@ pub struct CrossTarget {
     pub has_kernel: bool,
     /// LLVM/Clang model (`cross_llvm-*`, no per-target compiler) vs GCC
     pub llvm: bool,
+    /// The LLVM major every `-L` package binds to, resolved from the host at run
+    /// time; `None` for GCC or before resolution
+    pub llvm_slot: Option<u64>,
 }
 
 impl CrossTarget {
@@ -90,6 +93,7 @@ impl CrossTarget {
             libc,
             has_kernel,
             llvm,
+            llvm_slot: None,
         })
     }
 
