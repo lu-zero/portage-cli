@@ -1671,17 +1671,10 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RawRepoData {
         }
     }
 
-    // Inject alias (virtual) repos: for each Location::Alias, clone the source
-    // repo's versions for each aliased package under the destination category.
-    // This is the in-memory equivalent of crossdev's symlink overlay — no
-    // on-disk tree needed.
-    // Collect first, then inject, to avoid borrowing `versions` while mutating.
-    type CrossInject = (
-        Interned<DefaultInterner>,
-        Cpn,
-        Vec<(Cpv, CacheEntry, Interned<DefaultInterner>)>,
-    );
-    let mut cross_inject: Vec<CrossInject> = Vec::new();
+    // Inject alias (virtual) repos: each Location::Alias exposes the source
+    // repo's versions of an aliased package under the destination category,
+    // the in-memory equivalent of crossdev's symlink overlay. Metadata comes
+    // from the alias's own cache (see `portage_repo::alias_entries`).
     for entry in set.aliases() {
         let portage_repo::Location::Alias { source, aliases } = &entry.location else {
             continue;
@@ -1692,6 +1685,9 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RawRepoData {
             continue;
         }
         let repo_name = entry.name;
+        // Per source repo, first repo wins a cpv several repos ship.
+        let mut batches: Vec<(Interned<DefaultInterner>, Vec<portage_repo::Ebuild>)> = Vec::new();
+        let mut queued: HashSet<Cpv> = HashSet::new();
         for (dest_cat, source_cpns) in aliases {
             let dest_cat_interned = Interned::<DefaultInterner>::intern(dest_cat.as_str());
             for source_cpn in source_cpns {
@@ -1701,29 +1697,42 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RawRepoData {
                 let cross_cpn = Cpn::new(dest_cat_interned, source_cpn.package);
                 real_cpn_of.insert(cross_cpn, *source_cpn);
                 cpns_set.insert(cross_cpn);
-                let copies: Vec<(Cpv, CacheEntry, Interned<DefaultInterner>)> = real_entries
-                    .iter()
-                    .map(|(cpv, cache, _)| {
-                        (
-                            Cpv::new(cross_cpn, cpv.version.clone()),
-                            cache.clone(),
-                            repo_name,
-                        )
-                    })
-                    .collect();
-                cross_inject.push((repo_name, cross_cpn, copies));
+                for (cpv, _, from) in real_entries {
+                    let cross_cpv = Cpv::new(cross_cpn, cpv.version.clone());
+                    let Some(from_repo) = set.by_name(from.as_str()) else {
+                        continue;
+                    };
+                    if !queued.insert(cross_cpv.clone()) {
+                        continue;
+                    }
+                    let path = from_repo
+                        .path()
+                        .join(source_cpn.category.as_str())
+                        .join(source_cpn.package.as_str())
+                        .join(format!("{}-{}.ebuild", source_cpn.package, cpv.version));
+                    let ebuild = portage_repo::Ebuild::with_cpv(cross_cpv, &path);
+                    match batches.iter_mut().find(|(f, _)| f == from) {
+                        Some((_, ebuilds)) => ebuilds.push(ebuild),
+                        None => batches.push((*from, vec![ebuild])),
+                    }
+                }
             }
         }
-    }
-    for (repo_name, cross_cpn, copies) in cross_inject {
-        for (cross_cpv, cache, _) in copies {
-            if !seen.insert((cross_cpv.clone(), repo_name)) {
+        let cache = set.alias_cache(entry);
+        for (from, ebuilds) in batches {
+            let Some(from_repo) = set.by_name(from.as_str()) else {
                 continue;
+            };
+            for (cross_cpv, entry) in portage_repo::alias_entries(from_repo, &*cache, ebuilds).await
+            {
+                if !seen.insert((cross_cpv.clone(), repo_name)) {
+                    continue;
+                }
+                versions
+                    .entry(cross_cpv.cpn)
+                    .or_default()
+                    .push((cross_cpv, entry, repo_name));
             }
-            versions
-                .entry(cross_cpn)
-                .or_default()
-                .push((cross_cpv, cache, repo_name));
         }
     }
 
@@ -3249,17 +3258,28 @@ mod tests {
         }
     }
 
-    // `load_repos` injects `Location::Alias` entries as in-memory `cross-<tuple>/<pkg>`
-    // packages cloned from the source repo, with `real_cpn_of` recording the
-    // derivation — the in-memory equivalent of crossdev's symlink overlay
-    #[tokio::test]
-    async fn load_repos_injects_alias_cross_packages() {
-        let (_dir, repo) = disk_repo("sys-devel/gcc-15.2.1", "EAPI=8\nDESCRIPTION=t\nSLOT=0\n");
+    /// A tempdir source repo holding one real ebuild, plus an in-memory
+    /// `Location::Alias` of it under `cross_cat`, as crossdev declares one.
+    fn source_repo_with_alias(
+        cpv: &str,
+        ebuild: &str,
+        cross_cat: &str,
+    ) -> (tempfile::TempDir, portage_repo::RepoSet) {
+        let (dir, repo) = disk_repo(cpv, "EAPI=8\nDESCRIPTION=t\nSLOT=0\n");
+        let real = Cpv::parse(cpv).unwrap();
+        let pkg_dir = dir
+            .path()
+            .join(real.cpn.category.as_str())
+            .join(real.cpn.package.as_str());
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join(format!("{}-{}.ebuild", real.cpn.package, real.version)),
+            ebuild,
+        )
+        .unwrap();
 
-        let real_cpn = Cpn::parse("sys-devel/gcc").unwrap();
-        let cross_cat = "cross-riscv64-unknown-linux-gnu";
         let mut aliases = HashMap::new();
-        aliases.insert(cross_cat.to_string(), [real_cpn].into_iter().collect());
+        aliases.insert(cross_cat.to_string(), [real.cpn].into_iter().collect());
         let alias_entry = portage_repo::RepoEntry {
             name: "crossdev".into(),
             location: portage_repo::Location::Alias {
@@ -3273,9 +3293,23 @@ mod tests {
             volatile: None,
             priority: None,
         };
-
         let mut set = portage_repo::RepoSet::single(repo);
         set.set_aliases(vec![alias_entry]);
+        (dir, set)
+    }
+
+    // `load_repos` injects `Location::Alias` entries as in-memory `cross-<tuple>/<pkg>`
+    // packages derived from the source repo, with `real_cpn_of` recording the
+    // derivation — the in-memory equivalent of crossdev's symlink overlay
+    #[tokio::test]
+    async fn load_repos_injects_alias_cross_packages() {
+        let real_cpn = Cpn::parse("sys-devel/gcc").unwrap();
+        let cross_cat = "cross-riscv64-unknown-linux-gnu";
+        let (_dir, set) = source_repo_with_alias(
+            "sys-devel/gcc-15.2.1",
+            "EAPI=8\nDESCRIPTION=t\nSLOT=0\n",
+            cross_cat,
+        );
         let data = load_repos(&set).await;
 
         let cross_cpn = Cpn::new(cross_cat, "gcc");
@@ -3288,6 +3322,38 @@ mod tests {
         assert_eq!(cross_versions.len(), 1);
         assert_eq!(cross_versions[0].0.version.to_string(), "15.2.1");
         assert_eq!(data.real_cpn_of.get(&cross_cpn), Some(&real_cpn));
+    }
+
+    // An alias cpv's metadata is sourced under the alias category, not taken
+    // from the source package's cache (musl blocks the host's libxcrypt only
+    // outside `cross-*`), and never lands in the source repo's cache.
+    #[tokio::test]
+    async fn load_repos_sources_alias_metadata_under_the_alias_category() {
+        let cross_cat = "cross-aarch64-unknown-linux-musl";
+        let (_dir, set) = source_repo_with_alias(
+            "sys-libs/musl-1.2.6",
+            "EAPI=8\nDESCRIPTION=t\nSLOT=0\n\
+             if [[ ${CATEGORY} == cross-* ]]; then RDEPEND=\"dev-libs/cross-only\"; \
+             else RDEPEND=\"!sys-libs/libxcrypt\"; fi\n",
+            cross_cat,
+        );
+        let data = load_repos(&set).await;
+
+        let cross_cpn = Cpn::new(cross_cat, "musl");
+        let cross = data
+            .versions
+            .get(&cross_cpn)
+            .expect("cross versions present");
+        let rdepend: Vec<String> = cross[0]
+            .1
+            .metadata
+            .rdepend
+            .list()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(rdepend, ["dev-libs/cross-only"]);
+        assert!(set.main().cache_entry(&cross[0].0).unwrap().is_none());
     }
 
     // An alias entry whose declared `source` doesn't match the repo being
