@@ -124,10 +124,14 @@ impl CrossTarget {
         if !self.has_kernel {
             return "embedded".to_owned();
         }
-        match self.gentoo_arch().as_str() {
+        let base = match self.gentoo_arch().as_str() {
             "riscv" => "default/linux/riscv/23.0/rv64/lp64d".to_owned(),
             "x86" => "default/linux/x86/23.0/i686".to_owned(),
             arch => format!("default/linux/{arch}/23.0"),
+        };
+        match self.libc {
+            Libc::Musl => format!("{base}/musl"),
+            Libc::Glibc | Libc::Newlib => base,
         }
     }
 
@@ -273,6 +277,14 @@ impl PackageArch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn musl_targets_link_the_musl_subprofile() {
+        let t = CrossTarget::parse("aarch64-unknown-linux-musl", false).unwrap();
+        assert_eq!(t.profile_path(), "default/linux/arm64/23.0/musl");
+        let t = CrossTarget::parse("riscv64-unknown-linux-musl", false).unwrap();
+        assert_eq!(t.profile_path(), "default/linux/riscv/23.0/rv64/lp64d/musl");
+    }
 
     #[test]
     fn riscv_gnu_is_glibc_with_kernel() {
