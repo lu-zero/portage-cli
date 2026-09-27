@@ -146,18 +146,28 @@ done
 if [[ "$FULL" -eq 1 ]]; then
     echo
     echo "=== em stages --stage1 (real, --root and --prefix only — --local has no complete toolchain) ==="
-    for topo_pair in "--root:/root/regress-toolchain-root" "--prefix:/root/regress-toolchain-prefix"; do
-        topo="${topo_pair%%:*}"
-        dir="${topo_pair##*:}"
-        log="/root/regress-stage1-real-$(echo "$topo" | tr -d '-').log"
-        sbx "/root/em-bin stages $topo $dir --stage1 --autosolve-use --jobs $JOBS > $log 2>&1; echo EXIT=\$? >> $log"
+    # `--prefix P` alone is NOT a supported stage1 destination: em's
+    # `require_root_distinct_from_host` rejects it deliberately, because a full
+    # `stages` snapshot written into the prefix's own tree collides with that
+    # overlay's "unsatisfied BDEPEND lands in the prefix" role. The supported
+    # shape is `--prefix P --root R` with R distinct, so that is what we exercise;
+    # passing a bare `--prefix` only measured the guard, never a build.
+    #
+    # spec = <label>|<destination to reset>|<flags>
+    while IFS='|' read -r label dest flags; do
+        [[ -z "$label" ]] && continue
+        log="/root/regress-stage1-real-$label.log"
+        sbx "rm -rf $dest; mkdir -p $dest; MAKEOPTS='-j16' /root/em-bin stages $flags --stage1 --autosolve-use --jobs $JOBS > $log 2>&1; echo EXIT=\$? >> $log"
         exit_line=$(sbx "grep -o 'EXIT=[0-9]*' $log | tail -1")
         if [[ "$exit_line" == EXIT=0* ]]; then
-            record "stages --stage1 $topo (real)" PASS "clean build"
+            record "stages --stage1 $label (real)" PASS "clean build"
         else
-            record "stages --stage1 $topo (real)" FAIL "expected clean build, got: $exit_line (see $log)"
+            record "stages --stage1 $label (real)" FAIL "expected clean build, got: $exit_line (see $log)"
         fi
-    done
+    done <<'SPECS'
+root|/root/regress-toolchain-root|--root /root/regress-toolchain-root
+prefix|/root/regress-stage1-prefixroot|--prefix /root/regress-toolchain-prefix --root /root/regress-stage1-prefixroot
+SPECS
 fi
 
 # --- em crossdev --setup: bare / --root / --prefix / --local ---------------
