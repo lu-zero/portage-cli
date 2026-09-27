@@ -512,8 +512,9 @@ em setup --prefix /opt/prefix          # layout + overlay config + host-python s
 em --prefix /opt/prefix <pkg>          # host compiler builds into P
 
 # --local (standalone): seed host tools, then bootstrap the prefix toolchain
-em setup --local                             # layout + own config, no python symlinks
-em select profile set --local DIR <profile>  # required — see below
+# `setup --local` writes layout, own config, the auto-resolved make.profile AND
+# the managed package.provided block — see the note below.
+em setup --local                             # layout + config + profile + provided
 # Empty VDB ⇒ hard cycle unless package.provided seeds host tools
 em toolchain --local --setup                 # build native toolchain INTO ~/.gentoo
 em stages --local --stage1                   # packages.build using the prefix's own gcc
@@ -526,11 +527,27 @@ section used to describe is **already fixed** in `setup/mod.rs` (see its own
 correctly gets no host-python symlinks, `--prefix` correctly does. Don't
 re-diagnose that; it's done.
 
-What's still real: `em setup --local` writes layout + config but **no
-`make.profile`** — deliberate, since `--local` must also work on a
-non-Gentoo host where auto-symlinking a Gentoo profile isn't possible. The
-`select profile set <profile>` step above is required to give it one; a
-plain `em select profile set --local DIR <profile>` now targets the prefix
+**Corrected 2026-09-27.** This paragraph used to say `em setup --local` writes
+**no** `make.profile` and that a `select profile set <profile>` step was
+required to supply one. That is no longer true: `em setup --local DIR`
+auto-resolves and symlinks `etc/portage/make.profile` from the upstream
+profile matching the host arch, hard-erroring when there is no registered
+profile rather than guessing. Verified in a crossdev-stages sandbox — the
+symlink lands on `profiles/default/linux/arm64/23.0` for an arm64 host, from
+`em setup --local` alone, with no `select profile set` involved. The
+`--local` lifecycle above no longer carries that step. See
+`todo/local-bootstrap.md` for the setup ladder, which was already right.
+
+The practical consequence was a silent one: a `--local` bootstrap driven
+without `em setup --local` runs with no profile *and* no `package.provided`, and
+then the bootstrap graph's genuine hard cycles become unbreakable, so preflight
+reports them as phantom "real hard-dependency cycle: A and B" failures. Six of
+them on a stock `arm64/23.0` tree; zero once `setup --local` had run. A caller
+that skips the setup step is not taking a shortcut, it is disabling the cycle
+repair.
+
+What remains true: a plain
+`em select profile set --local DIR <profile>` now targets the prefix
 correctly (see the "Known gap" writeup above — fixed in `7a8c5bc`, no
 `--config-root` override needed for the common `--local`/`--prefix` case,
 only for targeting a foreign sysroot). Skipping the step entirely still
