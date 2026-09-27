@@ -1673,7 +1673,7 @@ fn cross_env_entries(
             path: env_dir.join(format!("{pkg}.conf")),
             desired: body,
         });
-        mappings.push_str(&format!("{category}/{pkg} {category}/{pkg}.conf\n"));
+        mappings.push_str(&env_mapping(&category, pkg, target.llvm));
         if arch == target::PackageArch::Host {
             let line = match target.llvm_slot {
                 Some(slot) => format!("={category}/{pkg}-{slot}* **\n"),
@@ -1700,7 +1700,7 @@ fn cross_env_entries(
             path: env_dir.join(format!("{pkg}.conf")),
             desired: body,
         });
-        mappings.push_str(&format!("{category}/{pkg} {category}/{pkg}.conf\n"));
+        mappings.push_str(&env_mapping(&category, pkg.as_str(), target.llvm));
         keyword_entries.push_str(&host_arch_keyword_line(
             &base,
             gentoo,
@@ -1715,11 +1715,49 @@ fn cross_env_entries(
         path: portage.join("package.env").join(&category),
         desired: mappings,
     });
+    if target.llvm {
+        entries.push(config_plan::ConfigEntry::File {
+            path: env_dir.join("llvm.conf"),
+            desired: llvm_env(&target.tuple),
+        });
+        // The per-target clang wrappers run `clang --config=<this file>`.
+        let cfg_dir = portage.parent().unwrap_or(&portage).join("clang/cross");
+        entries.push(config_plan::ConfigEntry::File {
+            path: cfg_dir.join(format!("{}.cfg", target.tuple)),
+            desired: format!(
+                "--sysroot={}\n--target={}\n@../gentoo-runtimes.cfg\n",
+                sysroot(target, globals),
+                target.tuple
+            ),
+        });
+    }
     entries.push(config_plan::ConfigEntry::Derived {
         path: portage.join("package.accept_keywords").join(&category),
         desired: keyword_entries,
     });
     Ok(entries)
+}
+
+/// A cross package's `package.env` line: its own env file, plus the shared
+/// `llvm.conf` for every package of an LLVM-model target.
+fn env_mapping(category: &str, pkg: &str, llvm: bool) -> String {
+    let llvm_conf = if llvm {
+        format!(" {category}/llvm.conf")
+    } else {
+        String::new()
+    };
+    format!("{category}/{pkg} {category}/{pkg}.conf{llvm_conf}\n")
+}
+
+/// Toolchain variables for LLVM-model cross packages: the target's clang
+/// wrappers plus LLVM's own binary tools, since no cross binutils is built.
+fn llvm_env(tuple: &str) -> String {
+    format!(
+        "CC={tuple}-clang\nCXX={tuple}-clang++\nAS=\"{tuple}-clang -c\"\n\
+         CROSS_COMPILE={tuple}-\nLD=ld.lld\nAR=llvm-ar\nNM=llvm-nm\n\
+         RANLIB=llvm-ranlib\nSTRIP=llvm-strip\nOBJCOPY=llvm-objcopy\n\
+         READELF=llvm-readelf\nDLLTOOL=llvm-dlltool\nHOSTCC=clang\nHOSTCXX=clang++\nLLVM=1\n"
+    )
 }
 
 /// Create the ABI osdir compatibility symlinks the libc leaves out, so the cross
@@ -2209,6 +2247,21 @@ mod tests {
 
         write_vdb_entry(root, "llvm-core", "clang-20.1.8", "20");
         assert_eq!(llvm_slot(&roots, &repo), Some(20));
+    }
+
+    // Every package of an LLVM target also sources the shared `llvm.conf`
+    // (clang + LLVM tools); GCC targets never do.
+    #[test]
+    fn env_mapping_adds_llvm_conf_only_for_llvm_targets() {
+        let cat = "cross_llvm-aarch64-unknown-linux-musl";
+        assert_eq!(
+            env_mapping(cat, "musl", true),
+            format!("{cat}/musl {cat}/musl.conf {cat}/llvm.conf\n")
+        );
+        assert_eq!(
+            env_mapping(cat, "musl", false),
+            format!("{cat}/musl {cat}/musl.conf\n")
+        );
     }
 
     // Nothing installed, but ebuilds exist: bound to the newest available
