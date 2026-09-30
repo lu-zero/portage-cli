@@ -1,0 +1,32 @@
+name: cargo-eb
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  dogfood:
+    name: Snapshot itself
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - run: cargo build -p cargo-eb
+      - name: cargo eb cargo-eb
+        run: |
+          mkdir -p artifacts
+          curl -fsSL -o "$RUNNER_TEMP/license-mapping.conf" \
+            https://raw.githubusercontent.com/gentoo/gentoo/master/metadata/license-mapping.conf
+          ./target/debug/cargo-eb cargo-eb \
+            -d artifacts \
+            -l "$RUNNER_TEMP/license-mapping.conf" \
+            -o artifacts/cargo-eb.ebuild \
+            -f
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-eb-snapshot
+          path: artifacts/
