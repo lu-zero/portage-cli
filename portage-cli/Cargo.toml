@@ -82,7 +82,7 @@ roxmltree = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 portage-binpkg = { workspace = true }
-usage = { package = "usage-rs", version = "6", features = ["completions"] }
+usage = { package = "usage-rs", version = "6.12", features = ["completions"] }
 tokio = { workspace = true, features = ["sync", "signal"] }
 futures-util = { workspace = true }
 thiserror = { workspace = true }
@@ -113,9 +113,9 @@ pseudoroot = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
-usage = { package = "usage-rs", version = "6", features = ["test"] }
+usage = { package = "usage-rs", version = "6.12", features = ["test"] }
 # Alias: usage-lib's crate name is also `usage`, which would collide with the facade.
-usage_lib = { package = "usage-lib", version = "6", default-features = false, features = ["docs"] }
+usage_lib = { package = "usage-lib", version = "6.12", default-features = false, features = ["docs"] }
 
 [[bench]]
 name = "elfscan"

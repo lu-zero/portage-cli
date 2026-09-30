@@ -115,8 +115,8 @@ dependency table. Local checkouts and experiments go in gitignored
 `.cargo/config.toml` as `[patch.crates-io]` (`git` + `rev`, or a path). When
 committed code needs an unpublished commit that CI must also build, use a
 workspace `[patch.crates-io]` (`git` + `rev`) and delete it once the release
-ships; today that is `usage-*` at the `lu-zero/usage` fork. A config patch
-takes precedence over the manifest one.
+ships, raising the requirement to that release. A config patch takes
+precedence over the manifest one.
 
 Git-source workspace deps (`brush-*`, `pkgcraft`, `hakoniwa`) keep a `rev`
 in `Cargo.toml` — that is the source, not a crates.io pin.
