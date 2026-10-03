@@ -17,18 +17,32 @@ use crate::version_set::PortageVersionSet;
 use super::post_solve::eval_violated_use_dep;
 use super::{HostEntry, InstalledPolicy, PortageDependencyProvider, VersionData};
 
+// Favor/Provided returns the installed version when this holds.
+fn installed_follower(
+    provider: &PortageDependencyProvider,
+    package: &PortagePackage,
+    range: &PortageVersionSet,
+) -> bool {
+    let Some((installed_ver, policy)) = provider.installed.get(package) else {
+        return false;
+    };
+    !provider.prefer_update
+        && matches!(policy, InstalledPolicy::Favor | InstalledPolicy::Provided)
+        && (provider.selective_no_update || !provider.root_targets.contains_key(package))
+        && range.contains(installed_ver)
+}
+
 impl DependencyProvider for PortageDependencyProvider {
     type P = PortagePackage;
     type V = Version;
     type VS = PortageVersionSet;
     type M = String;
     type Err = Error;
-    // `(conflict_count, is_root_target, Reverse(version_count))`: conflict
-    // count still dominates pubgrub's own backtracking signal, but among
-    // ties a root target is decided before its dependencies — matching
-    // emerge's argument semantics (a named atom pulls the best version,
-    // deps bend around it).
-    type Priority = (u32, bool, Reverse<usize>);
+    // `(conflict_count, is_root_target, decides_newest, Reverse(version_count))`.
+    // Conflict count still leads. A root target is next, then a package that
+    // would take its newest in-range version. An installed follower is last
+    // among those ties, so a tighter bound exists before Favor locks it.
+    type Priority = (u32, bool, bool, Reverse<usize>);
 
     fn prioritize(
         &self,
@@ -41,11 +55,12 @@ impl DependencyProvider for PortageDependencyProvider {
             .map(|d| d.versions.keys().filter(|v| range.contains(v)).count())
             .unwrap_or(0);
         if count == 0 {
-            return (u32::MAX, true, Reverse(0));
+            return (u32::MAX, true, true, Reverse(0));
         }
         (
             stats.conflict_count(),
             self.root_targets.contains_key(package),
+            !installed_follower(self, package, range),
             Reverse(count),
         )
     }
@@ -80,16 +95,17 @@ impl DependencyProvider for PortageDependencyProvider {
         let allow_live = self.root_targets.contains_key(package);
         let candidates = filter_to_preferred_tier(data, candidates, allow_live);
 
-        // A prior solve iteration decided to upgrade this installed package to a
-        // newer version (`upgrade_to`).  Pin it so the solver actually selects
-        // that version — and therefore re-solves its dependency closure — rather
-        // than favouring the installed version again.  If the pinned version is
-        // out of range for this particular constraint, fall through to the
-        // normal logic.
-        if let Some(pin) = self.upgrade_pins.get(package)
-            && range.contains(pin)
-        {
-            return Ok(Some(pin.clone()));
+        // A prior iteration pinned this package (`upgrade_to`, or a root target
+        // below its newest version). Soft pins fall through when the version is
+        // outside this constraint. A hard pin does not: no other version is
+        // acceptable, so the conflict can move an earlier decision.
+        if let Some(pin) = self.upgrade_pins.get(package) {
+            if range.contains(pin) {
+                return Ok(Some(pin.clone()));
+            }
+            if self.hard_pins.contains(package) {
+                return Ok(None);
+            }
         }
 
         // Ceded USE flags: bias a `UseDecision` node toward the caller's
@@ -128,10 +144,7 @@ impl DependencyProvider for PortageDependencyProvider {
                     // `Rebuild` / root targets likewise take the newest via
                     // fall-through — unless the resolve is selective without
                     // `--update`, where a satisfied target keeps what it has.
-                    if !self.prefer_update
-                        && (self.selective_no_update || !self.root_targets.contains_key(package))
-                        && range.contains(installed_ver)
-                    {
+                    if installed_follower(self, package, range) {
                         return Ok(Some(installed_ver.clone()));
                     }
                 }

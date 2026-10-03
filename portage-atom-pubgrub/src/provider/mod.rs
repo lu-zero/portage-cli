@@ -285,6 +285,12 @@ pub struct PortageDependencyProvider {
     /// upgraded version's deps unaccounted for. Cleared at the start of
     /// every [`resolve_targets`](Self::resolve_targets) call.
     pub(crate) upgrade_pins: HashMap<PortagePackage, Version>,
+    /// Packages in `upgrade_pins` whose version is mandatory.
+    ///
+    /// `choose_version` reports no version when the range excludes one of
+    /// these, so the conflict can move an earlier decision. A pin that is
+    /// absent here stays a preference and falls through.
+    pub(crate) hard_pins: HashSet<PortagePackage>,
     /// Explicitly requested target packages (set by `resolve_targets`), with
     /// the version set the caller requested them under
     ///
@@ -739,6 +745,7 @@ impl PortageDependencyProvider {
             dropped_deps,
             use_flag_requirements: Vec::new(),
             upgrade_pins: HashMap::new(),
+            hard_pins: HashSet::new(),
             root_targets: std::collections::HashMap::new(),
             with_bdeps,
             rebuild_tree: false,
@@ -1040,50 +1047,49 @@ impl PortageDependencyProvider {
             });
         entry.versions.insert(root_ver.clone(), vd);
 
-        // Re-solve to a fixpoint so that any installed package the post-solve
-        // pass decides to upgrade (`upgrade_to`) has its *new* version's full
-        // dependency closure solved, not just the installed version's runtime
-        // deps.  Each iteration pins the upgrades discovered so far (see
-        // `upgrade_pins` / `choose_version`) and solves again; new upgrades
-        // surfaced by the richer graph feed the next round.  Bounded so a
-        // pathological oscillation can't loop forever — on the rare re-solve
-        // failure or the bound, we keep the last good solution (the previous
-        // sound approximation).
+        // Re-solve so a pin sees its new dependency closure. Each pass adds
+        // one pin: a USE-dep upgrade, or one root target below the newest
+        // version its atom accepts. The held-back pin is mandatory, so an
+        // earlier decision can move. A pin the solve cannot keep is dropped
+        // and the last sound solution stays. The bound is how many pins are tried.
         self.upgrade_pins.clear();
+        self.hard_pins.clear();
         const MAX_RESOLVE_ITERS: usize = 4;
         let mut solution = pubgrub::resolve(self, root.clone(), root_ver.clone())?;
-        // Post-solve: collect USE flag requirements for all packages.  Must run
+        // Post-solve: collect USE flag requirements for all packages. Must run
         // before filtering virtuals because per-branch constraints live in
         // Choice/SlotChoice nodes.
         self.use_flag_requirements = self.compute_use_flag_requirements(&solution);
+        let mut rejected: HashSet<(PortagePackage, Version)> = HashSet::new();
 
         for _ in 1..MAX_RESOLVE_ITERS {
-            // Pin every upgrade discovered so far; stop once nothing new appears.
-            let mut added_pin = false;
-            let pins: Vec<(PortagePackage, Version)> = self
-                .use_flag_requirements
-                .iter()
-                .filter_map(|r| r.upgrade_to.clone().map(|v| (r.package.clone(), v)))
-                .collect();
-            for (pkg, ver) in pins {
-                if self.upgrade_pins.get(&pkg) != Some(&ver) {
-                    self.upgrade_pins.insert(pkg, ver);
-                    added_pin = true;
-                }
-            }
-            if !added_pin {
+            let Some((pkg, ver, hard)) = self.next_resolve_pin(&solution, &rejected) else {
                 break;
+            };
+            let previous = self.upgrade_pins.insert(pkg.clone(), ver.clone());
+            let was_hard = self.hard_pins.contains(&pkg);
+            if hard {
+                self.hard_pins.insert(pkg.clone());
             }
-
-            // Re-solve with the new pins.  If it fails (e.g. the upgraded
-            // version's deps can't be satisfied), keep the last good solution
-            // rather than turning an advisory situation into a hard error.
-            match pubgrub::resolve(self, root.clone(), root_ver.clone()) {
-                Ok(next) => {
-                    solution = next;
-                    self.use_flag_requirements = self.compute_use_flag_requirements(&solution);
+            let accepted = pubgrub::resolve(self, root.clone(), root_ver.clone())
+                .ok()
+                .filter(|next| !hard || next.get(&pkg) == Some(&ver));
+            if let Some(next) = accepted {
+                solution = next;
+                self.use_flag_requirements = self.compute_use_flag_requirements(&solution);
+            } else {
+                match previous {
+                    Some(old) => {
+                        self.upgrade_pins.insert(pkg.clone(), old);
+                    }
+                    None => {
+                        self.upgrade_pins.remove(&pkg);
+                    }
                 }
-                Err(_) => break,
+                if !was_hard {
+                    self.hard_pins.remove(&pkg);
+                }
+                rejected.insert((pkg, ver));
             }
         }
 
@@ -1106,6 +1112,30 @@ impl PortageDependencyProvider {
             .into_iter()
             .filter(|(p, _)| !p.is_virtual())
             .collect())
+    }
+
+    /// The next pin the re-solve loop should try, if any remain.
+    fn next_resolve_pin(
+        &self,
+        solution: &SelectedDependencies<PortagePackage, Version>,
+        rejected: &HashSet<(PortagePackage, Version)>,
+    ) -> Option<(PortagePackage, Version, bool)> {
+        let mut candidates: Vec<(PortagePackage, Version, bool)> = self
+            .use_flag_requirements
+            .iter()
+            .filter_map(|r| {
+                r.upgrade_to
+                    .clone()
+                    .map(|ver| (r.package.clone(), ver, false))
+            })
+            .collect();
+        for held in self.check_held_back_targets(solution) {
+            candidates.push((held.package, held.newest, true));
+        }
+        candidates.into_iter().find(|(pkg, ver, _)| {
+            self.upgrade_pins.get(pkg) != Some(ver)
+                && !rejected.contains(&(pkg.clone(), ver.clone()))
+        })
     }
 
     /// The flags the caller ceded to the solver, with the values it chose

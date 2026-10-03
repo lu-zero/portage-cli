@@ -134,29 +134,41 @@ B.**
   considering Phase 4. Watch for backtracking-count/time regressions on
   `@world`-sized graphs — MRV is demoted to a lower tier component, which
   can change search shape even when the final answer stays correct.
-- [ ] **Phase 4 (A) — full follower tier, only if Phase 3 is clean.**
-  Generalize the tier to *every* "follower" package (anything
-  `choose_version` would resolve to the VDB version verbatim under
-  `InstalledPolicy::Favor` — same predicate as `solve.rs:105-110`), not
-  just root targets. Fixes the deep-dep-vs-deep-dep case Phase 1 alone
-  doesn't cover. Higher risk: touches `choose_version`'s OR-group/
-  `SlotChoice` heuristics (`or_group_prefers_installed_alternative`,
-  `or_group_no_preference_when_both_installed`,
-  `rebuild_tree_slot_star_prefers_installed_newest_slot`) indirectly by
-  changing what `range` looks like when those run — should be order-stable
-  since they key off `self.installed` not `range`, but verify, don't
-  assume.
+  **Partial, 2026-10-03:** worktrees at `d8e82c84` (`portage-cli-pubgrub-after`
+  vs a prioritize revert in `portage-cli-pubgrub-before`). `@system` and
+  `@world` plans matched. `em -p @world` interleaved 1.271 s ± 0.040 s
+  (reverted) vs 1.297 s ± 0.039 s. The named scripts were not run. PubGrub
+  0.4 still does not report a backtrack count.
+- [x] **Phase 4 (A) — full follower tier, only if Phase 3 is clean.**
+  `Priority` is `(conflict_count, is_root_target, decides_newest,
+  Reverse(version_count))`. `decides_newest` is false for the same
+  Favor/Provided condition `choose_version` uses to return the installed
+  version. Test: `follower_priority_avoids_premature_transitive_commitment`
+  (fails on Phase 1 with `syncer-3.4.0`). The OR-group and slot-choice
+  tests still pass.
+  **Live, 2026-10-03:** `@system` is unchanged. `em -p @world` grows from
+  243 to 333 ebuild rows, the extra 90 being the perl 5.44 cascade.
+  `em -p virtual/perl-ExtUtils-MakeMaker` produces that cascade under both
+  tiers. Phase 1's `@world` already upgrades that virtual to 7.780.0,
+  whose `|| ( =dev-lang/perl-5.44* ~perl-core/ExtUtils-MakeMaker-7.780.0 )`
+  is not met by installed perl 5.42, and does not schedule the perl upgrade.
 - [ ] **Phase 5 (C) — backstop, only if a stronger objective is later
   needed.** Extend the existing post-solve re-solve fixpoint
-  (`resolve_targets`, `mod.rs:981-1026`, currently capped at
-  `MAX_RESOLVE_ITERS = 4` and only pinning USE-dep-violation upgrades from
-  `post_solve.rs`) to also pin any root target found below its newest
-  visible version and re-solve. Closest to Portage's real iterative
-  depgraph. Needs hardening first: today one failed pin discards the whole
-  retry round (`Err(_) => break`), so it should pin one package per round
-  (or bisect) rather than several at once, and `MAX_RESOLVE_ITERS` stops
-  being just an anti-oscillation guard and becomes a correctness ceiling —
-  think about what that implies before relying on it.
+  (`resolve_targets`, capped at `MAX_RESOLVE_ITERS = 4`) to also pin any
+  root target found below its newest visible version and re-solve. One pin
+  per pass. A held-back pin is mandatory: `choose_version` returns no
+  version when the range excludes it, so an earlier decision can move. A
+  pin the re-solve cannot keep is dropped and the last sound solution
+  stays. USE-dep upgrades stay preferences.
+  **Tests:** `held_back_root_pin_bends_the_earlier_root` (syncer 3.5 bends
+  small to 1.0) and `held_back_root_pin_keeps_the_last_feasible_plan`.
+  180 lib tests pass; clippy clean.
+  **Live, 2026-10-03, vs Phase 4:** `@system` matches (51). `em -p
+  virtual/perl-ExtUtils-MakeMaker` matches (91). `@world` is the same 333
+  ebuild rows and the same stderr, in a different merge order (233 rows
+  move). All 88 installed packages bound to `perl:0/5.42=` are in that
+  plan, and each planned ebuild accepts perl 5.44. Emerge stops on that
+  slot conflict at backtrack 0/20. Accepted so far.
 - **Explicitly not pursuing:** depth/topological-order prioritization (was
   candidate B) — reviewed and rejected: worst case for MRV performance on
   `@world`, depth over the *static* USE-conditional graph is fuzzy/

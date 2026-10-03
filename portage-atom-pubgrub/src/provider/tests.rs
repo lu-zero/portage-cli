@@ -375,6 +375,245 @@ fn root_target_priority_avoids_premature_dependency_commitment() {
     );
 }
 
+// The root does not constrain either child. `libacl` has fewer versions than
+// `syncer` and Favor would lock it to the installed 1.0 before `syncer-3.5.0`'s
+// `>=libacl-2.0` exists. Delaying that lock lets the tighter bound land first.
+#[test]
+fn follower_priority_avoids_premature_transitive_commitment() {
+    let mut repo = InMemoryRepository::new();
+
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/libacl-1.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/libacl-2.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-apps/leader-1.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("sys-libs/libacl").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("net-misc/syncer-3.3.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("net-misc/syncer-3.4.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("net-misc/syncer-3.5.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse(">=sys-libs/libacl-2.0").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("app-misc/app-1.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: DepEntry::parse("sys-apps/leader net-misc/syncer")
+                .unwrap()
+                .into(),
+            ..empty_deps()
+        },
+    );
+
+    let mut provider = PortageDependencyProvider::new(repo);
+    let libacl = PortagePackage::unslotted(Cpn::parse("sys-libs/libacl").unwrap());
+    provider.add_installed(InstalledPackage {
+        package: libacl.clone(),
+        version: Version::parse("1.0").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+
+    let app = PortagePackage::unslotted(Cpn::parse("app-misc/app").unwrap());
+    let syncer = PortagePackage::unslotted(Cpn::parse("net-misc/syncer").unwrap());
+    let solution = provider
+        .resolve_targets(vec![(app, PortageVersionSet::any())])
+        .unwrap();
+
+    assert_eq!(
+        solution.get(&syncer),
+        Some(&Version::parse("3.5.0").unwrap()),
+        "syncer should get the newest version even though it is not a root target"
+    );
+    assert_eq!(
+        solution.get(&libacl),
+        Some(&Version::parse("2.0").unwrap()),
+        "libacl should upgrade to satisfy syncer's requirement"
+    );
+}
+
+// `small` has fewer versions, so it is decided first and its newest pins
+// libacl to 1.0, holding `syncer` at 3.4. Pinning `syncer` to 3.5 makes
+// `small` take the older version that allows the upgrade.
+#[test]
+fn held_back_root_pin_bends_the_earlier_root() {
+    let mut repo = InMemoryRepository::new();
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/libacl-1.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/libacl-2.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-apps/small-1.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("sys-libs/libacl").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-apps/small-2.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("=sys-libs/libacl-1.0").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    for ver in ["3.3.0", "3.4.0"] {
+        repo.add_version(
+            portage_atom::Cpv::parse(&format!("net-misc/syncer-{ver}")).unwrap(),
+            None,
+            None,
+            empty_deps(),
+        );
+    }
+    repo.add_version(
+        portage_atom::Cpv::parse("net-misc/syncer-3.5.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse(">=sys-libs/libacl-2.0").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+
+    let mut provider = PortageDependencyProvider::new(repo);
+    let libacl = PortagePackage::unslotted(Cpn::parse("sys-libs/libacl").unwrap());
+    provider.add_installed(InstalledPackage {
+        package: libacl.clone(),
+        version: Version::parse("1.0").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+    let small = PortagePackage::unslotted(Cpn::parse("sys-apps/small").unwrap());
+    let syncer = PortagePackage::unslotted(Cpn::parse("net-misc/syncer").unwrap());
+    let solution = provider
+        .resolve_targets(vec![
+            (small.clone(), PortageVersionSet::any()),
+            (syncer.clone(), PortageVersionSet::any()),
+        ])
+        .unwrap();
+
+    assert_eq!(
+        solution.get(&syncer),
+        Some(&Version::parse("3.5.0").unwrap())
+    );
+    assert_eq!(solution.get(&small), Some(&Version::parse("1.0").unwrap()));
+    assert_eq!(solution.get(&libacl), Some(&Version::parse("2.0").unwrap()));
+}
+
+// The earlier root has no version that allows libacl 2.0. The pin of syncer
+// to 3.5 cannot be kept, and the feasible plan stays.
+#[test]
+fn held_back_root_pin_keeps_the_last_feasible_plan() {
+    let mut repo = InMemoryRepository::new();
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/libacl-1.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/libacl-2.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-apps/small-2.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("=sys-libs/libacl-1.0").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    for ver in ["3.3.0", "3.4.0"] {
+        repo.add_version(
+            portage_atom::Cpv::parse(&format!("net-misc/syncer-{ver}")).unwrap(),
+            None,
+            None,
+            empty_deps(),
+        );
+    }
+    repo.add_version(
+        portage_atom::Cpv::parse("net-misc/syncer-3.5.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse(">=sys-libs/libacl-2.0").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+
+    let mut provider = PortageDependencyProvider::new(repo);
+    let libacl = PortagePackage::unslotted(Cpn::parse("sys-libs/libacl").unwrap());
+    provider.add_installed(InstalledPackage {
+        package: libacl.clone(),
+        version: Version::parse("1.0").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+    let small = PortagePackage::unslotted(Cpn::parse("sys-apps/small").unwrap());
+    let syncer = PortagePackage::unslotted(Cpn::parse("net-misc/syncer").unwrap());
+    let solution = provider
+        .resolve_targets(vec![
+            (small.clone(), PortageVersionSet::any()),
+            (syncer.clone(), PortageVersionSet::any()),
+        ])
+        .unwrap();
+
+    assert_eq!(
+        solution.get(&syncer),
+        Some(&Version::parse("3.4.0").unwrap())
+    );
+    assert_eq!(solution.get(&small), Some(&Version::parse("2.0").unwrap()));
+    assert_eq!(solution.get(&libacl), Some(&Version::parse("1.0").unwrap()));
+}
+
 // `-uD` / `prefer_update`: transitive deps upgrade in-slot even when the
 // installed version still satisfies the atom (emerge deep update).
 #[test]
