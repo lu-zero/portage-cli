@@ -382,3 +382,11 @@ rebuild — hashes and methodology in
 [`results/20260819-use-fold-defaults-conf-deb4c81/`](../results/20260819-use-fold-defaults-conf-deb4c81/).
 New `em -p` wall-clock anchor: `deb4c81` /
 `em_before` sha256 `c43dbacd4695b7aefac91ecacaa91ab6bdbf456f9325e880cbfff285532a4427`.
+
+## rustc 1.99.0 vs 1.100.0-beta.3 (2026-10-03)
+
+`em -p www-client/firefox` on `483d875a` plus the uncommitted depgraph split.
+Stable 1.100.0 is not published; the after side is rustup beta
+`1.100.0-beta.3`. Interleaved and alone hyperfine disagree in sign and both
+sit inside the noise (~1.02 s ± 0.03 s). Details:
+[`results/20261003-rustc-1.99.0-vs-1.100.0-beta.3/`](../results/20261003-rustc-1.99.0-vs-1.100.0-beta.3/).

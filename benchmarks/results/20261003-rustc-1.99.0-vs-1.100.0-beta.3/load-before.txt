@@ -1,0 +1,1 @@
+loadavg_before_hyperfine: 4.26 4.89 4.39 2/4175 30497
