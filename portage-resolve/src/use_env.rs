@@ -395,7 +395,11 @@ async fn compute_use_env(
     let mut package_mask = repo.repo_package_mask().unwrap_or_default();
     package_mask.extend(stack.package_mask().unwrap_or_default());
     package_mask.extend(load_dep_list(portage_dir.join("package.mask").as_str()));
-    let package_unmask = load_dep_list(portage_dir.join("package.unmask").as_str());
+    let mut package_unmask = load_dep_list(portage_dir.join("package.unmask").as_str());
+    if let Some(overlay) = config_overlay {
+        package_mask.extend(load_dep_list(overlay.join("package.mask").as_str()));
+        package_unmask.extend(load_dep_list(overlay.join("package.unmask").as_str()));
+    }
 
     // `package.provided` — CPVs the system supplies externally (profile stack,
     // incl. the folded-in `/etc/portage/profile`). Fed to the solver as
@@ -736,6 +740,36 @@ mod tests {
         build_use_env(&repo, Some(root), None, None, Some(&ov))
             .await
             .expect("a SysrootOverride must let a never-initialized target resolve");
+    }
+
+    #[tokio::test]
+    async fn prefix_overlay_masks_and_unmasks_are_read() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(repo_dir.path());
+        let profile_dir = repo_dir.path().join("test-profile");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("make.defaults"), "").unwrap();
+        let profile_dir = camino::Utf8Path::from_path(&profile_dir).unwrap();
+        let sysroot = tempfile::tempdir().unwrap();
+        let root = camino::Utf8Path::from_path(sysroot.path()).unwrap();
+        let ov = SysrootOverride {
+            profile_dir,
+            make_conf: "",
+        };
+
+        let overlay = tempfile::tempdir().unwrap();
+        std::fs::write(overlay.path().join("package.mask"), ">dev-libs/foo-1\n").unwrap();
+        std::fs::write(overlay.path().join("package.unmask"), "=dev-libs/foo-3\n").unwrap();
+        let overlay = camino::Utf8Path::from_path(overlay.path()).unwrap();
+
+        let env = build_use_env(&repo, Some(root), Some(overlay), None, Some(&ov))
+            .await
+            .unwrap();
+        assert!(
+            env.package_mask
+                .contains(&Dep::parse(">dev-libs/foo-1").unwrap())
+        );
+        assert_eq!(env.package_unmask, [Dep::parse("=dev-libs/foo-3").unwrap()]);
     }
 
     // Expected override shorthand
