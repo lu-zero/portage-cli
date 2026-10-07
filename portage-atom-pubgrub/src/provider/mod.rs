@@ -77,6 +77,10 @@ pub(crate) struct VersionData {
     /// transitively under the widened-autounmask policy — only a root
     /// target may land on one.
     pub(crate) live: bool,
+    /// An installed version the repository did not offer (filtered out by
+    /// policy, or its ebuild left the tree): selectable so it can stay
+    /// installed, never the version to build while an offered one is in range.
+    pub(crate) installed_only: bool,
 }
 
 impl VersionData {
@@ -130,6 +134,7 @@ impl VersionData {
             desired: UseConfig::new(),
             needs_unmask: false,
             live: false,
+            installed_only: false,
         }
     }
 }
@@ -271,6 +276,9 @@ pub struct PortageDependencyProvider {
     /// Host `@host` instances alias target package data (no duplicate ingest)
     pub(crate) host_aliases: HashMap<PortagePackage, PortagePackage>,
     pub(crate) dropped_deps: Vec<DroppedDep>,
+    /// The `(package, version)` each [`Self::dropped_deps`] entry was dropped
+    /// from, index for index
+    dropped_parents: Vec<(PortagePackage, Version)>,
     /// USE flag requirements collected by the post-solve validation pass
     ///
     /// Covers both reinstall cases (`R`: installed packages with violated
@@ -690,15 +698,18 @@ impl PortageDependencyProvider {
         }
 
         let mut dropped_deps = Vec::new();
+        let mut dropped_parents = Vec::new();
         if needs_filtering {
-            for data in packages.values_mut() {
-                for vd in data.versions.values_mut() {
+            for (parent, data) in packages.iter_mut() {
+                for (parent_ver, vd) in data.versions.iter_mut() {
                     if let Dependencies::Available(constraints) = &mut vd.merged
                         && constraints.iter().any(|(pkg, _)| !known.contains(pkg))
                     {
                         let taken = std::mem::take(constraints);
                         let (kept, dropped): (Vec<_>, Vec<_>) =
                             taken.into_iter().partition(|(pkg, _)| known.contains(pkg));
+                        dropped_parents
+                            .extend(dropped.iter().map(|_| (parent.clone(), parent_ver.clone())));
                         dropped_deps.extend(dropped.into_iter().map(|(pkg, vs)| {
                             let alternatives = or_alternatives
                                 .get(&pkg)
@@ -743,6 +754,7 @@ impl PortageDependencyProvider {
             is_cross_arch: false,
             host_aliases: HashMap::new(),
             dropped_deps,
+            dropped_parents,
             use_flag_requirements: Vec::new(),
             upgrade_pins: HashMap::new(),
             hard_pins: HashSet::new(),
@@ -795,7 +807,8 @@ impl PortageDependencyProvider {
         if let Some(pkg_data) = self.packages.get_mut(&installed.package)
             && !pkg_data.versions.contains_key(&installed.version)
         {
-            let vd = VersionData::from_by_class(vec![vec![], vec![], vec![], vec![], vec![]]);
+            let mut vd = VersionData::from_by_class(vec![vec![], vec![], vec![], vec![], vec![]]);
+            vd.installed_only = true;
             pkg_data.versions.insert(installed.version.clone(), vd);
         }
 
@@ -939,6 +952,45 @@ impl PortageDependencyProvider {
     pub fn selection_needs_unmask(&self, package: &PortagePackage, version: &Version) -> bool {
         self.package_data(package)
             .is_some_and(|d| d.versions.get(version).is_some_and(|vd| vd.needs_unmask))
+    }
+
+    /// The installed versions `package` names: its own slot, or every slot
+    /// when it carries none
+    pub fn installed_versions<'a>(
+        &'a self,
+        package: &'a PortagePackage,
+    ) -> impl Iterator<Item = &'a Version> {
+        self.installed
+            .iter()
+            .filter(move |(pkg, _)| {
+                pkg.cpn() == package.cpn()
+                    && (package.slot().is_none() || pkg.slot() == package.slot())
+            })
+            .map(|(_, (version, _))| version)
+    }
+
+    /// The dependencies dropped from versions `solution` selected, leaving
+    /// out an `||` branch that had an available sibling
+    pub fn dropped_deps_of<'a>(
+        &'a self,
+        solution: &'a pubgrub::SelectedDependencies<PortagePackage, Version>,
+    ) -> impl Iterator<Item = &'a DroppedDep> {
+        self.dropped_deps
+            .iter()
+            .zip(&self.dropped_parents)
+            .filter(|(dep, (parent, ver))| {
+                dep.alternatives.is_empty() && solution.get(parent) == Some(ver)
+            })
+            .map(|(dep, _)| dep)
+    }
+
+    /// Whether the solved `version` of `package` is an installed version the
+    /// repository did not offer, kept because it is already there
+    ///
+    /// `false` for unknown package/version pairs.
+    pub fn selection_is_installed_only(&self, package: &PortagePackage, version: &Version) -> bool {
+        self.package_data(package)
+            .is_some_and(|d| d.versions.get(version).is_some_and(|vd| vd.installed_only))
     }
 
     /// Whether the solved `version` of `package` is a live ebuild

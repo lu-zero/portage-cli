@@ -275,7 +275,7 @@ impl PortageDependencyProvider {
             let Some(newest) = data
                 .versions
                 .iter()
-                .filter(|(v, vd)| requested.contains(v) && !vd.needs_unmask)
+                .filter(|(v, vd)| requested.contains(v) && !vd.needs_unmask && !vd.installed_only)
                 .map(|(v, _)| v)
                 .max()
             else {

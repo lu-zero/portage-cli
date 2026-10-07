@@ -759,6 +759,80 @@ fn selective_no_update_keeps_an_installed_root_target() {
     );
 }
 
+// An installed version the repository does not offer (masked, or its ebuild
+// left the tree) is only there to stay installed. A root target moves to the
+// newest offered version, `--noreplace` included, as emerge does.
+#[test]
+fn unoffered_installed_root_target_takes_an_offered_version() {
+    let build = |selective: bool| {
+        let mut repo = InMemoryRepository::new();
+        repo.add_version(
+            portage_atom::Cpv::parse("app-text/tree-1.0").expect("cpv parses"),
+            None,
+            None,
+            empty_deps(),
+        );
+        let mut provider = PortageDependencyProvider::new(repo);
+        provider.set_selective_no_update(selective);
+        let tree = PortagePackage::unslotted(Cpn::parse("app-text/tree").expect("cpn parses"));
+        provider.add_installed(InstalledPackage {
+            package: tree.clone(),
+            version: Version::parse("2.0").expect("version parses"),
+            policy: InstalledPolicy::Favor,
+            active_use: vec![],
+            iuse: vec![],
+        });
+        let solution = provider
+            .resolve_targets(vec![(tree.clone(), PortageVersionSet::any())])
+            .expect("solvable");
+        solution.get(&tree).cloned().expect("target is solved")
+    };
+    let offered = Version::parse("1.0").expect("version parses");
+    assert_eq!(build(false), offered);
+    assert_eq!(build(true), offered);
+}
+
+// The same version as a dependency stays installed, and only a deep update
+// replaces it with an offered one.
+#[test]
+fn unoffered_installed_dependency_is_kept_unless_updating() {
+    let build = |prefer_update: bool| {
+        let mut repo = InMemoryRepository::new();
+        repo.add_version(
+            portage_atom::Cpv::parse("app-admin/pass-1.0").expect("cpv parses"),
+            None,
+            None,
+            PackageDeps {
+                rdepend: (DepEntry::parse("app-text/tree").expect("dep parses")).into(),
+                ..empty_deps()
+            },
+        );
+        repo.add_version(
+            portage_atom::Cpv::parse("app-text/tree-1.0").expect("cpv parses"),
+            None,
+            None,
+            empty_deps(),
+        );
+        let mut provider = PortageDependencyProvider::new(repo);
+        provider.set_prefer_update(prefer_update);
+        let tree = PortagePackage::unslotted(Cpn::parse("app-text/tree").expect("cpn parses"));
+        provider.add_installed(InstalledPackage {
+            package: tree.clone(),
+            version: Version::parse("2.0").expect("version parses"),
+            policy: InstalledPolicy::Favor,
+            active_use: vec![],
+            iuse: vec![],
+        });
+        let pass = PortagePackage::unslotted(Cpn::parse("app-admin/pass").expect("cpn parses"));
+        let solution = provider
+            .resolve_targets(vec![(pass, PortageVersionSet::any())])
+            .expect("solvable");
+        solution.get(&tree).cloned().expect("dependency is solved")
+    };
+    assert_eq!(build(false), Version::parse("2.0").expect("version parses"));
+    assert_eq!(build(true), Version::parse("1.0").expect("version parses"));
+}
+
 // Installed version pruned from the tree: under prefer_update the transitive
 // dep upgrades (without the flag, Favor keeps the stub — see
 // `installed_version_removed_from_repo_kept_when_satisfying`).

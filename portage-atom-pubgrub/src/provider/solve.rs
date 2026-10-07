@@ -120,6 +120,15 @@ impl DependencyProvider for PortageDependencyProvider {
             return Ok(Some(pref.clone()));
         }
 
+        // An installed version the repository does not offer gives way to an
+        // offered one wherever something is being picked to build.
+        let offered: Vec<&Version> = candidates
+            .iter()
+            .copied()
+            .filter(|v| !data.versions[*v].installed_only)
+            .collect();
+        let replaceable = !offered.is_empty() && offered.len() < candidates.len();
+
         if let Some((installed_ver, policy)) = self.installed.get(package) {
             match policy {
                 InstalledPolicy::Lock => {
@@ -143,22 +152,29 @@ impl DependencyProvider for PortageDependencyProvider {
                     // for the whole solve (transitive in-slot upgrades).
                     // `Rebuild` / root targets likewise take the newest via
                     // fall-through — unless the resolve is selective without
-                    // `--update`, where a satisfied target keeps what it has.
-                    if installed_follower(self, package, range) {
+                    // `--update`, where a satisfied target keeps what it has,
+                    // provided the repository still offers it.
+                    let moves_root = replaceable && self.root_targets.contains_key(package);
+                    if installed_follower(self, package, range) && !moves_root {
                         return Ok(Some(installed_ver.clone()));
                     }
                 }
                 InstalledPolicy::Rebuild => {
                     // Emptytree / `-uD`: fall through to newest in-range.
                     // `-N`/`-U` alone: same-CPV reinstall when the installed
-                    // version is still available (emerge `[R]`); only pick a
-                    // newer CPV if the installed one left the tree.
-                    if !self.rebuild_tree && !self.prefer_update && range.contains(installed_ver) {
+                    // version is still offered (emerge `[R]`); otherwise the
+                    // newest offered one, as the installed one cannot be built.
+                    if !self.rebuild_tree
+                        && !self.prefer_update
+                        && !replaceable
+                        && range.contains(installed_ver)
+                    {
                         return Ok(Some(installed_ver.clone()));
                     }
                 }
             }
         }
+        let candidates = if replaceable { offered } else { candidates };
 
         // `--deep` / native emptytree: for a `:*` any-slot dep (`SlotChoice`),
         // bump to the newest slot instead of keeping a satisfying installed slot
