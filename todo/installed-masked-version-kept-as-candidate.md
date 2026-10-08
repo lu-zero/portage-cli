@@ -1,7 +1,8 @@
 # A masked installed version was still a build candidate
 
-Status: 🟡 fixed 2026-10-07, uncommitted. Cross-reviewed by a second model
-the same day; its findings are folded in below.
+Status: 🟡 both fixes committed 2026-10-07; the warning is not (see "The
+warning"). Cross-reviewed by a second model the same day; its findings
+are folded in below.
 Found while adding `em crossdev` version preferences
 ([[crossdev-gcc-version-flag]]). Two separate causes turned up; the
 first note written here blamed only the first, and the crossdev symptom
@@ -89,9 +90,9 @@ gets silently-kept root targets from target classification. `em -puD
   dependency kept unless deep-updating) — both failed before the fix.
 - One config test for the overlay read.
 - The ten-row emerge comparison above, run against the built `em`.
-- `em crossdev --setup -p --gcc 15.3 --libc 2.42` in a scratch prefix
-  with newer versions installed plans the downgrades with bare atoms; the
-  exact-version workaround in `crossdev/pins.rs` is removed.
+- `em crossdev --setup -p` with older gcc and glibc preferred, in a
+  scratch prefix with newer versions installed, plans the downgrades with
+  bare atoms. Run with the version flags that were dropped afterwards.
 - Whole workspace: 2287 tests pass, fmt and clippy clean.
 
 ## Open

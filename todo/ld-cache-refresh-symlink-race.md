@@ -71,8 +71,7 @@ and is not reproducible on retry.
 
 ## `em` moved to `ldconfig` 0.2.0 (2026-10-08)
 
-0.2.0 is published with the atomic link replacement. Done in the working
-tree (uncommitted at the time of writing):
+0.2.0 is published with the atomic link replacement. Done:
 
 - Workspace requirement `ldconfig = "0.2"`.
 - `maint/env.rs::refresh_ld_cache` rewritten. 0.2 changed what the

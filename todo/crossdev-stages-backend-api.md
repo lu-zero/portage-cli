@@ -403,7 +403,7 @@ phases are in this repo; `cs` phases are in crossdev-stages.
 
 | # | Repo | Phase | Unblocks | State |
 |---|------|-------|----------|-------|
-| 1 | em | **Toolchain version preferences** — `--binutils/--gcc/--kernel/--libc`, resolved and written as config for both the cross and the sysroot packages ([[crossdev-gcc-version-flag]]) | R2 pin; the live-gcc leak | implemented 2026-10-07, uncommitted; not yet exercised by a real toolchain build |
+| 1 | em | **Toolchain version preferences** — `--binutils/--gcc/--kernel/--libc`, resolved and written as config for both the cross and the sysroot packages ([[crossdev-gcc-version-flag]]) | R2 pin; the live-gcc leak | flags written 2026-10-07 and dropped the same day as the wrong shape; superseded by a spec file ([[cross-sysroot-spec]], branch `cross-sysroot-spec`, not merged) |
 | 2 | em | **Preference axes beyond GCC+glibc** — LLVM-model slot/runtimes, `--profile` and a flavour → profile mapping, GCC model + LLVM flavour | clang as main compiler, other libcs | planned in [[crossdev-gcc-version-flag]] |
 | 3 | em | **Sysroot ordering** — baselayout before any `acct-*` in sysroot-populating resolves, with a regression test (R4) | from-scratch stage1 | open |
 | 4 | em | **Verify the three-root path** — plain atom merge and `em stages` under `--target T --root R` (R1), `em portageq envvar` (R8) | everything after toolchain setup | open |
