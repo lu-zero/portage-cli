@@ -12,7 +12,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use portage_repo::Ebuild;
 
 use super::{
-    ConfigProtect, WalkResult, capture_environment, merge_spec_from_env, open_or_create_vdb,
+    ConfigProtect, Walk, WalkResult, capture_environment, merge_spec_from_env, open_or_create_vdb,
     rewrite_d_symlinks, walk_image, write_environment_bz2,
 };
 
@@ -69,11 +69,8 @@ pub(crate) async fn build_binpkg_standalone(
     let image_dir = ed_image_dir(shell, work_root);
     let cp = ConfigProtect::from_shell(shell);
 
-    // A throwaway destination -- CONTENTS records absolute installed paths
-    // (`/usr/bin/foo`) independent of where the corresponding real bytes
-    // land, so pointing walk_image here instead of at `root` produces an
-    // identical contents list without copying a single file into the real
-    // system.
+    // CONTENTS records installed paths (`/usr/bin/foo`) whatever the
+    // destination; a path that does not exist keeps config protection out of it.
     let scratch_dest = work_root.join("temp/buildpkgonly-dest");
     let WalkResult { contents, size, .. } = walk_image(
         &image_dir,
@@ -81,6 +78,7 @@ pub(crate) async fn build_binpkg_standalone(
         &scratch_dest,
         &cp,
         rewrite_d_symlinks(&env),
+        Walk::Scan { digests: true },
     )?;
 
     let scratch_vdb_root = work_root.join("temp/buildpkgonly-vdb");

@@ -2003,22 +2003,23 @@ async fn run_merge(
         .await
         .context("pkg_preinst failed")?;
 
-    // Merge the prefix subtree of the image (`ED = image/${EPREFIX}`) into the
+    // The prefix subtree of the image (`ED = image/${EPREFIX}`) goes into the
     // merge root (`EROOT`); identity when EPREFIX is empty.
     let image_dir = ed_image_dir(shell, work_root);
     let cp = ConfigProtect::from_shell(shell);
-    let WalkResult {
-        contents,
-        size,
-        protected,
-    } = walk_image(
+    let rewrite_d = rewrite_d_symlinks(&env);
+
+    // Collisions are judged before a single file is written: an abort must
+    // leave the other package's files alone.
+    let planned = walk_image(
         &image_dir,
         &work_root.join("image"),
         root,
         &cp,
-        rewrite_d_symlinks(&env),
-    )?;
-
+        rewrite_d,
+        Walk::Scan { digests: false },
+    )?
+    .contents;
     let exclude_cpv = old_pkg.as_ref().map(|p| p.cpv().clone());
     let mut ownership_index = if let Some(state) = merge_state.as_deref_mut() {
         state.take_or_build(root, &vdb)?
@@ -2026,9 +2027,9 @@ async fn run_merge(
         None
     };
     let collisions = if let Some(index) = ownership_index.as_ref() {
-        index.find_collisions(&contents, exclude_cpv.as_ref())
+        index.find_collisions(&planned, exclude_cpv.as_ref())
     } else {
-        vdb.find_collisions(&contents, exclude_cpv.as_ref())
+        vdb.find_collisions(&planned, exclude_cpv.as_ref())
             .context("collision check failed")?
     };
     if !collisions.is_empty() {
@@ -2040,6 +2041,19 @@ async fn run_merge(
             collisions.len()
         );
     }
+
+    let WalkResult {
+        contents,
+        size,
+        protected,
+    } = walk_image(
+        &image_dir,
+        &work_root.join("image"),
+        root,
+        &cp,
+        rewrite_d,
+        Walk::Merge,
+    )?;
 
     let preserve_is_local = merge_state.is_none();
     let mut local_preserve =
@@ -2597,7 +2611,18 @@ fn set_symlink_times(path: &Utf8Path, meta: &std::fs::Metadata) {
     let _ = utimensat(CWD, path.as_str(), &times, AtFlags::SYMLINK_NOFOLLOW);
 }
 
-/// Result of merging the image into ROOT
+/// What a pass over the image does besides listing it
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    /// List only: nothing under the destination is created or changed.
+    /// `digests` reads every file for its checksum; leave it off when only
+    /// the paths matter.
+    Scan { digests: bool },
+    /// List and install into the destination
+    Merge,
+}
+
+/// Result of a pass over the image
 struct WalkResult {
     contents: Vec<ContentsEntry>,
     size: u64,
@@ -2624,7 +2649,9 @@ fn walk_image(
     dest_root: &Utf8Path,
     cp: &ConfigProtect,
     rewrite_d: bool,
+    walk: Walk,
 ) -> Result<WalkResult> {
+    let merge = walk == Walk::Merge;
     if !image_dir.exists() {
         return Ok(WalkResult {
             contents: vec![],
@@ -2700,16 +2727,18 @@ fn walk_image(
                 } else {
                     dest_path.clone()
                 };
-                if std::fs::symlink_metadata(write_path.as_std_path()).is_ok() {
-                    std::fs::remove_file(write_path.as_std_path())
-                        .with_context(|| format!("removing {write_path}"))?;
+                if merge {
+                    if std::fs::symlink_metadata(write_path.as_std_path()).is_ok() {
+                        std::fs::remove_file(write_path.as_std_path())
+                            .with_context(|| format!("removing {write_path}"))?;
+                    }
+                    std::os::unix::fs::symlink(target.as_std_path(), write_path.as_std_path())
+                        .with_context(|| format!("symlink {write_path}"))?;
+                    // Preserve the link's own mtime (std follows symlinks; this
+                    // does not), so the on-disk time matches CONTENTS.
+                    set_symlink_times(&write_path, &meta);
+                    preserve_owner(&write_path, &meta);
                 }
-                std::os::unix::fs::symlink(target.as_std_path(), write_path.as_std_path())
-                    .with_context(|| format!("symlink {write_path}"))?;
-                // Preserve the link's own mtime (std follows symlinks; this
-                // does not), so the on-disk time matches CONTENTS.
-                set_symlink_times(&write_path, &meta);
-                preserve_owner(&write_path, &meta);
                 let mtime = meta
                     .modified()
                     .ok()
@@ -2723,9 +2752,11 @@ fn walk_image(
                     target: Some(target),
                 });
             } else if meta.is_dir() {
-                std::fs::create_dir_all(dest_path.as_std_path())
-                    .with_context(|| format!("mkdir {dest_path}"))?;
-                preserve_owner(&dest_path, &meta);
+                if merge {
+                    std::fs::create_dir_all(dest_path.as_std_path())
+                        .with_context(|| format!("mkdir {dest_path}"))?;
+                    preserve_owner(&dest_path, &meta);
+                }
                 contents.push(ContentsEntry {
                     kind: ContentsKind::Dir,
                     path: installed,
@@ -2735,7 +2766,18 @@ fn walk_image(
                 });
                 queue.push_back(src_path);
             } else if meta.is_file() {
-                if let Some(parent) = dest_path.parent() {
+                if walk == (Walk::Scan { digests: false }) {
+                    total_size += meta.len();
+                    contents.push(ContentsEntry {
+                        kind: ContentsKind::Obj,
+                        path: installed,
+                        md5: None,
+                        mtime: None,
+                        target: None,
+                    });
+                    continue;
+                }
+                if merge && let Some(parent) = dest_path.parent() {
                     std::fs::create_dir_all(parent.as_std_path())
                         .with_context(|| format!("mkdir {parent}"))?;
                 }
@@ -2778,17 +2820,18 @@ fn walk_image(
                 // portage's source-inode `_hardlink_merge_map`).
                 use std::os::unix::fs::MetadataExt;
                 let inode = (meta.dev(), meta.ino());
-                let mut linked = false;
-                if meta.nlink() > 1
+                let mut skip_copy = !merge;
+                if merge
+                    && meta.nlink() > 1
                     && let Some(first) = hardlinks.get(&inode)
                 {
                     let _ = std::fs::remove_file(write_path.as_std_path());
                     if std::fs::hard_link(first.as_std_path(), write_path.as_std_path()).is_ok() {
-                        linked = true;
+                        skip_copy = true;
                     }
                 }
 
-                if !linked {
+                if !skip_copy {
                     // Portage unlinks the destination before installing. A bare
                     // `std::fs::copy` opens the existing file O_WRONLY|O_TRUNC,
                     // which is EACCES when the destination is read-only (e.g.
@@ -2819,7 +2862,9 @@ fn walk_image(
                         hardlinks.insert(inode, write_path.clone());
                     }
                 }
-                preserve_owner(&write_path, &meta);
+                if merge {
+                    preserve_owner(&write_path, &meta);
+                }
 
                 total_size += meta.len();
                 let mtime = meta
@@ -3395,6 +3440,52 @@ mod tests {
         assert!(!filtered.contains("BASH_ARGV0"));
     }
 
+    // The collision check and the packager list the image through the same
+    // walk as the merge; a scan must report what a merge would install while
+    // leaving the destination untouched.
+    #[test]
+    fn walk_image_scan_lists_without_writing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let image = Utf8PathBuf::try_from(tmp.path().join("image")).unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().join("root")).unwrap();
+        fs::create_dir_all(image.join("usr/bin").as_std_path()).unwrap();
+        fs::write(image.join("usr/bin/prog").as_std_path(), b"new").unwrap();
+        symlink("prog", image.join("usr/bin/p").as_std_path()).unwrap();
+        fs::create_dir_all(root.join("usr/bin").as_std_path()).unwrap();
+        fs::write(root.join("usr/bin/prog").as_std_path(), b"other package").unwrap();
+
+        let listing = |walk| {
+            let found = walk_image(&image, &image, &root, &ConfigProtect::none(), false, walk);
+            let mut found: Vec<_> = found
+                .unwrap()
+                .contents
+                .into_iter()
+                .map(|e| (e.path, e.md5))
+                .collect();
+            found.sort();
+            found
+        };
+        let paths = listing(Walk::Scan { digests: false });
+        let digests = listing(Walk::Scan { digests: true });
+        assert_eq!(
+            fs::read(root.join("usr/bin/prog").as_std_path()).unwrap(),
+            b"other package"
+        );
+        assert!(!root.join("usr/bin/p").as_std_path().is_symlink());
+        assert!(paths.iter().all(|(_, md5)| md5.is_none()));
+
+        let merged = listing(Walk::Merge);
+        assert_eq!(digests, merged);
+        let names = |l: &[(Utf8PathBuf, Option<String>)]| -> Vec<Utf8PathBuf> {
+            l.iter().map(|(p, _)| p.clone()).collect()
+        };
+        assert_eq!(names(&paths), names(&merged));
+        assert_eq!(
+            fs::read(root.join("usr/bin/prog").as_std_path()).unwrap(),
+            b"new"
+        );
+    }
+
     #[test]
     fn walk_image_copies_files_and_builds_contents() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3406,8 +3497,15 @@ mod tests {
         symlink("testprog", image.join("usr/bin/tp").as_std_path()).unwrap();
         fs::create_dir_all(root.as_std_path()).unwrap();
 
-        let WalkResult { contents, size, .. } =
-            walk_image(&image, &image, &root, &ConfigProtect::none(), false).unwrap();
+        let WalkResult { contents, size, .. } = walk_image(
+            &image,
+            &image,
+            &root,
+            &ConfigProtect::none(),
+            false,
+            Walk::Merge,
+        )
+        .unwrap();
 
         assert!(root.join("usr/bin/testprog").exists());
         assert!(
@@ -3452,16 +3550,30 @@ mod tests {
         fs::create_dir_all(root_on.as_std_path()).unwrap();
         fs::create_dir_all(root_off.as_std_path()).unwrap();
 
-        let WalkResult { contents, .. } =
-            walk_image(&image, &image, &root_on, &ConfigProtect::none(), true).unwrap();
+        let WalkResult { contents, .. } = walk_image(
+            &image,
+            &image,
+            &root_on,
+            &ConfigProtect::none(),
+            true,
+            Walk::Merge,
+        )
+        .unwrap();
         let tp = contents
             .iter()
             .find(|e| e.path.as_str() == "/usr/bin/tp")
             .unwrap();
         assert_eq!(tp.target.as_deref(), Some(Utf8Path::new("/usr/bin/tool")));
 
-        let WalkResult { contents, .. } =
-            walk_image(&image, &image, &root_off, &ConfigProtect::none(), false).unwrap();
+        let WalkResult { contents, .. } = walk_image(
+            &image,
+            &image,
+            &root_off,
+            &ConfigProtect::none(),
+            false,
+            Walk::Merge,
+        )
+        .unwrap();
         let tp = contents
             .iter()
             .find(|e| e.path.as_str() == "/usr/bin/tp")
@@ -3497,7 +3609,7 @@ mod tests {
         fs::create_dir_all(root.as_std_path()).unwrap();
 
         let WalkResult { contents, .. } =
-            walk_image(&ed, &d, &root, &ConfigProtect::none(), true).unwrap();
+            walk_image(&ed, &d, &root, &ConfigProtect::none(), true, Walk::Merge).unwrap();
 
         let bare_d = contents
             .iter()
@@ -3528,8 +3640,15 @@ mod tests {
         fs::create_dir_all(image.as_std_path()).unwrap();
         fs::create_dir_all(root.as_std_path()).unwrap();
 
-        let WalkResult { contents, size, .. } =
-            walk_image(&image, &image, &root, &ConfigProtect::none(), false).unwrap();
+        let WalkResult { contents, size, .. } = walk_image(
+            &image,
+            &image,
+            &root,
+            &ConfigProtect::none(),
+            false,
+            Walk::Merge,
+        )
+        .unwrap();
         assert!(contents.is_empty());
         assert_eq!(size, 0);
     }
@@ -3539,8 +3658,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let image = Utf8PathBuf::try_from(tmp.path().join("no-such-image")).unwrap();
         let root = Utf8PathBuf::try_from(tmp.path().join("root")).unwrap();
-        let WalkResult { contents, size, .. } =
-            walk_image(&image, &image, &root, &ConfigProtect::none(), false).unwrap();
+        let WalkResult { contents, size, .. } = walk_image(
+            &image,
+            &image,
+            &root,
+            &ConfigProtect::none(),
+            false,
+            Walk::Merge,
+        )
+        .unwrap();
         assert!(contents.is_empty());
         assert_eq!(size, 0);
     }
@@ -3568,7 +3694,7 @@ mod tests {
             contents,
             protected,
             ..
-        } = walk_image(&image, &image, &root, &cp, false).unwrap();
+        } = walk_image(&image, &image, &root, &cp, false, Walk::Merge).unwrap();
 
         // Differing protected file diverted; original untouched.
         assert_eq!(
@@ -3626,9 +3752,15 @@ mod tests {
         fs::create_dir_all(image.join("usr/bin").as_std_path()).unwrap();
         fs::write(image.join("usr/bin/bug").as_std_path(), b"new\n").unwrap();
 
-        let WalkResult { contents, .. } =
-            walk_image(&image, &image, &root, &ConfigProtect::none(), false)
-                .expect("re-merge over a read-only file must succeed (unlink before copy)");
+        let WalkResult { contents, .. } = walk_image(
+            &image,
+            &image,
+            &root,
+            &ConfigProtect::none(),
+            false,
+            Walk::Merge,
+        )
+        .expect("re-merge over a read-only file must succeed (unlink before copy)");
 
         assert_eq!(
             fs::read(root.join("usr/bin/bug").as_std_path()).unwrap(),
@@ -3666,7 +3798,15 @@ mod tests {
             AtFlags::SYMLINK_NOFOLLOW,
         );
 
-        walk_image(&image, &image, &root, &ConfigProtect::none(), false).unwrap();
+        walk_image(
+            &image,
+            &image,
+            &root,
+            &ConfigProtect::none(),
+            false,
+            Walk::Merge,
+        )
+        .unwrap();
 
         let merged = fs::symlink_metadata(root.join("usr/bin/tp").as_std_path()).unwrap();
         assert_eq!(merged.mtime(), 1_000_000_000);
@@ -3699,7 +3839,15 @@ mod tests {
         .unwrap();
         fs::create_dir_all(root.as_std_path()).unwrap();
 
-        walk_image(&image, &image, &root, &ConfigProtect::none(), false).unwrap();
+        walk_image(
+            &image,
+            &image,
+            &root,
+            &ConfigProtect::none(),
+            false,
+            Walk::Merge,
+        )
+        .unwrap();
 
         let a = fs::metadata(root.join("usr/bin/tool").as_std_path()).unwrap();
         let b = fs::metadata(root.join("usr/bin/tool-alias").as_std_path()).unwrap();
@@ -3723,7 +3871,7 @@ mod tests {
         fs::write(image.join("etc/foo.conf").as_std_path(), b"new\n").unwrap();
 
         let cp = ConfigProtect::for_test(&["/etc"], &[]);
-        walk_image(&image, &image, &root, &cp, false).unwrap();
+        walk_image(&image, &image, &root, &cp, false, Walk::Merge).unwrap();
         // Reused the existing ._cfg0000 rather than creating ._cfg0001.
         assert!(!root.join("etc/._cfg0001_foo.conf").exists());
         assert_eq!(
