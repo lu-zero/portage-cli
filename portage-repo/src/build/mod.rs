@@ -10,7 +10,7 @@ pub(crate) mod ver_funcs;
 pub use commands::inherit;
 pub use env::EbuildEnv;
 pub use profile::ConfSource;
-pub use shell::{EbuildShell, PhaseSession, phase_path_dirs, run_helper};
+pub use shell::{EbuildShell, MergeType, PhaseSession, phase_path_dirs, run_helper};
 pub use terminal::{PortageColors, TerminalConfig};
 
 /// `tracing` target for an action-announcement `INFO` event

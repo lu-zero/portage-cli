@@ -1289,6 +1289,11 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         shell.set_distdir(dir.to_owned());
     }
     shell.set_phase_log(phase_log);
+    shell.set_merge_type(match group {
+        PhaseGroup::BinpkgMerge => portage_repo::MergeType::Binary,
+        PhaseGroup::BuildOnly => portage_repo::MergeType::BuildOnly,
+        _ => portage_repo::MergeType::Source,
+    });
 
     // Profile build environment: source the make.defaults chain and make.conf
     // into the shell so phases see CHOST, CFLAGS/LDFLAGS, MULTILIB_ABIS/ABI/

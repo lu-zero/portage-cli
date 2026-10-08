@@ -192,6 +192,30 @@ struct PmsNames {
     pf: String,
 }
 
+/// What a phase sequence is doing with the package, as ebuilds see it in
+/// `MERGE_TYPE` (PMS 11.1)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MergeType {
+    /// Building from source and installing
+    #[default]
+    Source,
+    /// Installing a binary package
+    Binary,
+    /// Building a binary package without installing it
+    BuildOnly,
+}
+
+impl MergeType {
+    /// The value of `MERGE_TYPE`
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Binary => "binary",
+            Self::BuildOnly => "buildonly",
+        }
+    }
+}
+
 /// Wraps [`brush_core::Shell`] configured for Gentoo ebuild evaluation
 /// The shell has standard bash builtins registered and eclass directories
 /// set up for the repository.
@@ -227,6 +251,8 @@ pub struct EbuildShell {
     /// `PORTAGE_CONFIGROOT` for phases — where profile/make.conf live. `None`
     /// keeps the host. Set by the merge driver from the root model.
     build_config_root: Option<Utf8PathBuf>,
+    /// `MERGE_TYPE` for phases. Set by the merge driver.
+    merge_type: MergeType,
     /// `SYSROOT`/`ESYSROOT` for phases — the base system the build resolves
     /// `DEPEND` against. `None` defaults to `ROOT` (the install target). For an
     /// overlay (`--prefix`) this is the base, with the target layered on top.
@@ -624,6 +650,7 @@ impl EbuildShell {
             inst_owner,
             terminal,
             build_config_root: None,
+            merge_type: MergeType::default(),
             build_sysroot: None,
             build_eprefix: None,
             build_ld_library_path: None,
@@ -647,6 +674,11 @@ impl EbuildShell {
     /// child processes by the per-phase export list.
     pub fn preset_var(&mut self, name: &str, value: &str) {
         self.set_var(name, value);
+    }
+
+    /// Set what `MERGE_TYPE` reports in subsequent phases
+    pub fn set_merge_type(&mut self, merge_type: MergeType) {
+        self.merge_type = merge_type;
     }
 
     /// Snapshot the `docompress`/`dostrip` path lists accumulated during the
@@ -1693,7 +1725,7 @@ impl EbuildShell {
             "/".to_string()
         };
         self.set_var("ROOT", &root_var);
-        self.set_var("MERGE_TYPE", "source");
+        self.set_var("MERGE_TYPE", self.merge_type.as_str());
         // PORTAGE_CONFIGROOT: where profile/make.conf live (host unless offset).
         let configroot = self
             .build_config_root
