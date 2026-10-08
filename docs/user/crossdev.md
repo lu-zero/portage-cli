@@ -55,6 +55,7 @@ em crossdev [OPTIONS]
 |---|---|
 | `--target T` / `-T T` (global) | the tuple to set up or use, e.g. `riscv64-unknown-linux-gnu` |
 | `--show-target-cfg` | print the derived config (category, sysroot, package set) and exit — no writes |
+| `--print-spec` | print the target's built-in sysroot spec as TOML (toolchains, libc, profile, who builds what) and exit — no writes |
 | `--init-target` | lay down the overlay alias + sysroot `make.conf`/`make.profile`, no building |
 | `--setup` | bootstrap the full cross toolchain (binutils → headers → gcc-stage1 → libc → gcc-stage2) into the sysroot; implies `--init-target` |
 | `-L` / `--llvm` | use the LLVM/Clang model (`cross_llvm-<tuple>`: host clang cross-targets directly, no per-target compiler build) instead of GCC |

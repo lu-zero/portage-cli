@@ -47,6 +47,7 @@
 // Pending work: crossdev update and version-mismatch warnings.
 
 mod multilib;
+pub mod spec;
 pub mod stages;
 pub mod target;
 
@@ -109,6 +110,13 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
 
     if args.show_target_cfg {
         show_target_cfg(&target, globals, &extras);
+        return Ok(());
+    }
+    if args.print_spec {
+        print!(
+            "{}",
+            spec::SysrootSpec::builtin(&target, &extras).to_toml()?
+        );
         return Ok(());
     }
     // `--root` after `crossdev` is a parse error; prefix `--root` is a try_into
@@ -1838,6 +1846,7 @@ mod tests {
             init_target: false,
             setup: false,
             show_target_cfg,
+            print_spec: false,
             ex_pkg: Vec::new(),
             ex_gdb: false,
             depgraph_flags: crate::cli::DepgraphFlags::default(),

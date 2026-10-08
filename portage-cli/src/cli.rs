@@ -2989,6 +2989,10 @@ pub struct CrossdevArgs {
     #[usage(long)]
     pub show_target_cfg: bool,
 
+    /// Print the target's built-in sysroot spec as TOML and exit (no writes)
+    #[usage(long)]
+    pub print_spec: bool,
+
     /// Build an extra package onto the established cross target (may be given multiple times)
     ///
     /// `CATEGORY/PN` — always runs on the host (like `binutils`/`gcc`), not the target sysroot,

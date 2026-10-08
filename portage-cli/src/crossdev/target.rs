@@ -24,7 +24,7 @@ pub enum Libc {
 
 impl Libc {
     /// The real `category/package` providing this libc in `::gentoo`
-    fn package(self) -> (&'static str, &'static str) {
+    pub(super) fn package(self) -> (&'static str, &'static str) {
         match self {
             Libc::Glibc => ("sys-libs", "glibc"),
             Libc::Musl => ("sys-libs", "musl"),

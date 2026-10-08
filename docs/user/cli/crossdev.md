@@ -14,6 +14,7 @@
 - **`--init-target`** — Lay down the overlay + sysroot config without building anything
 - **`--setup`** — Bootstrap the cross toolchain into the prefix (`/usr/<tuple>`): the full intertwined sequence (binutils → headers → gcc-stage1 → libc → gcc-stage2). Implies `--init-target`.
 - **`--show-target-cfg`** — Print the derived target configuration and exit (no writes)
+- **`--print-spec`** — Print the target's built-in sysroot spec as TOML and exit (no writes)
 - **`--ex-pkg <CATEGORY/PN>`** — Build an extra package onto the established cross target (may be given multiple times)
 
   `CATEGORY/PN` — always runs on the host (like `binutils`/`gcc`), not the target sysroot, matching real crossdev's `--ex-pkg`.
