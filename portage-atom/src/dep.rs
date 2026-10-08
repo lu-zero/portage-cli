@@ -198,6 +198,28 @@ impl Dep {
     }
 }
 
+/// Wire form is the atom string ([`Dep::parse`]/[`Display`](fmt::Display)),
+/// never the interned/parsed representation, which is process-local.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Dep {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Dep {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let s = <std::borrow::Cow<'de, str> as serde::Deserialize>::deserialize(deserializer)?;
+        Self::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 impl fmt::Display for Dep {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(blocker) = &self.blocker {
@@ -331,6 +353,22 @@ mod tests {
     use super::*;
     use crate::slot::SlotOperator;
     use crate::version::{Operator, SuffixKind};
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn dep_serde_round_trips_through_its_atom_form() {
+        for atom in [
+            "sys-devel/gcc:16",
+            ">=sys-libs/glibc-2.42",
+            "=sys-devel/gcc-16.2*",
+        ] {
+            let dep = Dep::parse(atom).unwrap();
+            let json = serde_json::to_string(&dep).unwrap();
+            assert_eq!(json, format!("\"{atom}\""));
+            assert_eq!(serde_json::from_str::<Dep>(&json).unwrap(), dep);
+        }
+        assert!(serde_json::from_str::<Dep>("\"not an atom\"").is_err());
+    }
 
     #[test]
     fn test_dep_simple() {
