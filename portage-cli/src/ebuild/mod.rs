@@ -2158,6 +2158,14 @@ async fn run_merge(
             .await
             .context("pkg_postinst failed")?;
 
+        // A later pkg_prerm/pkg_postrm must see what pkg_preinst and
+        // pkg_postinst set, so the saved environment is refreshed here.
+        if let Ok(ref data) = capture_environment(shell, work_root).await
+            && let Err(e) = write_environment_bz2(&installed, data)
+        {
+            crate::style::warn_line!("could not update environment.bz2: {e}");
+        }
+
         Ok(())
     }
     .await;
