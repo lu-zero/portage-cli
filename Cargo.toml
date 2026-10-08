@@ -131,7 +131,7 @@ hakoniwa = { git = "https://github.com/lu-zero/hakoniwa.git", rev = "5f77bb1" }
 object = "0.40"
 itertools = "0.15.0"
 jwalk = "0.9"
-ldconfig = "0.1.1"
+ldconfig = "0.2.1"
 pkgcraft = { git = "https://github.com/pkgcraft/pkgcraft.git", rev = "b9fb45eb1995a6b9750f21312cda5e95bfbbe1bb" }
 regex = "1"
 roxmltree = "0.21.1"

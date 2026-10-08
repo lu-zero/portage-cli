@@ -144,17 +144,9 @@ pub fn env_update(root: &Utf8Path) -> Result<()> {
 fn refresh_ld_cache(root: &Utf8Path) -> Result<()> {
     use ldconfig::{Cache, SearchPaths};
 
-    let conf = root.join("etc/ld.so.conf");
-    let search = if conf.as_std_path().exists() {
-        SearchPaths::from_file(&conf, Some(root))?
-    } else {
-        // Re-root the default dirs (/lib, /usr/lib, …) under `root`.
-        let dirs = SearchPaths::default()
-            .iter()
-            .map(|d| root.join(d.strip_prefix("/").unwrap_or(d)))
-            .collect::<Vec<_>>();
-        SearchPaths::new(dirs)
-    };
+    // Paths are named as seen inside `root`; the crate resolves them there.
+    // A missing config yields no directories, leaving the system ones.
+    let search = SearchPaths::from_file("/etc/ld.so.conf", Some(root))?.with_system();
     let cache = Cache::builder()
         .update_symlinks(true)
         .dry_run(false)
@@ -169,6 +161,39 @@ fn refresh_ld_cache(root: &Utf8Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The C library this test binary has loaded, to populate a scratch root
+    // with a real shared object whatever the host architecture.
+    fn running_libc() -> Option<std::path::PathBuf> {
+        let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
+        maps.lines()
+            .filter_map(|l| l.split_whitespace().nth(5))
+            .find(|p| p.ends_with("/libc.so.6"))
+            .map(Into::into)
+    }
+
+    #[test]
+    fn ld_cache_of_a_foreign_root_lists_paths_inside_that_root() {
+        let Some(libc) = running_libc() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        for sub in ["etc/ld.so.conf.d", "opt/extra/lib", "usr/lib64"] {
+            std::fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        // The relative include every distribution config starts with.
+        std::fs::write(root.join("etc/ld.so.conf"), "include ld.so.conf.d/*.conf\n").unwrap();
+        std::fs::write(root.join("etc/ld.so.conf.d/extra.conf"), "/opt/extra/lib\n").unwrap();
+        std::fs::copy(&libc, root.join("opt/extra/lib/libc.so.6")).unwrap();
+        std::fs::copy(&libc, root.join("usr/lib64/libc.so.6")).unwrap();
+
+        refresh_ld_cache(root).unwrap();
+
+        let cache = ldconfig::Cache::from_file(root.join("etc/ld.so.cache")).unwrap();
+        let paths: Vec<String> = cache.entries().map(|e| e.path).collect();
+        // The configured directory and a built-in system one, both as the
+        // target sees them, never prefixed with the scratch root.
+        assert_eq!(paths, ["/opt/extra/lib/libc.so.6", "/usr/lib64/libc.so.6"]);
+    }
 
     #[test]
     fn merges_env_d_with_portage_semantics() {
