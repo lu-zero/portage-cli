@@ -225,7 +225,7 @@ pub struct WorkerArgs<'a> {
     pub binpkg: Option<&'a str>,
     /// `binpkg`'s origin forces cryptographic signature verification
     /// (a `binrepos.conf` entry with `verify-signature = yes`), independent
-    /// of `FEATURES=binpkg-request-signature`. See `ebuild::RunInner`'s
+    /// of `FEATURES=binpkg-request-signature`. See `ebuild::PhaseGroupRun`'s
     /// field of the same name.
     pub force_verify_signature: bool,
     pub buildpkg: bool,

@@ -412,7 +412,7 @@ never the root handling.
   `VDB(R) ∪ VDB(P)`, merge into `target`; applets (`env`, `world`, `query`, …)
   read the right root; `SYSROOT` trailing slash.
 - **Stage 1b — the builder side [done]:** thread the roots through
-  `build_and_merge`/`run`/`run_inner` to `EbuildShell::set_build_roots`;
+  `build_and_merge`/`run`/`run_phase_group` to `EbuildShell::set_build_roots`;
   `run_phase` sets `PORTAGE_CONFIGROOT = config`, `ROOT/EROOT = target`,
   `SYSROOT/ESYSROOT = base` (collapsing to `ROOT` when base == target), `BROOT
   = /`; `apply_profile_env` reads config from `config_root`. Makes host, full

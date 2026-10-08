@@ -27,7 +27,7 @@ use protect::scan_cfg;
 // `etc`/`quickpkg` resolve config protection through this path.
 pub(crate) use protect::ConfigProtect;
 
-/// Which phases a [`run_inner`] call owns — the single source of truth for the
+/// Which phases a [`run_phase_group`] call owns — the single source of truth for the
 /// build-tree epilogues (clean, env-dump/restore, buildpkg, tree-drop).
 ///
 /// The pseudoroot/sudo scoping (Q6: the per-syscall tax / real root must
@@ -225,7 +225,7 @@ impl PhaseGroup {
 
 /// The root-model views an ebuild execution needs, bundled so the
 /// build/merge call chain (`run`/`build_and_merge`/`merge_binpkg`/
-/// `run_inner`) takes one parameter for this instead of one per field.
+/// `run_phase_group`) takes one parameter for this instead of one per field.
 #[derive(Clone, Copy, Default)]
 pub struct RootContext<'a> {
     pub config_root: Option<&'a Utf8Path>,
@@ -426,10 +426,10 @@ pub async fn run(
         .map(|p| p.parse().map_err(|e| anyhow!("unknown phase {p:?}: {e}")))
         .collect::<Result<_>>()?;
     // Standalone `em ebuild <path> <phase>`: no resolved plan entry exists, so
-    // there's no authoritative Cpv to pass — `run_inner` falls back to
+    // there's no authoritative Cpv to pass — `run_phase_group` falls back to
     // deriving one from `ebuild_path` (fine here: this debug entry point only
     // ever targets a real on-disk ebuild, never a cross-derived virtual one).
-    run_inner(RunInner {
+    run_phase_group(PhaseGroupRun {
         ebuild_path,
         cpv: None,
         group: &PhaseGroup::Debug(phases),
@@ -622,7 +622,7 @@ pub struct BuildAndMerge<'a> {
     /// function otherwise does has nothing to scope around (an unprivileged run is wrapped
     /// whole instead, see `needs_whole_process_wrap`).
     ///
-    /// `buildpkg` is forced `true` for the `run_inner` call below regardless
+    /// `buildpkg` is forced `true` for the `run_phase_group` call below regardless
     /// of the caller's own `-b`: producing the binpkg is the entire point of
     /// `-B`, not a separate opt-in on top of it.
     pub buildpkgonly: bool,
@@ -667,7 +667,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
     // still only fetches. `-F` implies the same short-circuit, just with a
     // different SRC_URI resolution mode inside `run_fetch`.
     if fetchonly || fetch_all_uri {
-        return run_inner(RunInner {
+        return run_phase_group(PhaseGroupRun {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
             group: &PhaseGroup::FetchOnly {
@@ -691,7 +691,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
     }
 
     let result = if buildpkgonly {
-        run_inner(RunInner {
+        run_phase_group(PhaseGroupRun {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
             group: &PhaseGroup::BuildOnly,
@@ -716,7 +716,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
         // ptrace tax / real root stays off the compile's make/gcc tree.
         // Activity: compile phases emit on the parent bus; install phases
         // continue via LiveFs in the worker (same job_id / live_root).
-        run_inner(RunInner {
+        run_phase_group(PhaseGroupRun {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
             group: &PhaseGroup::Compile,
@@ -757,7 +757,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
         )
         .await
     } else {
-        run_inner(RunInner {
+        run_phase_group(PhaseGroupRun {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
             group: &PhaseGroup::Full,
@@ -853,9 +853,9 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
         )
         .await
     } else {
-        // The image is extracted inside run_inner (after its clean step) from
+        // The image is extracted inside run_phase_group (after its clean step) from
         // the binpkg, then the qmerge phase merges from work_root/image.
-        run_inner(RunInner {
+        run_phase_group(PhaseGroupRun {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
             group: &PhaseGroup::BinpkgMerge,
@@ -892,7 +892,7 @@ pub struct InstallWorker<'a> {
     pub distdir: Option<&'a str>,
     pub roots: RootContext<'a>,
     pub binpkg: Option<&'a str>,
-    /// See `RunInner`'s field of the same name; relayed across the
+    /// See `PhaseGroupRun`'s field of the same name; relayed across the
     /// `__worker` process boundary as a bare flag (`--force-verify-signature`)
     /// rather than the keyring/config itself — the worker re-sources
     /// `make.conf`/profile via the normal `EbuildShell` sweep and re-reads
@@ -1106,7 +1106,7 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
     } else {
         PhaseGroup::Install
     };
-    let result = run_inner(RunInner {
+    let result = run_phase_group(PhaseGroupRun {
         ebuild_path,
         cpv: Some(&cpv),
         group: &group,
@@ -1182,7 +1182,7 @@ fn resolve_masters(
 }
 
 /// Core phase-runner inputs (shared by build, binpkg merge, worker, debug)
-struct RunInner<'a> {
+struct PhaseGroupRun<'a> {
     ebuild_path: &'a str,
     /// Authoritative Cpv from the plan when present; `None` for standalone
     /// `em ebuild` (derived from the on-disk path — fine for real ebuilds).
@@ -1209,449 +1209,510 @@ struct RunInner<'a> {
     activity: Option<crate::activity::ActivityPkgCtx>,
 }
 
-async fn run_inner(opts: RunInner<'_>) -> Result<()> {
-    let RunInner {
-        ebuild_path,
-        cpv,
-        group,
-        work_dir,
-        repo_override,
-        root,
-        use_flags,
-        distdir,
-        phase_log,
-        roots,
-        merge_gate,
-        buildpkg,
-        binpkg,
-        force_verify_signature,
-        activity,
-    } = opts;
-    let RootContext {
-        config_root,
-        sysroot,
-        eprefix,
-        broot,
-        self_contained_bootstrap,
-        extra_path,
-    } = roots;
-    let path = Utf8Path::new(ebuild_path);
-    let ebuild = match cpv {
-        Some(cpv) => Ebuild::with_cpv(cpv.clone(), path),
-        None => Ebuild::from_path(path).with_context(|| format!("loading {ebuild_path}"))?,
-    };
+async fn run_phase_group(opts: PhaseGroupRun<'_>) -> Result<()> {
+    let setup = PackageSetup::load(&opts).await?;
+    setup.run_group(opts).await
+}
 
-    let repo_root = match repo_override {
-        Some(r) => Utf8PathBuf::from(r),
-        None => ebuild
-            .repo_root()
-            .ok_or_else(|| anyhow::anyhow!("cannot determine repo root from ebuild path"))?
-            .to_owned(),
-    };
+/// One package ready for its phases: the configuration read and applied
+///
+/// [`PackageSetup::load`] fills it from the configuration on disk;
+/// [`PackageSetup::run_group`] works from these fields and reads no profile,
+/// `make.conf` or `repos.conf` itself.
+struct PackageSetup {
+    ebuild: Ebuild,
+    repo: Repository,
+    /// Carries the profile, `make.conf` and `package.env` variables, the bashrc
+    /// hooks, the roots and the effective USE
+    shell: portage_repo::EbuildShell,
+    work_root: Utf8PathBuf,
+    /// `FEATURES` as configured for this package
+    features: std::collections::HashSet<String>,
+    /// Portage `EbuildBuildDir`: exclusive use of this package tree for the
+    /// whole phase chain (also blocks a second concurrent `em` on the same path).
+    _builddir_lock: Option<std::fs::File>,
+}
 
-    let repo = crate::repo_open::open(repo_root.as_std_path())
-        .with_context(|| format!("opening repo at {repo_root}"))?;
+impl PackageSetup {
+    /// Open the repository and build the shell the package's phases run in
+    async fn load(opts: &PhaseGroupRun<'_>) -> Result<Self> {
+        let PhaseGroupRun {
+            ebuild_path,
+            cpv,
+            work_dir,
+            repo_override,
+            root,
+            use_flags,
+            distdir,
+            ref phase_log,
+            roots,
+            ..
+        } = *opts;
+        let RootContext {
+            config_root,
+            sysroot,
+            eprefix,
+            broot,
+            self_contained_bootstrap,
+            extra_path,
+        } = roots;
+        let path = Utf8Path::new(ebuild_path);
+        let ebuild = match cpv {
+            Some(cpv) => Ebuild::with_cpv(cpv.clone(), path),
+            None => Ebuild::from_path(path).with_context(|| format!("loading {ebuild_path}"))?,
+        };
 
-    // Cross-* packages sidestep masters (they symlink into gentoo, so
-    // `repo_root` already is gentoo), but plain overlays inherit a master's
-    // eclasses and need its tree resolved — see `resolve_masters`.
-    let repos_conf = {
-        let cr = config_root.unwrap_or_else(|| Utf8Path::new("/"));
-        let overlay = eprefix.map(|e| e.join("etc/portage"));
-        let extra: Vec<&Utf8Path> = overlay.as_deref().into_iter().collect();
-        ReposConf::load_rooted(cr, &extra).ok()
-    };
-    let masters = resolve_masters(&repo, &repo_root, repos_conf.as_ref());
+        let repo_root = match repo_override {
+            Some(r) => Utf8PathBuf::from(r),
+            None => ebuild
+                .repo_root()
+                .ok_or_else(|| anyhow::anyhow!("cannot determine repo root from ebuild path"))?
+                .to_owned(),
+        };
 
-    let work_root = match work_dir {
-        Some(p) => p.to_owned(),
-        None => {
-            let pf = format!("{}-{}", ebuild.name(), ebuild.version());
-            package_work_dir(
-                Utf8Path::new("/var/tmp/portage"),
-                root,
-                ebuild.category(),
-                &pf,
-            )
+        let repo = crate::repo_open::open(repo_root.as_std_path())
+            .with_context(|| format!("opening repo at {repo_root}"))?;
+
+        // Cross-* packages sidestep masters (they symlink into gentoo, so
+        // `repo_root` already is gentoo), but plain overlays inherit a master's
+        // eclasses and need its tree resolved — see `resolve_masters`.
+        let repos_conf = {
+            let cr = config_root.unwrap_or_else(|| Utf8Path::new("/"));
+            let overlay = eprefix.map(|e| e.join("etc/portage"));
+            let extra: Vec<&Utf8Path> = overlay.as_deref().into_iter().collect();
+            ReposConf::load_rooted(cr, &extra).ok()
+        };
+        let masters = resolve_masters(&repo, &repo_root, repos_conf.as_ref());
+
+        let work_root = match work_dir {
+            Some(p) => p.to_owned(),
+            None => {
+                let pf = format!("{}-{}", ebuild.name(), ebuild.version());
+                package_work_dir(
+                    Utf8Path::new("/var/tmp/portage"),
+                    root,
+                    ebuild.category(),
+                    &pf,
+                )
+            }
+        };
+
+        let builddir_lock = lock_builddir(&work_root).await;
+
+        let master_refs: Vec<&Repository> = masters.iter().collect();
+        let mut shell = repo
+            .shell_with_masters(&master_refs)
+            .await
+            .context("creating shell")?;
+        if let Some(dir) = distdir {
+            shell.set_distdir(dir.to_owned());
         }
-    };
+        shell.set_phase_log(phase_log.clone());
 
-    // Portage `EbuildBuildDir`: exclusive use of this package tree for the
-    // whole phase chain (also blocks a second concurrent `em` on the same path).
-    let _builddir_lock = lock_builddir(&work_root).await;
-
-    let master_refs: Vec<&Repository> = masters.iter().collect();
-    let mut shell = repo
-        .shell_with_masters(&master_refs)
-        .await
-        .context("creating shell")?;
-    if let Some(dir) = distdir {
-        shell.set_distdir(dir.to_owned());
-    }
-    shell.set_phase_log(phase_log);
-    shell.set_merge_type(match group {
-        PhaseGroup::BinpkgMerge => portage_repo::MergeType::Binary,
-        PhaseGroup::BuildOnly => portage_repo::MergeType::BuildOnly,
-        _ => portage_repo::MergeType::Source,
-    });
-
-    // Profile build environment: source the make.defaults chain and make.conf
-    // into the shell so phases see CHOST, CFLAGS/LDFLAGS, MULTILIB_ABIS/ABI/
-    // LIBDIR_*, and the USE_EXPAND variables (PYTHON_TARGETS, …) that eclasses
-    // read directly. This also resolves the profile's effective USE.
-    // The config overlay (`package.use`/`bashrc` over host config) is the
-    // prefix's `etc/portage` in an in-place `--local` build (`EPREFIX/etc/portage`).
-    let config_overlay = (!self_contained_bootstrap)
-        .then_some(eprefix)
-        .flatten()
-        .map(|e| e.join("etc/portage"));
-    if !apply_profile_env(&mut shell, config_root, config_overlay.as_deref()).await? {
-        let cr = config_root.unwrap_or_else(|| Utf8Path::new("/"));
-        crate::style::warn_line!(
-            "no usable profile at {cr}/etc/portage/make.profile — building without profile defaults"
-        );
-    }
-
-    // Per-package build environment: `/etc/portage/package.env` maps this package
-    // to env files under `/etc/portage/env/`, sourced on top of `make.conf` so
-    // FEATURES, *FLAGS, MAKEOPTS, … take effect per package. Sourced before the
-    // resolved USE is applied (below) so the plan's USE wins — USE set by an env
-    // file is intentionally not reflected here (a resolver-side follow-up).
-    {
-        let base = config_root.unwrap_or_else(|| Utf8Path::new("/"));
-        let mut portage_dirs = vec![base.join("etc/portage").into_std_path_buf()];
-        if let Some(overlay) = config_overlay.as_deref() {
-            portage_dirs.push(overlay.as_std_path().to_path_buf());
-        }
-        let slot = repo
-            .cache_entry(ebuild.cpv())
-            .ok()
+        // Profile build environment: source the make.defaults chain and make.conf
+        // into the shell so phases see CHOST, CFLAGS/LDFLAGS, MULTILIB_ABIS/ABI/
+        // LIBDIR_*, and the USE_EXPAND variables (PYTHON_TARGETS, …) that eclasses
+        // read directly. This also resolves the profile's effective USE.
+        // The config overlay (`package.use`/`bashrc` over host config) is the
+        // prefix's `etc/portage` in an in-place `--local` build (`EPREFIX/etc/portage`).
+        let config_overlay = (!self_contained_bootstrap)
+            .then_some(eprefix)
             .flatten()
-            .map(|c| c.metadata.slot);
-        for env_file in portage_repo::env_files_for(&portage_dirs, ebuild.cpv(), slot.as_ref()) {
-            shell
-                .source_env_file(&env_file)
-                .await
-                .with_context(|| format!("sourcing package.env file {}", env_file.display()))?;
+            .map(|e| e.join("etc/portage"));
+        if !apply_profile_env(&mut shell, config_root, config_overlay.as_deref()).await? {
+            let cr = config_root.unwrap_or_else(|| Utf8Path::new("/"));
+            crate::style::warn_line!(
+                "no usable profile at {cr}/etc/portage/make.profile — building without profile defaults"
+            );
         }
-        // Package-env overrides (FEATURES/*FLAGS/…) need the same subprocess
-        // visibility as the profile/make.conf sweep above.
-        shell
-            .export_sourced_env()
-            .context("exporting package.env environment")?;
-    }
 
-    // Root model (docs/user/root-model.md): PORTAGE_CONFIGROOT = config_root, and
-    // SYSROOT/ESYSROOT = the build-against base — the real host `/` for a
-    // --prefix overlay or a same-arch --root; SYSROOT = ROOT only for a
-    // topology with its own build closure (--local, cross --target).
-    //
-    // NB: in overlay mode (target ≠ base) a package merged into the target is
-    // not yet visible to later builds in the run — that needs a merged sysroot,
-    // which is shelved (see docs/user/root-model.md "Overlay support — shelved").
-    let ld_library_path = build_ld_library_path(eprefix, sysroot);
-    shell.set_build_roots(
-        config_root,
-        sysroot,
-        eprefix,
-        broot,
-        ld_library_path.as_deref(),
-    );
-    shell.set_extra_path(extra_path.to_vec());
-    // Like portage, env.d's PATH wins over the one em inherited, so a package
-    // merged earlier in this run (llvm's /usr/lib/llvm/N/bin) is on it.
-    let env_d = crate::maint::env::merged_env_d(broot.unwrap_or(Utf8Path::new("/")));
-    shell.set_base_path(env_d.get("PATH").cloned());
-    shell.set_terminal(crate::style::terminal_config());
+        // Per-package build environment: `/etc/portage/package.env` maps this package
+        // to env files under `/etc/portage/env/`, sourced on top of `make.conf` so
+        // FEATURES, *FLAGS, MAKEOPTS, … take effect per package. Sourced before the
+        // resolved USE is applied (below) so the plan's USE wins — USE set by an env
+        // file is intentionally not reflected here (a resolver-side follow-up).
+        {
+            let base = config_root.unwrap_or_else(|| Utf8Path::new("/"));
+            let mut portage_dirs = vec![base.join("etc/portage").into_std_path_buf()];
+            if let Some(overlay) = config_overlay.as_deref() {
+                portage_dirs.push(overlay.as_std_path().to_path_buf());
+            }
+            let slot = repo
+                .cache_entry(ebuild.cpv())
+                .ok()
+                .flatten()
+                .map(|c| c.metadata.slot);
+            for env_file in portage_repo::env_files_for(&portage_dirs, ebuild.cpv(), slot.as_ref())
+            {
+                shell
+                    .source_env_file(&env_file)
+                    .await
+                    .with_context(|| format!("sourcing package.env file {}", env_file.display()))?;
+            }
+            // Package-env overrides (FEATURES/*FLAGS/…) need the same subprocess
+            // visibility as the profile/make.conf sweep above.
+            shell
+                .export_sourced_env()
+                .context("exporting package.env environment")?;
+        }
 
-    if let Some(flags) = use_flags {
-        // The resolved plan's effective USE for this package overrides the
-        // profile-resolved set (the sourced environment stays).
-        let refs: Vec<&str> = flags.iter().map(|f| f.as_str()).collect();
-        shell.set_use_flags(&refs).context("setting USE flags")?;
-    } else if let Ok(Some(entry)) = repo.cache_entry(ebuild.cpv()) {
-        // Standalone `em ebuild` (no resolved plan): apply the ebuild's own IUSE
-        // `+` defaults on top of the profile USE, so phases see the flags the
-        // merge path would compute (e.g. llvm-r1's `+llvm_slot_NN`). The full
-        // resolver isn't run here, so package.use / REQUIRED_USE nuances aren't
-        // reflected — this just closes the common IUSE-default gap that
-        // otherwise makes standalone phase runs diverge from a real merge.
-        let mut use_set: Vec<String> = shell
-            .get_var("USE")
+        // Root model (docs/user/root-model.md): PORTAGE_CONFIGROOT = config_root, and
+        // SYSROOT/ESYSROOT = the build-against base — the real host `/` for a
+        // --prefix overlay or a same-arch --root; SYSROOT = ROOT only for a
+        // topology with its own build closure (--local, cross --target).
+        //
+        // NB: in overlay mode (target ≠ base) a package merged into the target is
+        // not yet visible to later builds in the run — that needs a merged sysroot,
+        // which is shelved (see docs/user/root-model.md "Overlay support — shelved").
+        let ld_library_path = build_ld_library_path(eprefix, sysroot);
+        shell.set_build_roots(
+            config_root,
+            sysroot,
+            eprefix,
+            broot,
+            ld_library_path.as_deref(),
+        );
+        shell.set_extra_path(extra_path.to_vec());
+        // Like portage, env.d's PATH wins over the one em inherited, so a package
+        // merged earlier in this run (llvm's /usr/lib/llvm/N/bin) is on it.
+        let env_d = crate::maint::env::merged_env_d(broot.unwrap_or(Utf8Path::new("/")));
+        shell.set_base_path(env_d.get("PATH").cloned());
+        shell.set_terminal(crate::style::terminal_config());
+
+        if let Some(flags) = use_flags {
+            // The resolved plan's effective USE for this package overrides the
+            // profile-resolved set (the sourced environment stays).
+            let refs: Vec<&str> = flags.iter().map(|f| f.as_str()).collect();
+            shell.set_use_flags(&refs).context("setting USE flags")?;
+        } else if let Ok(Some(entry)) = repo.cache_entry(ebuild.cpv()) {
+            // Standalone `em ebuild` (no resolved plan): apply the ebuild's own IUSE
+            // `+` defaults on top of the profile USE, so phases see the flags the
+            // merge path would compute (e.g. llvm-r1's `+llvm_slot_NN`). The full
+            // resolver isn't run here, so package.use / REQUIRED_USE nuances aren't
+            // reflected — this just closes the common IUSE-default gap that
+            // otherwise makes standalone phase runs diverge from a real merge.
+            let mut use_set: Vec<String> = shell
+                .get_var("USE")
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_string)
+                .collect();
+            let have: std::collections::HashSet<String> = use_set.iter().cloned().collect();
+            let mut added = false;
+            for iuse in &entry.metadata.iuse {
+                if iuse.is_enabled_default() && !have.contains(iuse.name()) {
+                    use_set.push(iuse.name().to_string());
+                    added = true;
+                }
+            }
+            if added {
+                let refs: Vec<&str> = use_set.iter().map(String::as_str).collect();
+                shell
+                    .set_use_flags(&refs)
+                    .context("applying IUSE defaults for em ebuild")?;
+            }
+        }
+
+        // FEATURES from the configured environment (profile + make.conf). Only a
+        // small set is acted on; the rest are accepted silently.
+        let features: std::collections::HashSet<String> = shell
+            .get_var("FEATURES")
             .unwrap_or_default()
             .split_whitespace()
             .map(str::to_string)
             .collect();
-        let have: std::collections::HashSet<String> = use_set.iter().cloned().collect();
-        let mut added = false;
-        for iuse in &entry.metadata.iuse {
-            if iuse.is_enabled_default() && !have.contains(iuse.name()) {
-                use_set.push(iuse.name().to_string());
-                added = true;
+
+        Ok(Self {
+            ebuild,
+            repo,
+            shell,
+            work_root,
+            features,
+            _builddir_lock: builddir_lock,
+        })
+    }
+
+    /// Run `opts.group` for this package
+    async fn run_group(self, opts: PhaseGroupRun<'_>) -> Result<()> {
+        // The lock is bound first so that it is released last.
+        let Self {
+            _builddir_lock,
+            ebuild,
+            repo,
+            mut shell,
+            work_root,
+            features,
+        } = self;
+        let PhaseGroupRun {
+            group,
+            work_dir,
+            root,
+            roots,
+            merge_gate,
+            buildpkg,
+            binpkg,
+            force_verify_signature,
+            activity,
+            ..
+        } = opts;
+        let config_root = roots.config_root;
+        shell.set_merge_type(match group {
+            PhaseGroup::BinpkgMerge => portage_repo::MergeType::Binary,
+            PhaseGroup::BuildOnly => portage_repo::MergeType::BuildOnly,
+            _ => portage_repo::MergeType::Source,
+        });
+
+        // PMS 11.1: REPLACING_VERSIONS — the installed versions this merge
+        // replaces (same slot), visible to pkg_pretend/setup/preinst/postinst.
+        // Computed up front from the target root's VDB and the ebuild's SLOT.
+        // Also for a debug `em ebuild … qmerge`, which merges without a plan.
+        if group.is_merge()
+            || matches!(group, PhaseGroup::Debug(p) if p.contains(&RunPhase::Qmerge))
+        {
+            let slot = repo
+                .cache_entry(ebuild.cpv())
+                .ok()
+                .flatten()
+                .map(|c| c.metadata.slot.slot.as_str().to_string())
+                .unwrap_or_else(|| "0".to_string());
+            let replacing = open_or_create_vdb(&vdb_root_for(root))
+                .ok()
+                .and_then(|vdb| vdb.find_slot_occupant(&ebuild.cpv().cpn, &slot).ok())
+                .flatten()
+                .map(|old| old.cpv().version.to_string())
+                .unwrap_or_default();
+            shell.preset_var("REPLACING_VERSIONS", &replacing);
+        }
+
+        let merge_mode = group.is_merge();
+
+        // Clean the build tree before starting a merge, mirroring portage's `clean`
+        // phase that precedes `setup`. `run_phase` creates work/image/temp/homedir
+        // with `create_dir_all` (additive), so without this a re-emerge after a
+        // failed build would carry the previous attempt's stale ${WORKDIR} and,
+        // worse, a stale ${D} image whose leftover files would then be merged.
+        // Standalone `em ebuild` (merge_mode=false) is left untouched — re-running
+        // a single phase against the existing tree is a debug use case, and
+        // portage's `ebuild` command doesn't auto-clean either.
+        //
+        // FEATURES (make.conf(5)):
+        // - `keepwork` — skip pre-clean (and post-clean) so WORKDIR can be reused
+        // - `keeptemp` — keep `${T}` (`temp/`) through cleans that would wipe it
+        // - `noclean` — post-merge only (does not disable this pre-clean)
+        // `build.log` and the `.em-helpers` shim dir are left: the log is truncated
+        // by the phase-log tee, and the shims are idempotent.
+        if let (Some(wd), Some(subs)) = (work_dir, group.clean_subs()) {
+            for sub in filter_clean_subs(subs, &features, CleanWhen::Pre) {
+                let _ = std::fs::remove_dir_all(wd.join(sub));
             }
+            // The elog handoff sits at the work dir's top level, out of reach of
+            // the clean above (like `build.log`). A run killed between the worker
+            // writing it and the parent collecting it would otherwise have its
+            // messages replayed against this merge.
+            crate::elog::discard_stale_pending(wd);
         }
-        if added {
-            let refs: Vec<&str> = use_set.iter().map(String::as_str).collect();
-            shell
-                .set_use_flags(&refs)
-                .context("applying IUSE defaults for em ebuild")?;
-        }
-    }
 
-    // PMS 11.1: REPLACING_VERSIONS — the installed versions this merge
-    // replaces (same slot), visible to pkg_pretend/setup/preinst/postinst.
-    // Computed up front from the target root's VDB and the ebuild's SLOT.
-    // Also for a debug `em ebuild … qmerge`, which merges without a plan.
-    if group.is_merge() || matches!(group, PhaseGroup::Debug(p) if p.contains(&RunPhase::Qmerge)) {
-        let slot = repo
-            .cache_entry(ebuild.cpv())
-            .ok()
-            .flatten()
-            .map(|c| c.metadata.slot.slot.as_str().to_string())
-            .unwrap_or_else(|| "0".to_string());
-        let replacing = open_or_create_vdb(&vdb_root_for(root))
-            .ok()
-            .and_then(|vdb| vdb.find_slot_occupant(&ebuild.cpv().cpn, &slot).ok())
-            .flatten()
-            .map(|old| old.cpv().version.to_string())
-            .unwrap_or_default();
-        shell.preset_var("REPLACING_VERSIONS", &replacing);
-    }
+        // `-k`/`--usepkg`: extract the binpkg image *after* the clean above (which
+        // wipes work_dir/image to defeat stale-${D} leakage on re-emerge). The image
+        // is the authoritative payload here — there is no src_compile to repopulate
+        // it — so it must land between the clean and the qmerge walk.
+        if let (Some(wd), Some(bp)) = (work_dir, binpkg) {
+            let image_dir = wd.join("image");
+            std::fs::create_dir_all(image_dir.as_std_path())
+                .with_context(|| format!("creating {image_dir}"))?;
 
-    // FEATURES from the configured environment (profile + make.conf). Only a
-    // small set is acted on; the rest are accepted silently.
-    let features: std::collections::HashSet<String> = shell
-        .get_var("FEATURES")
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(str::to_string)
-        .collect();
-    let merge_mode = group.is_merge();
-
-    // Clean the build tree before starting a merge, mirroring portage's `clean`
-    // phase that precedes `setup`. `run_phase` creates work/image/temp/homedir
-    // with `create_dir_all` (additive), so without this a re-emerge after a
-    // failed build would carry the previous attempt's stale ${WORKDIR} and,
-    // worse, a stale ${D} image whose leftover files would then be merged.
-    // Standalone `em ebuild` (merge_mode=false) is left untouched — re-running
-    // a single phase against the existing tree is a debug use case, and
-    // portage's `ebuild` command doesn't auto-clean either.
-    //
-    // FEATURES (make.conf(5)):
-    // - `keepwork` — skip pre-clean (and post-clean) so WORKDIR can be reused
-    // - `keeptemp` — keep `${T}` (`temp/`) through cleans that would wipe it
-    // - `noclean` — post-merge only (does not disable this pre-clean)
-    // `build.log` and the `.em-helpers` shim dir are left: the log is truncated
-    // by the phase-log tee, and the shims are idempotent.
-    if let (Some(wd), Some(subs)) = (work_dir, group.clean_subs()) {
-        for sub in filter_clean_subs(subs, &features, CleanWhen::Pre) {
-            let _ = std::fs::remove_dir_all(wd.join(sub));
-        }
-        // The elog handoff sits at the work dir's top level, out of reach of
-        // the clean above (like `build.log`). A run killed between the worker
-        // writing it and the parent collecting it would otherwise have its
-        // messages replayed against this merge.
-        crate::elog::discard_stale_pending(wd);
-    }
-
-    // `-k`/`--usepkg`: extract the binpkg image *after* the clean above (which
-    // wipes work_dir/image to defeat stale-${D} leakage on re-emerge). The image
-    // is the authoritative payload here — there is no src_compile to repopulate
-    // it — so it must land between the clean and the qmerge walk.
-    if let (Some(wd), Some(bp)) = (work_dir, binpkg) {
-        let image_dir = wd.join("image");
-        std::fs::create_dir_all(image_dir.as_std_path())
-            .with_context(|| format!("creating {image_dir}"))?;
-
-        // GPG verify policy: FEATURES=binpkg-request-signature (or this
-        // binpkg's own binrepos.conf verify-signature=yes, relayed as
-        // `force_verify_signature`) requires a signature to be present;
-        // BINPKG_GPG_VERIFY_GPG_HOME supplies the keyring when configured.
-        // Root-aware default (config_root/etc/portage/gnupg) — never the
-        // real host path for a non-host --root/--target/--prefix, same
-        // class of bug this project already fixed once for PKGDIR.
-        let require_signature =
-            features.contains("binpkg-request-signature") || force_verify_signature;
-        let verify_home = shell
-            .get_var("BINPKG_GPG_VERIFY_GPG_HOME")
-            .map(Utf8PathBuf::from)
-            .unwrap_or_else(|| {
-                config_root
-                    .unwrap_or(Utf8Path::new("/"))
-                    .join("etc/portage/gnupg")
-            });
-        let keyring = portage_binpkg::gpg::load_keyring_dir(verify_home.as_std_path())
-            .with_context(|| format!("loading GPG verify keyring at {verify_home}"))?;
-        if require_signature && keyring.is_none() {
-            bail!(
-                "FEATURES=binpkg-request-signature (or this binpkg's binrepos.conf verify-signature=yes) requires a GPG verify keyring at {verify_home} — run `em maint binpkg gpg-import <keyfile>` first"
-            );
-        }
-        let policy = portage_binpkg::VerifyPolicy {
-            require_signature,
-            keyring: keyring.as_ref(),
-        };
-        portage_binpkg::extract_image(bp.as_std_path(), image_dir.as_std_path(), policy)
-            .with_context(|| format!("extracting image from {bp}"))?;
-    }
-
-    // Install worker: restore the compile parent's captured env so cross-phase
-    // shell state (BUILD_DIR, a custom S, configure-time vars) survives the
-    // process boundary. Source the ebuild first (defines the phase functions
-    // and eclass state), overlay the captured env, then mark the shell
-    // phase-sourced so the phase loop treats install as a later phase of the
-    // same package — re-sourcing would re-assert the default S over the
-    // restored one.
-    if group.should_restore_env()
-        && let Some(wd) = work_dir
-    {
-        let env_path = wd.join("worker-env");
-        if env_path.exists() {
-            shell
-                .source_ebuild(&ebuild)
-                .await
-                .context("sourcing ebuild for env restore")?;
-            shell
-                .source_env_file(env_path.as_std_path())
-                .await
-                .with_context(|| format!("restoring environment {env_path}"))?;
-            shell.mark_phase_sourced(&ebuild);
-        }
-    }
-
-    let fetch_all_uri = matches!(group, PhaseGroup::FetchOnly { all_uri: true });
-    let phases = group.phases();
-    // The chain's outcome is held rather than propagated, so the elog dispatch
-    // below runs whether it succeeded or failed — portage dispatches from a
-    // `finally` (`Scheduler.py`'s `_locked_task_cleanup`) for the same reason:
-    // the `ewarn`/`eerror` a phase raised on its way to dying is precisely the
-    // message elog exists to preserve, and `${T}` is about to be cleaned.
-    let chain_result: Result<()> = async {
-        for phase in &phases {
-            // In the merge chain, src_test only runs under FEATURES=test
-            // (an explicit `em ebuild … test` always runs it).
-            if merge_mode && *phase == RunPhase::TEST && !features.contains("test") {
-                continue;
+            // GPG verify policy: FEATURES=binpkg-request-signature (or this
+            // binpkg's own binrepos.conf verify-signature=yes, relayed as
+            // `force_verify_signature`) requires a signature to be present;
+            // BINPKG_GPG_VERIFY_GPG_HOME supplies the keyring when configured.
+            // Root-aware default (config_root/etc/portage/gnupg) — never the
+            // real host path for a non-host --root/--target/--prefix, same
+            // class of bug this project already fixed once for PKGDIR.
+            let require_signature =
+                features.contains("binpkg-request-signature") || force_verify_signature;
+            let verify_home = shell
+                .get_var("BINPKG_GPG_VERIFY_GPG_HOME")
+                .map(Utf8PathBuf::from)
+                .unwrap_or_else(|| {
+                    config_root
+                        .unwrap_or(Utf8Path::new("/"))
+                        .join("etc/portage/gnupg")
+                });
+            let keyring = portage_binpkg::gpg::load_keyring_dir(verify_home.as_std_path())
+                .with_context(|| format!("loading GPG verify keyring at {verify_home}"))?;
+            if require_signature && keyring.is_none() {
+                bail!(
+                    "FEATURES=binpkg-request-signature (or this binpkg's binrepos.conf verify-signature=yes) requires a GPG verify keyring at {verify_home} — run `em maint binpkg gpg-import <keyfile>` first"
+                );
             }
-
-            // Serialise the merge critical section under `--jobs`: builds (compile
-            // phases) run concurrently, but the qmerge — collision check, VDB
-            // counter, world/profile updates — must not interleave across packages.
-            // The guard is held only for this phase; non-merge phases stay parallel.
-            // The in-process gate only covers tasks in this process; parallel
-            // `__worker` children serialise on the flock (design Q2 — released by
-            // the kernel if a worker dies).
-            let mut _merge_guard = match (merge_gate, *phase) {
-                (Some(gate), RunPhase::Qmerge) => Some(gate.lock().await),
-                _ => None,
+            let policy = portage_binpkg::VerifyPolicy {
+                require_signature,
+                keyring: keyring.as_ref(),
             };
-            let _merge_flock = match (merge_mode, work_dir, *phase) {
-                (true, Some(wd), RunPhase::Qmerge) => Some(
-                    lock_merge_flock(wd)
-                        .await
-                        .ok_or_else(|| anyhow!("could not acquire merge lock"))?,
-                ),
-                _ => None,
-            };
-            let phase_name = phase.to_string();
-            let phase_started = activity.as_ref().map(|a| a.phase_enter(&phase_name));
-            let phase_result = async {
-                run_one_phase(
-                    &mut shell,
-                    &ebuild,
-                    &repo,
-                    *phase,
-                    &work_root,
-                    root,
-                    PhaseContext {
-                        fetch_all_uri,
-                        merge_state: _merge_guard.as_deref_mut(),
-                    },
-                )
-                .await
-            }
-            .instrument(tracing::info_span!("phase", phase = %phase))
-            .await;
-            if let (Some(act), Some(started)) = (activity.as_ref(), phase_started) {
-                // Emit leave even on failure so dashboards do not stick mid-phase.
-                act.phase_leave(&phase_name, started);
-            }
-            phase_result?;
-            drop(_merge_flock);
-            drop(_merge_guard);
+            portage_binpkg::extract_image(bp.as_std_path(), image_dir.as_std_path(), policy)
+                .with_context(|| format!("extracting image from {bp}"))?;
+        }
 
-            // Portage runs ecompress/estrip at the tail of __dyn_install: the
-            // shell still holds the docompress/dostrip lists src_install built
-            // up, and everything downstream (preinst, CONTENTS, qmerge) sees
-            // the final image.
-            if *phase == RunPhase::INSTALL {
-                post_process_after_install(&shell, &work_root, &features)?;
-                // The package holds the image as src_install left it: a binary
-                // install runs pkg_preinst itself, on the installing system.
-                if buildpkg && group.should_buildpkg() {
-                    match build_binpkg_standalone(&mut shell, &ebuild, &work_root, root).await {
-                        Ok(path) => tracing::info!("Created binary package: {path}"),
-                        Err(e) if matches!(group, PhaseGroup::BuildOnly) => {
-                            return Err(e.context("--buildpkgonly: creating binary package"));
+        // Install worker: restore the compile parent's captured env so cross-phase
+        // shell state (BUILD_DIR, a custom S, configure-time vars) survives the
+        // process boundary. Source the ebuild first (defines the phase functions
+        // and eclass state), overlay the captured env, then mark the shell
+        // phase-sourced so the phase loop treats install as a later phase of the
+        // same package — re-sourcing would re-assert the default S over the
+        // restored one.
+        if group.should_restore_env()
+            && let Some(wd) = work_dir
+        {
+            let env_path = wd.join("worker-env");
+            if env_path.exists() {
+                shell
+                    .source_ebuild(&ebuild)
+                    .await
+                    .context("sourcing ebuild for env restore")?;
+                shell
+                    .source_env_file(env_path.as_std_path())
+                    .await
+                    .with_context(|| format!("restoring environment {env_path}"))?;
+                shell.mark_phase_sourced(&ebuild);
+            }
+        }
+
+        let fetch_all_uri = matches!(group, PhaseGroup::FetchOnly { all_uri: true });
+        let phases = group.phases();
+        // The chain's outcome is held rather than propagated, so the elog dispatch
+        // below runs whether it succeeded or failed — portage dispatches from a
+        // `finally` (`Scheduler.py`'s `_locked_task_cleanup`) for the same reason:
+        // the `ewarn`/`eerror` a phase raised on its way to dying is precisely the
+        // message elog exists to preserve, and `${T}` is about to be cleaned.
+        let chain_result: Result<()> = async {
+            for phase in &phases {
+                // In the merge chain, src_test only runs under FEATURES=test
+                // (an explicit `em ebuild … test` always runs it).
+                if merge_mode && *phase == RunPhase::TEST && !features.contains("test") {
+                    continue;
+                }
+
+                // Serialise the merge critical section under `--jobs`: builds (compile
+                // phases) run concurrently, but the qmerge — collision check, VDB
+                // counter, world/profile updates — must not interleave across packages.
+                // The guard is held only for this phase; non-merge phases stay parallel.
+                // The in-process gate only covers tasks in this process; parallel
+                // `__worker` children serialise on the flock (design Q2 — released by
+                // the kernel if a worker dies).
+                let mut _merge_guard = match (merge_gate, *phase) {
+                    (Some(gate), RunPhase::Qmerge) => Some(gate.lock().await),
+                    _ => None,
+                };
+                let _merge_flock = match (merge_mode, work_dir, *phase) {
+                    (true, Some(wd), RunPhase::Qmerge) => Some(
+                        lock_merge_flock(wd)
+                            .await
+                            .ok_or_else(|| anyhow!("could not acquire merge lock"))?,
+                    ),
+                    _ => None,
+                };
+                let phase_name = phase.to_string();
+                let phase_started = activity.as_ref().map(|a| a.phase_enter(&phase_name));
+                let phase_result = async {
+                    run_one_phase(
+                        &mut shell,
+                        &ebuild,
+                        &repo,
+                        *phase,
+                        &work_root,
+                        root,
+                        PhaseContext {
+                            fetch_all_uri,
+                            merge_state: _merge_guard.as_deref_mut(),
+                        },
+                    )
+                    .await
+                }
+                .instrument(tracing::info_span!("phase", phase = %phase))
+                .await;
+                if let (Some(act), Some(started)) = (activity.as_ref(), phase_started) {
+                    // Emit leave even on failure so dashboards do not stick mid-phase.
+                    act.phase_leave(&phase_name, started);
+                }
+                phase_result?;
+                drop(_merge_flock);
+                drop(_merge_guard);
+
+                // Portage runs ecompress/estrip at the tail of __dyn_install: the
+                // shell still holds the docompress/dostrip lists src_install built
+                // up, and everything downstream (preinst, CONTENTS, qmerge) sees
+                // the final image.
+                if *phase == RunPhase::INSTALL {
+                    post_process_after_install(&shell, &work_root, &features)?;
+                    // The package holds the image as src_install left it: a binary
+                    // install runs pkg_preinst itself, on the installing system.
+                    if buildpkg && group.should_buildpkg() {
+                        match build_binpkg_standalone(&mut shell, &ebuild, &work_root, root).await {
+                            Ok(path) => tracing::info!("Created binary package: {path}"),
+                            Err(e) if matches!(group, PhaseGroup::BuildOnly) => {
+                                return Err(e.context("--buildpkgonly: creating binary package"));
+                            }
+                            Err(e) => {
+                                tracing::warn!("--buildpkg failed for {}: {e:#}", ebuild.cpv())
+                            }
                         }
-                        Err(e) => tracing::warn!("--buildpkg failed for {}: {e:#}", ebuild.cpv()),
                     }
                 }
             }
-        }
 
-        // Compile parent: dump the live variables for the Install worker to
-        // source. Lives at work_dir top-level — the Install clean doesn't touch it.
-        if group.should_dump_env() {
-            let env_data = capture_variables(&mut shell, &work_root)
-                .await
-                .map_err(|e| anyhow!("capturing environment for worker-env handoff: {e}"))?;
-            let env_path = work_root.join("worker-env");
-            std::fs::write(env_path.as_std_path(), &env_data)
-                .with_context(|| format!("writing {env_path}"))?;
+            // Compile parent: dump the live variables for the Install worker to
+            // source. Lives at work_dir top-level — the Install clean doesn't touch it.
+            if group.should_dump_env() {
+                let env_data = capture_variables(&mut shell, &work_root)
+                    .await
+                    .map_err(|e| anyhow!("capturing environment for worker-env handoff: {e}"))?;
+                let env_path = work_root.join("worker-env");
+                std::fs::write(env_path.as_std_path(), &env_data)
+                    .with_context(|| format!("writing {env_path}"))?;
+            }
+
+            Ok(())
+        }
+        .await;
+
+        // File the messages the phases left in `${T}/logging` before the build tree
+        // — and with it `${T}` — goes away. This side of the split is the one that
+        // still has the files, and (being the privilege-wrapped `__worker` for a
+        // split build) the one that can write under `<broot>/var/log/portage`; the
+        // parent picks up the `echo` module's share from the work dir afterwards.
+        //
+        // On success only the group that ends the chain dispatches, so a split
+        // build files once (from the worker) rather than twice. A *failure* ends
+        // the chain wherever it happens, so any group dispatches — otherwise a
+        // compile failure in the un-wrapped parent, which never tree-drops, would
+        // lose exactly the diagnostics that explain it.
+        if let Some(wd) = work_dir
+            && (group.should_tree_drop() || chain_result.is_err())
+        {
+            dispatch_elog(&shell, &ebuild, &work_root, wd, roots);
+        }
+        chain_result?;
+
+        // Successful merge chain: drop the build tree, keeping build.log.
+        // FEATURES: keepwork keeps everything; noclean keeps source+temp
+        // (work/temp); keeptemp keeps only temp. image/homedir still go unless
+        // keepwork (stale ${D} must not linger). worker-env is droppable once
+        // install has finished unless keepwork.
+        if group.should_tree_drop()
+            && let Some(wd) = work_dir
+        {
+            let post_subs = ["work", "image", "temp", "homedir"];
+            let keep = filter_clean_subs(&post_subs, &features, CleanWhen::Post);
+            for sub in keep {
+                let _ = std::fs::remove_dir_all(wd.join(sub));
+            }
+            if !features.contains("keepwork") {
+                let _ = std::fs::remove_file(wd.join("worker-env").as_std_path());
+            }
         }
 
         Ok(())
     }
-    .await;
-
-    // File the messages the phases left in `${T}/logging` before the build tree
-    // — and with it `${T}` — goes away. This side of the split is the one that
-    // still has the files, and (being the privilege-wrapped `__worker` for a
-    // split build) the one that can write under `<broot>/var/log/portage`; the
-    // parent picks up the `echo` module's share from the work dir afterwards.
-    //
-    // On success only the group that ends the chain dispatches, so a split
-    // build files once (from the worker) rather than twice. A *failure* ends
-    // the chain wherever it happens, so any group dispatches — otherwise a
-    // compile failure in the un-wrapped parent, which never tree-drops, would
-    // lose exactly the diagnostics that explain it.
-    if let Some(wd) = work_dir
-        && (group.should_tree_drop() || chain_result.is_err())
-    {
-        dispatch_elog(&shell, &ebuild, &work_root, wd, roots);
-    }
-    chain_result?;
-
-    // Successful merge chain: drop the build tree, keeping build.log.
-    // FEATURES: keepwork keeps everything; noclean keeps source+temp
-    // (work/temp); keeptemp keeps only temp. image/homedir still go unless
-    // keepwork (stale ${D} must not linger). worker-env is droppable once
-    // install has finished unless keepwork.
-    if group.should_tree_drop()
-        && let Some(wd) = work_dir
-    {
-        let post_subs = ["work", "image", "temp", "homedir"];
-        let keep = filter_clean_subs(&post_subs, &features, CleanWhen::Post);
-        for sub in keep {
-            let _ = std::fs::remove_dir_all(wd.join(sub));
-        }
-        if !features.contains("keepwork") {
-            let _ = std::fs::remove_file(wd.join("worker-env").as_std_path());
-        }
-    }
-
-    Ok(())
 }
 
 /// Build the ecompress/estrip configuration from the post-`src_install`

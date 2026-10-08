@@ -11,7 +11,7 @@
 //! each half's inputs live:
 //!
 //! - **Collection and the file-writing modules** run at the end of the merge
-//!   chain ([`crate::ebuild`]'s `run_inner`), which is the privilege-wrapped
+//!   chain ([`crate::ebuild`]'s `run_phase_group`), which is the privilege-wrapped
 //!   `em __worker` for a split build. That is the only side that can read
 //!   `${T}` before the build tree is dropped, and the only one that reliably
 //!   has permission to write under `<broot>/var/log/portage`.

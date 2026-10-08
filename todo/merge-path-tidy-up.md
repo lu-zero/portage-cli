@@ -1,6 +1,6 @@
 # Tidy the build-and-merge path: four oversized functions, and the tests to do it safely
 
-Status: 🔴 not started, written 2026-10-08. Decided with Luca: several
+Status: 🟡 first cut done 2026-10-08 (`run_inner` in two), the rest open. Decided with Luca: several
 hundred lines in one function is a problem in itself, and every
 phase-order defect in [[phase-order-and-binpkg]] sat in the seams
 between these four.
@@ -12,7 +12,7 @@ Sizes on branch `phase-order` (2026-10-08):
 | Function | Where | Lines | Does |
 |----------|-------|-------|------|
 | `EbuildShell::run_phase` | `portage-repo/src/build/shell.rs` | 531 | sources the ebuild if needed, derives and exports the whole per-phase environment (directories, roots, `EPREFIX` flip, toolchain selection, `PATH`, `LD_LIBRARY_PATH`), then runs the phase function with its bashrc hooks |
-| `run_inner` | `portage-cli/src/ebuild/mod.rs` | 444 | opens the repo and shell, loads config, cleans the tree, extracts a binary package, restores a worker environment, loops over the phases with locking and activity events, post-processes, packages, dispatches elog, drops the tree |
+| `run_inner` (since split, see below) | `portage-cli/src/ebuild/mod.rs` | 444 | opens the repo and shell, loads config, cleans the tree, extracts a binary package, restores a worker environment, loops over the phases with locking and activity events, post-processes, packages, dispatches elog, drops the tree |
 | `walk_image` | same | 246 | lists the image, decides config protection, and (in merge mode) writes symlinks, directories, files and hardlinks |
 | `run_merge` | same | 236 | `pkg_preinst`, collision check, copy, replaced-package removal, VDB registration, preserved libs, `pkg_postinst`, environment save |
 
@@ -115,14 +115,17 @@ ebuild, the configured shell, the feature set, the work root and the
 roots. `run_inner` becomes "load the setup" followed by "run this group
 on a setup", and the second half is what tests call.
 
-**Names** (Luca, 2026-10-08: `run_inner` is the wrong name). It says
-"the body of something" and nothing about what it does, which is to run
-one `PhaseGroup` for one package; all seven call sites in
-`ebuild/mod.rs` pass a group. Proposed for the split, not applied:
-`PackageSetup::load(…)` for the first half and
-`run_phase_group(&mut setup, group, …)` for the second, with the
-`RunInner` options struct dissolving into the two argument lists.
-(`quickpkg.rs` has an unrelated private `run_inner` of its own.)
+**Names and the first cut** (applied 2026-10-08; Luca: `run_inner` is
+the wrong name). It ran one `PhaseGroup` for one package, so the entry
+point is now `run_phase_group(PhaseGroupRun)`, and it is two calls:
+`PackageSetup::load(&opts)` (about 200 lines, everything in the table
+above) and `setup.run_group(opts)` (about 280, tree preparation, the
+phase loop, the epilogues). Code moved, not rewritten; `MERGE_TYPE` and
+`REPLACING_VERSIONS` went to `run_group` because they depend on the
+group. Both halves still take the whole options struct; narrow that
+when the harness shows what a hand-filled run needs. Checked live:
+baselayout built and merged into a scratch `--prefix`, 39 CONTENTS
+entries as before.
 
 Two things follow:
 
@@ -148,7 +151,7 @@ already populate.
 1. Cases 1, 2, 5 and 7 against `run_merge` as it is (5 and 7 pass only
    on branch `phase-order`).
 2. `run_merge` into steps; `walk_image` into plan/apply.
-3. `run_inner` into "load the setup" and "run a group on it", then the
-   remaining stages; cases 3, 4 and 6 on the second half.
+3. `run_inner` into "load the setup" and "run a group on it" (done),
+   then `run_group` into its stages; cases 3, 4 and 6 on `run_group`.
 4. `run_phase` setup/execution split, then move the collision check.
 5. Items 2, 3 and 7 of [[phase-order-and-binpkg]] onto the new shape.
