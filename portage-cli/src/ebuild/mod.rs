@@ -21,7 +21,7 @@ mod binpkg;
 mod flock;
 mod protect;
 
-use binpkg::{build_binpkg, build_binpkg_standalone, ed_image_dir};
+use binpkg::{build_binpkg_standalone, ed_image_dir};
 use flock::{CleanWhen, acquire_flock, filter_clean_subs, lock_builddir, lock_merge_flock};
 use protect::scan_cfg;
 // `etc`/`quickpkg` resolve config protection through this path.
@@ -1586,6 +1586,17 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             // the final image.
             if *phase == RunPhase::INSTALL {
                 post_process_after_install(&shell, &work_root, &features)?;
+                // The package holds the image as src_install left it: a binary
+                // install runs pkg_preinst itself, on the installing system.
+                if buildpkg && group.should_buildpkg() {
+                    match build_binpkg_standalone(&mut shell, &ebuild, &work_root, root).await {
+                        Ok(path) => tracing::info!("Created binary package: {path}"),
+                        Err(e) if matches!(group, PhaseGroup::BuildOnly) => {
+                            return Err(e.context("--buildpkgonly: creating binary package"));
+                        }
+                        Err(e) => tracing::warn!("--buildpkg failed for {}: {e:#}", ebuild.cpv()),
+                    }
+                }
             }
         }
 
@@ -1600,29 +1611,6 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
                 .with_context(|| format!("writing {env_path}"))?;
         }
 
-        // Build a binary package from the freshly-merged image + VDB entry, if asked.
-        // Runs after qmerge (VDB + CONTENTS written) and before the build tree is
-        // dropped, inside the same privilege session so ${D} ownership/xattrs are
-        // read correctly. `-B`/`BuildOnly` never ran qmerge at all, so it computes
-        // its own scratch metadata instead (`build_binpkg_standalone`) -- and,
-        // unlike `-b`'s packaging (a bonus on top of an already-successful
-        // install), a packaging failure here is the *whole* operation failing,
-        // so it propagates instead of just printing a warning.
-        if buildpkg && group.should_buildpkg() {
-            let is_buildonly = matches!(group, PhaseGroup::BuildOnly);
-            let result = if is_buildonly {
-                build_binpkg_standalone(&mut shell, &ebuild, &work_root, root).await
-            } else {
-                build_binpkg(&shell, &ebuild, &work_root, root)
-            };
-            match result {
-                Ok(path) => tracing::info!("Created binary package: {path}"),
-                Err(e) if is_buildonly => {
-                    return Err(e.context("--buildpkgonly: creating binary package"));
-                }
-                Err(e) => tracing::warn!("--buildpkg failed for {}: {e:#}", ebuild.cpv()),
-            }
-        }
         Ok(())
     }
     .await;

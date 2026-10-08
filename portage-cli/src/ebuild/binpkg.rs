@@ -29,34 +29,14 @@ pub(crate) fn ed_image_dir(shell: &portage_repo::EbuildShell, work_root: &Utf8Pa
         .unwrap_or_else(|| work_root.join("image"))
 }
 
-/// Pack the freshly-merged image (`${D}`) + VDB entry into a GPKG under `PKGDIR`
-/// (default `/var/cache/binpkgs` for a host build, `<root>/var/cache/binpkgs`
-/// otherwise), returning the written path.
-pub(crate) fn build_binpkg(
-    shell: &portage_repo::EbuildShell,
-    ebuild: &Ebuild,
-    work_root: &Utf8Path,
-    root: &Utf8Path,
-) -> Result<Utf8PathBuf> {
-    let cat = ebuild.category();
-    let pf = format!("{}-{}", ebuild.name(), ebuild.version());
-    let vdb_dir = root.join("var/db/pkg").join(cat).join(&pf);
-    anyhow::ensure!(
-        vdb_dir.exists(),
-        "VDB entry {vdb_dir} not found (qmerge did not write it?)"
-    );
-    write_binpkg(shell, ebuild, work_root, root, &vdb_dir)
-}
-
-/// `-B`/`--buildpkgonly`: package the image without ever touching the live ROOT/VDB
+/// Package the image as `src_install` left it, without touching the live ROOT/VDB
 ///
-/// Matches real portage's own model: it never calls `merge()` for `-B` either, packaging
-/// straight from `${D}` instead.
+/// Used by `-b` before the merge and by `-B` instead of one. Packing after the
+/// merge would capture what `pkg_preinst` did to the image, and a binary
+/// install runs `pkg_preinst` again.
 ///
-/// Computes CONTENTS/metadata the exact same way a normal merge would —
-/// `walk_image` + `Vdb::register` — just pointed at scratch locations under
-/// `work_root/temp` rather than the real root and VDB, which are never
-/// written to at any point.
+/// CONTENTS and metadata are computed as a merge would — `walk_image` +
+/// `Vdb::register` — against a scratch VDB under `work_root/temp`.
 pub(crate) async fn build_binpkg_standalone(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
