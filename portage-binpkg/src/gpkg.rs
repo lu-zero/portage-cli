@@ -157,8 +157,10 @@ fn tar_tree(dir: &Path, prefix: &str, out: &Path, xattrs: bool) -> Result<()> {
     cmd.arg("--zstd")
         .arg("--numeric-owner")
         .arg("--format=pax")
-        // Rename the `.`-rooted members to `<prefix>/…`.
-        .arg(format!("--transform=s,^\\.,{prefix},"));
+        // Rename the `.`-rooted members to `<prefix>/…`: member names and
+        // hard link targets, but not symlink targets, which are not paths in
+        // the archive (`../lib/x` must stay `../lib/x`).
+        .arg(format!("--transform=flags=rh;s,^\\.,{prefix},"));
     if xattrs {
         cmd.arg("--xattrs").arg("--xattrs-include=*");
     }
@@ -952,6 +954,9 @@ mod tests {
         fs::write(image.join("usr/bin/hello"), b"#!/bin/sh\necho hi\n").unwrap();
         fs::create_dir_all(image.join("etc")).unwrap();
         fs::write(image.join("etc/foo.conf"), b"key=value\n").unwrap();
+        std::os::unix::fs::symlink("../usr/bin/hello", image.join("etc/up")).unwrap();
+        std::os::unix::fs::symlink("./foo.conf", image.join("etc/here")).unwrap();
+        fs::hard_link(image.join("usr/bin/hello"), image.join("usr/bin/hi")).unwrap();
 
         let meta = root.join("vdb/foo-1.0");
         fs::create_dir_all(&meta).unwrap();
@@ -983,6 +988,15 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(dest.join("etc/foo.conf")).unwrap(),
             "key=value\n"
+        );
+        // Link targets come back as they were written.
+        let target = |link: &str| fs::read_link(dest.join(link)).unwrap();
+        assert_eq!(target("etc/up"), Path::new("../usr/bin/hello"));
+        assert_eq!(target("etc/here"), Path::new("./foo.conf"));
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            fs::metadata(dest.join("usr/bin/hi")).unwrap().ino(),
+            fs::metadata(dest.join("usr/bin/hello")).unwrap().ino()
         );
     }
 
