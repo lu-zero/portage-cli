@@ -1521,7 +1521,11 @@ impl PackageSetup {
                     features.contains("binpkg-request-signature") || force_verify_signature;
                 // Where src_install would have put it: the package holds `ED`.
                 let image = shell.image_ed(&ebuild, wd.as_std_path(), root.as_std_path());
+                // What the installing system configured stays its own. Listed
+                // now, while the shell holds nothing of the package yet.
+                let configured = variable_names(&mut shell, &work_root).await?;
                 extract_binpkg(&shell, bp, &image, config_root, require_signature)?
+                    .map(|saved| (saved, configured))
             }
             _ => None,
         };
@@ -1550,10 +1554,8 @@ impl PackageSetup {
                 // Ahead of pkg_setup and not earlier: pkg_pretend takes no
                 // part in environment saving.
                 if *phase == RunPhase::SETUP
-                    && let Some(saved) = package_environment.take()
+                    && let Some((saved, configured)) = package_environment.take()
                 {
-                    // What the installing system configured stays its own.
-                    let configured = variable_names(&mut shell, &work_root).await?;
                     let shield = Shield {
                         plain: configured.clone(),
                         exported: configured,
@@ -3351,10 +3353,14 @@ async fn restore_package_variables(
     let path = temp.join("environment.binpkg");
     std::fs::write(path.as_std_path(), variables).with_context(|| format!("writing {path}"))?;
 
-    shell
-        .source_ebuild(ebuild)
-        .await
-        .context("sourcing ebuild for the saved environment")?;
+    // Sourcing twice would skip the eclasses, whose include guards are set,
+    // and leave the ebuild's own globals without their contributions.
+    if !shell.is_phase_sourced(ebuild) {
+        shell
+            .source_ebuild(ebuild)
+            .await
+            .context("sourcing ebuild for the saved environment")?;
+    }
     shell
         .source_env_file(path.as_std_path())
         .await
@@ -4017,7 +4023,8 @@ mod tests {
         assert!(!probe.path("root/var/db/pkg/app-misc/intruder-7").exists());
     }
 
-    const NOTES_ITS_PHASES: &str = "pkg_setup() { note \"setup:${MERGE_TYPE}\"; }\n\
+    const NOTES_ITS_PHASES: &str = "PLAIN=global\n\
+         pkg_setup() { note \"setup:${MERGE_TYPE}\"; }\n\
          src_install() { export FROM_INSTALL=built; PLAIN=too; dodir /usr/share/probe; \
          echo hi > \"${ED}/usr/share/probe/file\" || die; }\n\
          pkg_preinst() { note \"preinst:${MERGE_TYPE}:${FROM_INSTALL-lost}:${PLAIN-lost}\"; \
