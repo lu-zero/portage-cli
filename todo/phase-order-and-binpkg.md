@@ -214,13 +214,19 @@ nothing); workspace 2264 tests, clippy, fmt, rustdoc clean.
   test. The saved variables now go on top of the sourced ebuild there
   too.
 
-Found on the way, not fixed:
+Found on the way, fixed 2026-10-09:
 
-- The saved environment holds the build process's environment, e.g.
-  `LD_PRELOAD`. `pkg_prerm`/`pkg_postrm` source the whole dump at
-  uninstall, so they get it back.
-- `setup::host_tools::tests::resolve_takes_the_first_extra_path_hit_that_behaves`
-  failed once in a full run and passed three times alone.
+- **The saved environment held `em`'s own process environment**
+  (`LD_PRELOAD` of the fake-root library, `SSH_AUTH_SOCK`, …), in the
+  VDB and in every binary package. An exported variable that still has
+  the value `em` was started with is no longer saved; one the build
+  changed is. Live: 152 exported entries before, 140 after, `LD_PRELOAD`
+  gone, `PATH`/`HOME`/`CFLAGS` kept.
+- **A flaky test**, `setup::host_tools::…resolve_takes_the_first_extra_path_hit_that_behaves`:
+  the fake tool it writes could be busy (ETXTBSY) when run, because
+  another test's fork still held it open. The helper now waits that out.
+  Five full runs clean.
+
 - **5, second half — collisions before `pkg_preinst`.** Done without
   waiting for the whole `run_phase` split: the derivation of the
   effective `EPREFIX` and of `ED` moved out of `run_phase` into

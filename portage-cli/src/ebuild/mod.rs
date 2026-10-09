@@ -3079,7 +3079,34 @@ async fn capture_environment(
     // them is never meaningful since a fresh shell already has them set.
     let dump = capture_shell_dump(shell, work_root, "{ declare -p; declare -f; }").await?;
     let text = String::from_utf8_lossy(&dump);
-    Ok(filter_declare_dump(&text).into_bytes())
+    let text = filter_declare_dump(&text);
+    Ok(drop_inherited_environment(&text, |name| std::env::var(name).ok()).into_bytes())
+}
+
+/// Drop from a `declare -p` dump the exported variables that still hold the
+/// value `em` itself was started with
+///
+/// Those are the invoking process's environment (`LD_PRELOAD` under a fake
+/// root, `SSH_AUTH_SOCK`, …), not the package's state, and the dump goes into
+/// the VDB and into binary packages. A value the build changed is kept; so is
+/// one whose quoting is not the plain `"…"` form, to stay on the safe side.
+fn drop_inherited_environment(text: &str, inherited: impl Fn(&str) -> Option<String>) -> String {
+    let plain = |value: &str| !value.contains(['"', '\\', '$', '`', '\n']);
+    text.lines()
+        .filter(|line| {
+            let Some(rest) = line.strip_prefix("declare -x ") else {
+                return true;
+            };
+            let Some((name, quoted)) = rest.split_once('=') else {
+                return true;
+            };
+            !inherited(name).is_some_and(|value| plain(&value) && quoted == format!("\"{value}\""))
+        })
+        .fold(String::with_capacity(text.len()), |mut acc, l| {
+            acc.push_str(l);
+            acc.push('\n');
+            acc
+        })
 }
 
 /// Variables-only dump for the Compile→Install worker handoff
@@ -3986,6 +4013,27 @@ mod tests {
                 "third\"\n",
                 "declare -a MY_LIST=([0]=\"a\")\n",
             )
+        );
+    }
+
+    #[test]
+    fn drop_inherited_environment_keeps_what_the_build_changed() {
+        let dump = concat!(
+            "declare -x LD_PRELOAD=\"/fake/root.so\"\n",
+            "declare -x PATH=\"/build/bin:/usr/bin\"\n",
+            "declare -x ODD=\"a\\$b\"\n",
+            "declare -- LD_PRELOAD_NOTE=\"/fake/root.so\"\n",
+            "pkg_setup () \n",
+        );
+        let inherited = |name: &str| match name {
+            "LD_PRELOAD" => Some("/fake/root.so".to_owned()),
+            "PATH" => Some("/usr/bin".to_owned()),
+            "ODD" => Some("a$b".to_owned()),
+            _ => None,
+        };
+        assert_eq!(
+            drop_inherited_environment(dump, inherited),
+            dump.replace("declare -x LD_PRELOAD=\"/fake/root.so\"\n", "")
         );
     }
 
