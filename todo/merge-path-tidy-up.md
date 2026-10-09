@@ -1,7 +1,8 @@
 # Tidy the build-and-merge path: four oversized functions, and the tests to do it safely
 
-Status: 🟡 harness, `run_merge` and `run_group` done 2026-10-09; `walk_image`
-and the rest of `run_phase` open. See "Progress" at the end. Decided with Luca: several
+Status: 🟢 all four functions cut 2026-10-09, with tests. Two items left,
+both under "Open" at the end: more of `run_phase`, and the missing-profile
+policy, which is a decision. Decided with Luca: several
 hundred lines in one function is a problem in itself, and every
 phase-order defect in [[phase-order-and-binpkg]] sat in the seams
 between these four.
@@ -182,14 +183,30 @@ already populate.
   public `image_ed` came out, which was what the collision check
   needed. The function is still about 500 lines.
 
+- **`walk_image`: 246 → 64 lines.** The loop is the traversal; each
+  entry goes to `ImagePass`, with one method per kind (`dir`, `symlink`,
+  `file`) and `install_file`. Not the plan/apply split noted above: the
+  image is listed before `pkg_preinst` and merged after it, so a plan
+  cannot be reused, and the second walk stays. Live: baselayout's
+  CONTENTS identical before and after.
+- **`run_phase`: 531 → 441 lines.** `root_vars` builds the `RootVars`
+  value its own comment asked for. Live: the eight root variables of a
+  prefix build are unchanged.
+- **`run_group` takes a `GroupRun`**, the nine fields it uses, not the
+  whole `PhaseGroupRun`.
+- **`REPLACING_VERSIONS`** has its test.
+
+Sizes now: `run_phase` 441, `PackageSetup::load` 196, `run_group` 191,
+`run_merge` 176, `walk_image` 64.
+
 Open:
 
-- `walk_image` into plan and apply (246 lines, one flag, 14 tests).
-- The rest of `run_phase`: its own comment already asks for a
-  `RootVars { root, eprefix, ed, eroot, sysroot, esysroot }` value
-  built by one function; then toolchain selection and `PATH`.
-- `PackageSetup::load` and `run_group` still share the whole
-  `PhaseGroupRun`; the tests show `run_group` needs `group`, `work_dir`,
-  `root`, `roots`, `buildpkg`, `binpkg` and little else.
-- Whether a missing profile becomes an error in `load`.
-- A test for `REPLACING_VERSIONS`.
+- **More of `run_phase`.** Toolchain selection, `PATH` and helper
+  shims, and the sourcing with its `E_*` accumulation are separable
+  blocks. 55 shell tests cover them.
+- **A missing profile.** `PackageSetup::load` warns and builds without
+  profile defaults. Not changed, because it is not local: `em`'s merge
+  driver (`emerge.rs`), `em info`, config protection and `em use` all
+  accept a missing profile the same way and say so. Making the build
+  path alone an error would be inconsistent; making all of them errors
+  is a policy change. Luca to decide.

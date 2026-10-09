@@ -1213,7 +1213,45 @@ struct PhaseGroupRun<'a> {
 
 async fn run_phase_group(opts: PhaseGroupRun<'_>) -> Result<()> {
     let setup = PackageSetup::load(&opts).await?;
-    setup.run_group(opts).await
+    let PhaseGroupRun {
+        group,
+        work_dir,
+        root,
+        roots,
+        merge_gate,
+        buildpkg,
+        binpkg,
+        force_verify_signature,
+        activity,
+        ..
+    } = opts;
+    setup
+        .run_group(GroupRun {
+            group,
+            work_dir,
+            root,
+            roots,
+            merge_gate,
+            buildpkg,
+            binpkg,
+            force_verify_signature,
+            activity,
+        })
+        .await
+}
+
+/// What [`PackageSetup::run_group`] needs besides the setup: the group and
+/// where it works. The fields are those of [`PhaseGroupRun`].
+struct GroupRun<'a> {
+    group: &'a PhaseGroup,
+    work_dir: Option<&'a Utf8Path>,
+    root: &'a Utf8Path,
+    roots: RootContext<'a>,
+    merge_gate: Option<&'a MergeGate>,
+    buildpkg: bool,
+    binpkg: Option<&'a Utf8Path>,
+    force_verify_signature: bool,
+    activity: Option<crate::activity::ActivityPkgCtx>,
 }
 
 /// One package ready for its phases: the configuration read and applied
@@ -1435,7 +1473,7 @@ impl PackageSetup {
     }
 
     /// Run `opts.group` for this package
-    async fn run_group(self, opts: PhaseGroupRun<'_>) -> Result<()> {
+    async fn run_group(self, opts: GroupRun<'_>) -> Result<()> {
         // The lock is bound first so that it is released last.
         let Self {
             _builddir_lock,
@@ -1445,7 +1483,7 @@ impl PackageSetup {
             work_root,
             features,
         } = self;
-        let PhaseGroupRun {
+        let GroupRun {
             group,
             work_dir,
             root,
@@ -1455,7 +1493,6 @@ impl PackageSetup {
             binpkg,
             force_verify_signature,
             activity,
-            ..
         } = opts;
         let config_root = roots.config_root;
         shell.set_merge_type(match group {
@@ -3833,16 +3870,10 @@ mod tests {
                 _builddir_lock: None,
             };
             setup
-                .run_group(PhaseGroupRun {
-                    ebuild_path: ebuild.path().as_str(),
-                    cpv: None,
+                .run_group(GroupRun {
                     group: &group,
                     work_dir: Some(&work),
-                    repo_override: None,
                     root: &root,
-                    use_flags: None,
-                    distdir: None,
-                    phase_log: None,
                     roots: RootContext::default(),
                     merge_gate: None,
                     buildpkg: true,
