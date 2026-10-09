@@ -1823,15 +1823,31 @@ async fn run_one_phase(
         RunPhase::Fetch => run_fetch(shell, ebuild, repo, work_root, context.fetch_all_uri).await,
         RunPhase::Clean => run_clean(work_root),
         RunPhase::Qmerge => run_merge(shell, ebuild, work_root, root, context.merge_state).await,
-        RunPhase::Ebuild(p) => shell
-            .run_phase(
-                ebuild,
-                p.as_str(),
-                work_root.as_std_path(),
-                root.as_std_path(),
-            )
-            .await
-            .with_context(|| format!("phase {phase} failed")),
+        RunPhase::Ebuild(p) => {
+            // PMS: pkg_pretend takes no part in environment saving, so nothing
+            // it sets may reach pkg_setup. An ebuild known not to define it
+            // keeps the shell, and with it the sourcing, as it is.
+            let defines_pretend = repo
+                .cache_entry(ebuild.cpv())
+                .ok()
+                .flatten()
+                .is_none_or(|e| e.metadata.defined_phases.contains(&p));
+            let session =
+                (phase == RunPhase::PRETEND && defines_pretend).then(|| shell.save_session());
+            let result = shell
+                .run_phase(
+                    ebuild,
+                    p.as_str(),
+                    work_root.as_std_path(),
+                    root.as_std_path(),
+                )
+                .await
+                .with_context(|| format!("phase {phase} failed"));
+            if let Some(session) = session {
+                shell.restore_session(session);
+            }
+            result
+        }
     }
 }
 
@@ -3478,6 +3494,43 @@ mod tests {
     // (or the other bash dynamic vars) into the Install worker pins a stale
     // snapshot that brush never resizes on later pipelines.
     // The fix is simply never dumping them in the first place.
+    /// A one-package repository in `dir`, for tests that run real phases
+    fn probe_repo(dir: &std::path::Path, phases: &str) -> (Repository, Ebuild) {
+        let repo = Utf8Path::from_path(dir).unwrap().join("repo");
+        fs::create_dir_all(repo.join("metadata")).unwrap();
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(repo.join("app-misc/probe")).unwrap();
+        fs::write(repo.join("metadata/layout.conf"), "masters =\n").unwrap();
+        fs::write(repo.join("profiles/repo_name"), "probe\n").unwrap();
+        let path = repo.join("app-misc/probe/probe-1.ebuild");
+        let head = "EAPI=8\nDESCRIPTION=\"probe\"\nSLOT=\"0\"\nS=\"${WORKDIR}\"\n";
+        fs::write(&path, format!("{head}{phases}")).unwrap();
+        let repo = Repository::builder().in_memory_cache().open(&repo).unwrap();
+        (repo, Ebuild::from_path(&path).unwrap())
+    }
+
+    #[tokio::test]
+    async fn pkg_pretend_leaves_nothing_for_pkg_setup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, ebuild) = probe_repo(
+            tmp.path(),
+            "pkg_pretend() { FROM_PRETEND=1; }\npkg_setup() { FROM_SETUP=1; }\n",
+        );
+        let mut shell = repo.shell().await.unwrap();
+        let work = Utf8PathBuf::try_from(tmp.path().join("work")).unwrap();
+        for phase in [RunPhase::PRETEND, RunPhase::SETUP] {
+            let context = PhaseContext {
+                fetch_all_uri: false,
+                merge_state: None,
+            };
+            run_one_phase(&mut shell, &ebuild, &repo, phase, &work, &work, context)
+                .await
+                .unwrap();
+        }
+        assert_eq!(shell.get_var("FROM_SETUP").as_deref(), Some("1"));
+        assert_eq!(shell.get_var("FROM_PRETEND"), None);
+    }
+
     #[test]
     fn filter_declare_dump_drops_readonly_and_dynamic_vars() {
         let dump = concat!(
