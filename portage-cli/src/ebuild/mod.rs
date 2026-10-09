@@ -2037,6 +2037,101 @@ async fn run_fetch(
     Ok(())
 }
 
+/// Refuse the merge when another installed package owns one of `planned`'s paths
+fn check_collisions(
+    planned: &[ContentsEntry],
+    vdb: &Vdb,
+    index: Option<&OwnershipIndex>,
+    replaced: Option<&portage_atom::Cpv>,
+) -> Result<()> {
+    let collisions = match index {
+        Some(index) => index.find_collisions(planned, replaced),
+        None => vdb
+            .find_collisions(planned, replaced)
+            .context("collision check failed")?,
+    };
+    if collisions.is_empty() {
+        return Ok(());
+    }
+    for c in &collisions {
+        crate::style::warn_line!("collision: {} is already owned by {}", c.path, c.owner);
+    }
+    bail!(
+        "{} file collision(s) detected — aborting merge",
+        collisions.len()
+    );
+}
+
+/// Record the merged package in the VDB, with its ebuild and its environment
+/// as it was before `pkg_preinst`
+fn register_merged(
+    vdb: &Vdb,
+    ebuild: &Ebuild,
+    env: EbuildEnv,
+    contents: Vec<ContentsEntry>,
+    size: u64,
+    image_dir: &Utf8Path,
+    env_dump: &std::result::Result<Vec<u8>, String>,
+) -> Result<(InstalledPackage, MergeSpec)> {
+    let build_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let counter = vdb.next_counter()?;
+    let elf = crate::elfscan::scan_image(image_dir);
+    let spec = merge_spec_from_env(
+        env,
+        ebuild.cpv().clone(),
+        contents,
+        elf,
+        size,
+        build_time,
+        counter,
+    );
+    let installed = vdb.register(&spec)?;
+
+    // Copy the ebuild into the VDB entry as `<PF>.ebuild`, as portage does.
+    let pf = format!("{}-{}", ebuild.name(), ebuild.version());
+    let ebuild_dest = installed.path().join(format!("{pf}.ebuild"));
+    if let Err(e) = std::fs::copy(ebuild.path(), ebuild_dest.as_std_path()) {
+        crate::style::warn_line!("could not copy ebuild into VDB: {e}");
+    }
+
+    if let Ok(data) = env_dump
+        && let Err(e) = write_environment_bz2(&installed, data)
+    {
+        crate::style::warn_line!("could not write environment.bz2: {e}");
+    }
+
+    // debug, not info: this is internal VDB bookkeeping (the counter), and
+    // at info level it was rendered with the enclosing `phase{phase="qmerge"}:`
+    // span label leaking straight into default output — real portage has no
+    // equivalent line at all in normal mode.
+    tracing::debug!(
+        "merge: {}/{}-{} registered (counter={counter})",
+        ebuild.category(),
+        ebuild.name(),
+        ebuild.version()
+    );
+    Ok((installed, spec))
+}
+
+/// Tell the user which config files were installed under a `._cfg` name
+fn report_protected(protected: &[Utf8PathBuf]) {
+    if protected.is_empty() {
+        return;
+    }
+    println!();
+    crate::style::einfo_line!(
+        "{} protected config file(s) were installed with a ._cfg name.",
+        protected.len()
+    );
+    crate::style::einfo_line!("Run `em dispatch` (dispatch-conf) or `em etc` to merge them:");
+    for p in protected {
+        crate::style::einfo_line!("  {p}");
+    }
+}
+
 async fn run_merge(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
@@ -2106,21 +2201,12 @@ async fn run_merge(
     } else {
         None
     };
-    let collisions = if let Some(index) = ownership_index.as_ref() {
-        index.find_collisions(&planned, exclude_cpv.as_ref())
-    } else {
-        vdb.find_collisions(&planned, exclude_cpv.as_ref())
-            .context("collision check failed")?
-    };
-    if !collisions.is_empty() {
-        for c in &collisions {
-            crate::style::warn_line!("collision: {} is already owned by {}", c.path, c.owner);
-        }
-        bail!(
-            "{} file collision(s) detected — aborting merge",
-            collisions.len()
-        );
-    }
+    check_collisions(
+        &planned,
+        &vdb,
+        ownership_index.as_ref(),
+        exclude_cpv.as_ref(),
+    )?;
 
     let WalkResult {
         contents,
@@ -2176,22 +2262,8 @@ async fn run_merge(
             }
         }
 
-        let build_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let counter = vdb.next_counter()?;
-        let elf = crate::elfscan::scan_image(&image_dir);
-        let spec = merge_spec_from_env(
-            env,
-            ebuild.cpv().clone(),
-            contents,
-            elf,
-            size,
-            build_time,
-            counter,
-        );
-        let installed = vdb.register(&spec)?;
+        let (installed, spec) =
+            register_merged(&vdb, ebuild, env, contents, size, &image_dir, &env_dump)?;
         preserve.package_added(&installed);
         if let Some(index) = ownership_index.as_mut() {
             index.add_package(&installed, &spec.contents);
@@ -2202,43 +2274,7 @@ async fn run_merge(
             local_preserve_finished = true;
         }
 
-        // Copy the ebuild into the VDB entry as `<PF>.ebuild`, as portage does.
-        let pf = format!("{}-{}", ebuild.name(), ebuild.version());
-        let ebuild_dest = installed.path().join(format!("{pf}.ebuild"));
-        if let Err(e) = std::fs::copy(ebuild.path(), ebuild_dest.as_std_path()) {
-            crate::style::warn_line!("could not copy ebuild into VDB: {e}");
-        }
-
-        if let Ok(ref data) = env_dump
-            && let Err(e) = write_environment_bz2(&installed, data)
-        {
-            crate::style::warn_line!("could not write environment.bz2: {e}");
-        }
-
-        // debug, not info: this is internal VDB bookkeeping (the counter), and
-        // at info level it was rendered with the enclosing `phase{phase="qmerge"}:`
-        // span label leaking straight into default output — real portage has no
-        // equivalent line at all in normal mode.
-        tracing::debug!(
-            "merge: {}/{}-{} registered (counter={counter})",
-            ebuild.category(),
-            ebuild.name(),
-            ebuild.version()
-        );
-
-        if !protected.is_empty() {
-            println!();
-            crate::style::einfo_line!(
-                "{} protected config file(s) were installed with a ._cfg name.",
-                protected.len()
-            );
-            crate::style::einfo_line!(
-                "Run `em dispatch` (dispatch-conf) or `em etc` to merge them:"
-            );
-            for p in &protected {
-                crate::style::einfo_line!("  {p}");
-            }
-        }
+        report_protected(&protected);
 
         shell
             .run_phase(
