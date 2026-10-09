@@ -307,6 +307,19 @@ pub struct EbuildShell {
     use_flags: HashSet<String>,
 }
 
+/// The root-model variables of one phase, see [`EbuildShell::root_vars`]
+struct RootVars {
+    root: String,
+    eprefix: String,
+    /// `D` plus `EPREFIX`
+    ed: String,
+    /// `ROOT` plus `EPREFIX`: the merge root
+    eroot: String,
+    /// Without its trailing slash (autotools.eclass bug 654600)
+    sysroot: String,
+    esysroot: String,
+}
+
 /// A saved snapshot from [`EbuildShell::save_session`]: the live bash state
 /// plus the bookkeeping that decides whether a later `run_phase` needs to
 /// re-source. Opaque to callers — pass it straight to `restore_session`.
@@ -880,6 +893,66 @@ impl EbuildShell {
             root_str.trim_end_matches('/').to_string()
         } else {
             eprefix
+        }
+    }
+
+    /// `ROOT`, `EPREFIX`, `ED`, `EROOT`, `SYSROOT` and `ESYSROOT` for a package
+    /// merging into `root_str` (which ends in `/`) with its image at `d`
+    ///
+    /// Derived together because each is defined in terms of the others.
+    fn root_vars(
+        &self,
+        host_codegen: bool,
+        cross_triple: Option<&str>,
+        root_str: &str,
+        d: &Path,
+    ) -> RootVars {
+        let eprefix = self.effective_eprefix(host_codegen, root_str);
+        // SYSROOT = the base the build resolves DEPEND against (the host for
+        // a --prefix overlay; ROOT otherwise). SYSROOT's trailing slash is
+        // stripped ("/"→"") to avoid autotools.eclass bug 654600.
+        let sysroot = match self.build_sysroot.as_deref() {
+            Some(p) => {
+                let s = p.as_str();
+                if s.ends_with('/') {
+                    s.to_string()
+                } else {
+                    format!("{s}/")
+                }
+            }
+            None => root_str.to_owned(),
+        };
+        let sysroot_trimmed = sysroot.trim_end_matches('/');
+        // ESYSROOT = SYSROOT + EPREFIX (PMS 11.1), where DEPEND's headers and
+        // libraries are. Under `--local` that is the prefix while SYSROOT stays
+        // `/`, so no `--sysroot` is passed and the compiler keeps the host libc.
+        let esysroot = if let (true, Some(triple)) = (host_codegen, cross_triple) {
+            // toolchain.eclass `--with-build-sysroot` wants the cross sysroot.
+            format!("{root_str}usr/{triple}/")
+        } else if cross_triple.is_some() && sysroot_trimmed.is_empty() && !eprefix.is_empty() {
+            // glibc's `${ESYSROOT}$(alt_headers)` already appends /usr/${CTARGET}.
+            root_str.to_owned()
+        } else if eprefix.is_empty() || self.build_sysroot.is_none() || sysroot_trimmed.is_empty() {
+            // No base to nest EPREFIX under: `sysroot` is already the install
+            // target, or a plain `--prefix` overlay whose SYSROOT is the host `/`
+            // (PMS table 8.3). Appending EPREFIX would double the path or point
+            // the compiler into a prefix that has no headers yet.
+            sysroot.clone()
+        } else {
+            format!("{}/{}/", sysroot_trimmed, eprefix.trim_start_matches('/'))
+        };
+        RootVars {
+            // The live ROOT is `/` for a package configured for an EPREFIX.
+            root: if eprefix.is_empty() {
+                root_str.to_owned()
+            } else {
+                "/".to_owned()
+            },
+            ed: format!("{}/", Self::ed_under(d, &eprefix).display()),
+            eroot: root_str.to_owned(),
+            sysroot: sysroot_trimmed.to_owned(),
+            esysroot,
+            eprefix,
         }
     }
 
@@ -1730,7 +1803,7 @@ impl EbuildShell {
         // stage under `ED = D + EPREFIX`. Without an eprefix this is a no-op
         // (ROOT = EROOT = root, EPREFIX = "", ED = D) — host/`--prefix` paths
         // are unchanged.
-        let eprefix = self.effective_eprefix(host_codegen, &root_str);
+        let roots = self.root_vars(host_codegen, cross_triple.as_deref(), &root_str, &d);
 
         // A build-time tool the package compiles and re-executes may need
         // its own just-built or host-shared libs. See todo/for-sonnet.md
@@ -1745,12 +1818,7 @@ impl EbuildShell {
             self.set_var("LD_LIBRARY_PATH", &combined);
         }
 
-        let root_var = if eprefix.is_empty() {
-            root_str.clone()
-        } else {
-            "/".to_string()
-        };
-        self.set_var("ROOT", &root_var);
+        self.set_var("ROOT", &roots.root);
         self.set_var("MERGE_TYPE", self.merge_type.as_str());
         // PORTAGE_CONFIGROOT: where profile/make.conf live (host unless offset).
         let configroot = self
@@ -1763,13 +1831,9 @@ impl EbuildShell {
         // EPREFIX/ED/EROOT are PMS EAPI-3+ vars, but the install helpers use
         // `${ED}` unconditionally, so always set them (ED == D when EPREFIX is
         // empty, matching portage's EAPI 0-2 behaviour).
-        self.set_var("EPREFIX", &eprefix);
-        // ED = D + EPREFIX (the prefix subtree within the image); == D when
-        // EPREFIX is empty.
-        let ed = format!("{}/", Self::ed_under(&d, &eprefix).display());
-        self.set_var("ED", &ed);
-        // EROOT = ROOT + EPREFIX, i.e. the merge root.
-        self.set_var("EROOT", &root_str);
+        self.set_var("EPREFIX", &roots.eprefix);
+        self.set_var("ED", &roots.ed);
+        self.set_var("EROOT", &roots.eroot);
         // Autoconf's own config.site discovery checks `${--prefix}/share/
         // config.site`, but a board-destined package under `--target`
         // correctly gets an empty EPREFIX, so it can never reach crossdev's
@@ -1780,60 +1844,8 @@ impl EbuildShell {
             self.set_var("CONFIG_SITE", broot.join("usr/share/config.site").as_str());
         }
         if eapi >= Eapi::Seven {
-            // SYSROOT = the base the build resolves DEPEND against (the host for
-            // a --prefix overlay; ROOT otherwise). SYSROOT's trailing slash is
-            // stripped ("/"→"") to avoid autotools.eclass bug 654600.
-            let sysroot = match self.build_sysroot.as_deref() {
-                Some(p) => {
-                    let s = p.as_str();
-                    if s.ends_with('/') {
-                        s.to_string()
-                    } else {
-                        format!("{s}/")
-                    }
-                }
-                None => root_str.clone(),
-            };
-            let sysroot_trimmed = sysroot.trim_end_matches('/');
-            self.set_var("SYSROOT", sysroot_trimmed);
-            // ESYSROOT = SYSROOT + EPREFIX (PMS 11.1): the location of DEPEND
-            // headers/libs/data. For `--local` this is the prefix (SYSROOT=/ +
-            // EPREFIX=~/.gentoo), so ebuilds that reference `${ESYSROOT}/usr`
-            // (e.g. spirv-tools' `-DSPIRV-Headers_SOURCE_DIR`) find prefix-built
-            // deps — while SYSROOT stays `/`, so cmake/autotools do NOT pass
-            // `--sysroot` and the compiler keeps host glibc (features.h). They
-            // are equal (no EPREFIX) for host / ROOT-offset `--prefix` builds.
-            //
-            // Host cross tools need ESYSROOT = cross sysroot (`<EROOT>/usr/<T>/`)
-            // for toolchain.eclass `--with-build-sysroot`. Target packages keep
-            // SYSROOT+EPREFIX (else alt_prefix doubles `/usr/<T>`).
-            //
-            // When `build_sysroot` is None, `sysroot` already is the full
-            // install target (`--local`, or a cross-arch `--target` sysroot
-            // with base==target); do not append outer eprefix or ESYSROOT
-            // doubles and breaks header search.
-            //
-            // `sysroot_trimmed.is_empty()` (SYSROOT is the bare host `/`) is
-            // a plain `--prefix` overlay: `build_sysroot()` fell back to `/`
-            // for lack of a separate base to nest `eprefix` under (PMS table
-            // 8.3: SYSROOT empty, ROOT non-empty and different from it ⇒
-            // ESYSROOT = BROOT, not ROOT+EPREFIX). Appending `eprefix` onto
-            // `/` here used to produce `--with-build-sysroot=<prefix>/`,
-            // sending the compiler into the still-headerless prefix.
-            let esysroot = if let (true, Some(triple)) = (host_codegen, cross_triple.as_deref()) {
-                format!("{root_str}usr/{triple}/")
-            } else if cross_triple.is_some() && sysroot_trimmed.is_empty() && !eprefix.is_empty() {
-                // glibc's `${ESYSROOT}$(alt_headers)` already appends /usr/${CTARGET}.
-                root_str.clone()
-            } else if eprefix.is_empty()
-                || self.build_sysroot.is_none()
-                || sysroot_trimmed.is_empty()
-            {
-                sysroot.clone()
-            } else {
-                format!("{}/{}/", sysroot_trimmed, eprefix.trim_start_matches('/'))
-            };
-            self.set_var("ESYSROOT", &esysroot);
+            self.set_var("SYSROOT", &roots.sysroot);
+            self.set_var("ESYSROOT", &roots.esysroot);
             self.set_var("BROOT", "/");
 
             // Host cross tools under a prefix compiler: BDEPENDs like elfutils
