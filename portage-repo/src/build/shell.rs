@@ -307,6 +307,79 @@ pub struct EbuildShell {
     use_flags: HashSet<String>,
 }
 
+/// The variables the package manager itself provides to a phase and exports
+///
+/// External processes (make, ./configure, …) inherit them. CHOST, CBUILD and
+/// CTARGET are here because a `source`d assignment is not exported by itself.
+pub const PM_EXPORTED_VARS: &[&str] = &[
+    "CATEGORY",
+    "PN",
+    "PV",
+    "PR",
+    "PVR",
+    "P",
+    "PF",
+    "FILESDIR",
+    "WORKDIR",
+    "S",
+    "T",
+    "D",
+    "TMPDIR",
+    "EAPI",
+    "EBUILD",
+    "HOME",
+    "ROOT",
+    "DISTDIR",
+    "PORTAGE_BIN_PATH",
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "EBUILD_PHASE",
+    "EBUILD_PHASE_FUNC",
+    "MERGE_TYPE",
+    "EPREFIX",
+    "ED",
+    "EROOT",
+    "SYSROOT",
+    "ESYSROOT",
+    "BROOT",
+    "PORTAGE_CONFIGROOT",
+    "USE",
+    "CONFIG_SITE",
+    "PORTAGE_INST_UID",
+    "PORTAGE_INST_GID",
+    "REPLACING_VERSIONS",
+    "REPLACED_BY_VERSION",
+    "MAKEOPTS",
+    "CFLAGS",
+    "CXXFLAGS",
+    "CPPFLAGS",
+    "LDFLAGS",
+    "CC",
+    "CXX",
+    "AR",
+    "RANLIB",
+    "NM",
+    "STRIP",
+    "INSDESTTREE",
+    "EXEDESTTREE",
+    "DOCDESTTREE",
+    "DESTTREE",
+    "_into_dir",
+    "_insopts",
+    "_exeopts",
+    "MOPREFIX",
+    "ABI",
+    "CONF_LIBDIR",
+    "CHOST",
+    "CBUILD",
+    "CTARGET",
+    "ARCH",
+    "COLUMNS",
+    "NOCOLOR",
+    "NO_COLOR",
+    "TERM",
+];
+
 /// The root-model variables of one phase, see [`EbuildShell::root_vars`]
 struct RootVars {
     root: String,
@@ -1907,20 +1980,9 @@ impl EbuildShell {
         // in-shell. CHOST/CBUILD/CTARGET must be here: see [the sourced-env
         // sweep](../../../docs/design/build-environment.md) for why `source`d
         // assignments need it, and the openssl `gentoo.config` breakage.
-        self.run_string(
-            "export CATEGORY PN PV PR PVR P PF FILESDIR WORKDIR S T D TMPDIR EAPI EBUILD \
-             HOME ROOT DISTDIR PORTAGE_BIN_PATH PATH LD_LIBRARY_PATH EBUILD_PHASE \
-             EBUILD_PHASE_FUNC \
-             MERGE_TYPE EPREFIX ED EROOT SYSROOT ESYSROOT BROOT PORTAGE_CONFIGROOT USE \
-             CONFIG_SITE \
-             PORTAGE_INST_UID PORTAGE_INST_GID \
-             REPLACING_VERSIONS REPLACED_BY_VERSION \
-             MAKEOPTS CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CC CXX AR RANLIB NM STRIP \
-             INSDESTTREE EXEDESTTREE DOCDESTTREE DESTTREE _into_dir _insopts _exeopts \
-             MOPREFIX ABI CONF_LIBDIR CHOST CBUILD CTARGET ARCH COLUMNS NOCOLOR NO_COLOR TERM",
-        )
-        .await
-        .ok();
+        self.run_string(&format!("export {}", PM_EXPORTED_VARS.join(" ")))
+            .await
+            .ok();
 
         // Source the ebuild — defines all phase functions and global variables —
         // only on the first phase of the package; later phases reuse the carried

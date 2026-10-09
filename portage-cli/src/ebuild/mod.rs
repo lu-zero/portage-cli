@@ -1552,8 +1552,13 @@ impl PackageSetup {
                 if *phase == RunPhase::SETUP
                     && let Some(saved) = package_environment.take()
                 {
+                    // What the installing system configured stays its own.
                     let configured = variable_names(&mut shell, &work_root).await?;
-                    restore_package_variables(&mut shell, &ebuild, &work_root, &saved, &configured)
+                    let shield = Shield {
+                        plain: configured.clone(),
+                        exported: configured,
+                    };
+                    restore_package_variables(&mut shell, &ebuild, &work_root, &saved, &shield)
                         .await?;
                 }
 
@@ -1905,13 +1910,12 @@ async fn run_one_phase(
             // PMS: pkg_pretend takes no part in environment saving, so nothing
             // it sets may reach pkg_setup. An ebuild known not to define it
             // keeps the shell, and with it the sourcing, as it is.
-            let defines_pretend = repo
-                .cache_entry(ebuild.cpv())
-                .ok()
-                .flatten()
-                .is_none_or(|e| e.metadata.defined_phases.contains(&p));
+            let defines_pretend = || {
+                let entry = repo.cache_entry(ebuild.cpv()).ok().flatten();
+                entry.is_none_or(|e| e.metadata.defined_phases.contains(&p))
+            };
             let session =
-                (phase == RunPhase::PRETEND && defines_pretend).then(|| shell.save_session());
+                (phase == RunPhase::PRETEND && defines_pretend()).then(|| shell.save_session());
             let result = shell
                 .run_phase(
                     ebuild,
@@ -2459,13 +2463,19 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
     let old_sourced = match &old_ebuild {
         Some(e) => {
             // What the package's own phases set when it was installed. It was
-            // saved on this system, so nothing here has to be shielded from it.
-            if let Ok(saved) = std::fs::read(old_pkg.path().join("environment.bz2"))
-                && let Err(e) =
-                    restore_package_variables(shell, e, old_work_root, &saved, &HashSet::new())
-                        .await
-            {
-                crate::style::warn_line!("could not restore the saved environment: {e:#}");
+            // saved on this system, so its plain variables go in as they are;
+            // an exported one yields to what this shell already exports.
+            if let Ok(saved) = std::fs::read(old_pkg.path().join("environment.bz2")) {
+                let restored = async {
+                    let shield = Shield {
+                        plain: HashSet::new(),
+                        exported: variable_names(shell, old_work_root).await?,
+                    };
+                    restore_package_variables(shell, e, old_work_root, &saved, &shield).await
+                };
+                if let Err(e) = restored.await {
+                    crate::style::warn_line!("could not restore the saved environment: {e:#}");
+                }
             }
             shell
                 .run_phase(e, "prerm", old_work_root.as_std_path(), root.as_std_path())
@@ -3257,14 +3267,23 @@ fn filter_declare_dump(text: &str) -> String {
         })
 }
 
-/// The shell variables a binary package's saved environment adds to a shell
-/// that holds the installing system's configuration
+/// Which saved variables a shell does not take from a package: it has its own
+#[derive(Default)]
+struct Shield {
+    /// Names whose plain (not exported) variable stays the shell's
+    plain: HashSet<String>,
+    /// Names whose exported variable stays the shell's
+    exported: HashSet<String>,
+}
+
+/// The variables a package's saved environment adds to a shell
 ///
-/// `dump` is `declare -p` output followed by function definitions. Kept: plain
-/// variables whose name is not in `configured`. Exported ones are environment,
-/// which the installing system and a fresh `pkg_setup` provide. Functions come
-/// from the ebuild: a printed body with a heredoc does not parse back.
-fn package_variables(dump: &str, configured: &HashSet<String>) -> String {
+/// `dump` is `declare -p` output followed by function definitions. Left out:
+/// what `shield` names, read-only and bash-maintained variables, and the
+/// exported ones the package manager provides to every phase anyway.
+/// Functions come from the ebuild: a printed body with a heredoc does not
+/// parse back.
+fn package_variables(dump: &str, shield: &Shield) -> String {
     let mut out = String::new();
     let mut keep = false;
     let mut lines = dump.lines().peekable();
@@ -3278,9 +3297,12 @@ fn package_variables(dump: &str, configured: &HashSet<String>) -> String {
         if let Some(rest) = line.strip_prefix("declare -") {
             let flags = rest.split_whitespace().next().unwrap_or("");
             let name = declared_name(line).unwrap_or("");
-            keep = !flags.contains(['r', 'x'])
-                && !DYNAMIC_VAR_DENYLIST.contains(&name)
-                && !configured.contains(name);
+            let shielded = if flags.contains('x') {
+                shield.exported.contains(name) || portage_repo::PM_EXPORTED_VARS.contains(&name)
+            } else {
+                shield.plain.contains(name)
+            };
+            keep = !flags.contains('r') && !DYNAMIC_VAR_DENYLIST.contains(&name) && !shielded;
         }
         // A line that is not a declaration continues the value above it.
         if keep {
@@ -3314,18 +3336,18 @@ async fn variable_names(
 /// PMS keeps a variable's value from one phase function to the next, a later
 /// uninstall included; for a binary package the earlier ones ran where it was
 /// built. As for the install worker, the ebuild is sourced for its functions
-/// and the variables go on top, except those named in `configured`.
+/// and the variables go on top, except those `shield` keeps.
 async fn restore_package_variables(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
     work_root: &Utf8Path,
     saved_bz2: &[u8],
-    configured: &HashSet<String>,
+    shield: &Shield,
 ) -> Result<()> {
     let temp = work_root.join("temp");
     std::fs::create_dir_all(temp.as_std_path()).with_context(|| format!("creating {temp}"))?;
     let dump = decompress_bzip2(saved_bz2).map_err(|e| anyhow!("saved environment: {e}"))?;
-    let variables = package_variables(&String::from_utf8_lossy(&dump), configured);
+    let variables = package_variables(&String::from_utf8_lossy(&dump), shield);
     let path = temp.join("environment.binpkg");
     std::fs::write(path.as_std_path(), variables).with_context(|| format!("writing {path}"))?;
 
@@ -3949,9 +3971,10 @@ mod tests {
             "probe",
             "1",
             &format!(
-                "{INSTALLS_A_FILE}pkg_postinst() {{ FROM_POSTINST=kept; }}\n\
-                 pkg_prerm() {{ note \"prerm-1:by=${{REPLACED_BY_VERSION}}\"; }}\n\
-                 pkg_postrm() {{ note \"postrm-1:${{FROM_POSTINST-lost}}\"; }}\n"
+                "IUSE=\"flag\"\n{INSTALLS_A_FILE}\
+                 pkg_postinst() {{ FROM_POSTINST=kept; export EXPORTED=too; }}\n\
+                 pkg_prerm() {{ use flag; note \"prerm-1:by=${{REPLACED_BY_VERSION}}\"; }}\n\
+                 pkg_postrm() {{ note \"postrm-1:${{FROM_POSTINST-lost}}:${{EXPORTED-lost}}\"; }}\n"
             ),
         );
         let new = probe.ebuild(
@@ -3967,7 +3990,7 @@ mod tests {
 
         assert_eq!(
             probe.log(),
-            "install install preinst-2 prerm-1:by=2 postrm-1:kept postinst-2"
+            "install install preinst-2 prerm-1:by=2 postrm-1:kept:too postinst-2"
         );
         let file = fs::read_to_string(probe.path("root/usr/share/probe/file")).unwrap();
         assert_eq!(file.trim(), "2");
@@ -3995,9 +4018,9 @@ mod tests {
     }
 
     const NOTES_ITS_PHASES: &str = "pkg_setup() { note \"setup:${MERGE_TYPE}\"; }\n\
-         src_install() { FROM_INSTALL=built; dodir /usr/share/probe; \
+         src_install() { export FROM_INSTALL=built; PLAIN=too; dodir /usr/share/probe; \
          echo hi > \"${ED}/usr/share/probe/file\" || die; }\n\
-         pkg_preinst() { note \"preinst:${MERGE_TYPE}:${FROM_INSTALL-lost}\"; \
+         pkg_preinst() { note \"preinst:${MERGE_TYPE}:${FROM_INSTALL-lost}:${PLAIN-lost}\"; \
          rm \"${ED}/usr/share/probe/file\" || die; }\n\
          pkg_postinst() { note postinst; }\n";
 
@@ -4030,8 +4053,8 @@ mod tests {
         // can only do the second time if the package still held it.
         assert_eq!(
             probe.log(),
-            "setup:source preinst:source:built postinst \
-             setup:binary preinst:binary:built postinst"
+            "setup:source preinst:source:built:too postinst \
+             setup:binary preinst:binary:built:too postinst"
         );
         let contents = |root: &str| {
             let path = probe
@@ -4084,6 +4107,8 @@ mod tests {
         let dump = concat!(
             "declare -- CHOST=\"build-host\"\n",
             "declare -x LD_PRELOAD=\"/build/lib.so\"\n",
+            "declare -x PATH=\"/build/bin\"\n",
+            "declare -x EPYTHON=\"python3.14\"\n",
             "declare -r FROZEN=\"1\"\n",
             "declare -a PIPESTATUS=([0]=\"0\")\n",
             "declare -- MY_STATE=\"first\n",
@@ -4095,10 +4120,14 @@ mod tests {
             "    declare -- INSIDE=\"body\"\n",
             "}\n",
         );
-        let configured = HashSet::from(["CHOST".to_owned()]);
+        let shield = Shield {
+            plain: HashSet::from(["CHOST".to_owned()]),
+            exported: HashSet::from(["LD_PRELOAD".to_owned()]),
+        };
         assert_eq!(
-            package_variables(dump, &configured),
+            package_variables(dump, &shield),
             concat!(
+                "declare -x EPYTHON=\"python3.14\"\n",
                 "declare -- MY_STATE=\"first\n",
                 "second ()\n",
                 "third\"\n",
