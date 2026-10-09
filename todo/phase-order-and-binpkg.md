@@ -190,12 +190,12 @@ nothing); workspace 2264 tests, clippy, fmt, rustdoc clean.
     heredoc does not parse back (same reason the worker handoff carries
     variables only). A package whose ebuild has left the tree, or
     changed, is therefore still not installed from its own code.
-  - **Exported variables are not restored.** They cannot be told apart
-    from the build process's own environment, which the dump also
-    holds (`LD_PRELOAD` of the fake-root library, for one). `pkg_setup`
-    running again covers the usual exported ones (`PYTHON`, …); a
-    variable exported in a `src_*` phase and read in `pkg_postinst` is
-    lost.
+  - **Exported variables: restored since the second pass** (same day).
+    Once the saved environment stopped holding the build process's own
+    environment they could be told apart. One is restored unless the
+    phase runner provides it to every phase (`PM_EXPORTED_VARS`) or the
+    shell already has its own. Packages built before that fix still
+    carry the builder's environment, `LD_PRELOAD` included.
 - **7 — `pkg_pretend`.** Its shell state is thrown away when it returns,
   for ebuilds that define it; others keep the single sourcing. A binary
   install now runs it too, before the saved variables are applied. It

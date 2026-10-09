@@ -196,14 +196,15 @@ already populate.
   whole `PhaseGroupRun`.
 - **`REPLACING_VERSIONS`** has its test.
 
-Sizes now: `run_phase` 441, `PackageSetup::load` 196, `run_group` 191,
-`run_merge` 176, `walk_image` 64.
+Sizes now: `run_phase` 313 (second pass: the helper shims, the bashrc
+hooks and the phase function call are methods), `PackageSetup::load`
+196, `run_group` 191, `run_merge` 176, `walk_image` 64.
 
 Open:
 
-- **More of `run_phase`.** Toolchain selection, `PATH` and helper
-  shims, and the sourcing with its `E_*` accumulation are separable
-  blocks. 55 shell tests cover them.
+- **More of `run_phase`.** What is left is mostly `set_var` calls in
+  sequence; the sourcing with its `E_*` accumulation is the one block
+  that could still come out.
 - **A missing profile: stays a warning** (Luca, 2026-10-09), as in the
   merge driver, `em info`, config protection and `em use`. Note that
   this is *not* what emerge does: `_emerge/main.py::profile_check`

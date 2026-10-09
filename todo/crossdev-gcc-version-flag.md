@@ -1,6 +1,9 @@
 # `em crossdev` needs a GCC version/slot pin flag (real crossdev's `--gcc`)
 
-Status: 🔴 not started. Found 2026-08-24 while auditing whether `em` can
+Status: ⚪ superseded 2026-10-07 by [[cross-sysroot-spec]]: a version is
+an atom in the spec, not a flag. A first flag-based implementation was
+written and dropped that day. Kept for the description of the gap.
+Found 2026-08-24 while auditing whether `em` can
 replace real `crossdev`/`emerge` in `~/Sources/crossdev-stages` (a separate
 project building bootable board images) — see that project's own
 `todo/em-replaces-crossdev-gcc-pin.md` for the caller-side workaround.

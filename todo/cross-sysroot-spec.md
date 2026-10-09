@@ -161,8 +161,10 @@ bootstrap.
 
 Still reading `CrossTarget` instead of the spec:
 
-- The GCC-model package names in `toolchain_plan` (`binutils`, `gcc`)
-  are still literals; only the LLVM-model ones come from the spec.
+- The kernel-headers atom of the plan: the cross provider or
+  `virtual/os-headers` for native, chosen by `BootstrapKind`.
+- A spec with no toolchain at all makes `toolchain_plan` panic; loading
+  a file (step 3) has to reject it.
 - **Host-or-target env per package** (`cross_package_arch`): a table
   keyed by package name, not something the spec states. A spec naming a
   package outside the table gets the host environment, as `--ex-pkg`
