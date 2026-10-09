@@ -49,9 +49,11 @@ enum PhaseGroup {
     ///
     /// Does NOT wipe `work/` (the compile artifacts live there); only `image/temp/homedir`.
     Install,
-    /// Merge a pre-built GPKG (`-k`/`-g`): clean → extract image → `qmerge` → tree-drop
+    /// Merge a pre-built GPKG (`-k`/`-g`): clean → extract image and saved variables →
+    /// `pretend,setup,qmerge` → tree-drop
     ///
-    /// No src_install — the extracted image is the payload.
+    /// PMS has a binary install skip the `src_*` phases only; the extracted image is the
+    /// payload.
     BinpkgMerge,
     /// `-B`/`--buildpkgonly`: clean → `pretend..install` → buildpkg → tree-drop
     ///
@@ -150,7 +152,7 @@ impl PhaseGroup {
                 P::TEST,
             ],
             Self::Install => vec![P::INSTALL, P::Qmerge],
-            Self::BinpkgMerge => vec![P::Qmerge],
+            Self::BinpkgMerge => vec![P::PRETEND, P::SETUP, P::Qmerge],
             Self::BuildOnly => vec![
                 P::PRETEND,
                 P::SETUP,
@@ -806,9 +808,9 @@ pub struct MergeBinpkg<'a> {
 }
 
 /// Merge a pre-built binary package (`-k`/`--usepkg`): extract the GPKG's image
-/// into the work tree, then run only the `qmerge` phase (which sources the
-/// ebuild for env/hooks and merges from `work_root/image`). Skips fetch →
-/// compile entirely. The caller has already validated the binpkg is reusable
+/// and saved variables into the work tree, then run `pkg_setup` and the merge
+/// from `work_root/image`. The ebuild in the repository supplies the phase
+/// functions. The caller has already validated the binpkg is reusable
 /// (version + USE + slot match) via [`portage_binpkg::BinpkgIndex`].
 pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
     let MergeBinpkg {
@@ -1516,6 +1518,7 @@ impl PackageSetup {
         // wipes work_dir/image to defeat stale-${D} leakage on re-emerge). The image
         // is the authoritative payload here — there is no src_compile to repopulate
         // it — so it must land between the clean and the qmerge walk.
+        let mut package_environment = None;
         if let (Some(wd), Some(bp)) = (work_dir, binpkg) {
             let image_dir = wd.join("image");
             std::fs::create_dir_all(image_dir.as_std_path())
@@ -1551,6 +1554,8 @@ impl PackageSetup {
             };
             portage_binpkg::extract_image(bp.as_std_path(), image_dir.as_std_path(), policy)
                 .with_context(|| format!("extracting image from {bp}"))?;
+            package_environment = portage_binpkg::read_environment(bp.as_std_path())
+                .with_context(|| format!("reading the saved environment of {bp}"))?;
         }
 
         // Install worker: restore the compile parent's captured env so cross-phase
@@ -1590,6 +1595,14 @@ impl PackageSetup {
                 // (an explicit `em ebuild … test` always runs it).
                 if merge_mode && *phase == RunPhase::TEST && !features.contains("test") {
                     continue;
+                }
+
+                // Ahead of pkg_setup and not earlier: pkg_pretend takes no
+                // part in environment saving.
+                if *phase == RunPhase::SETUP
+                    && let Some(saved) = package_environment.take()
+                {
+                    restore_package_variables(&mut shell, &ebuild, &work_root, &saved).await?;
                 }
 
                 // Serialise the merge critical section under `--jobs`: builds (compile
@@ -3063,6 +3076,76 @@ fn filter_declare_dump(text: &str) -> String {
         })
 }
 
+/// The shell variables a binary package's saved environment adds to a shell
+/// that holds the installing system's configuration
+///
+/// `dump` is `declare -p` output followed by function definitions. Kept: plain
+/// variables whose name is not in `configured`. Exported ones are environment,
+/// which the installing system and a fresh `pkg_setup` provide. Functions come
+/// from the ebuild: a printed body with a heredoc does not parse back.
+fn package_variables(dump: &str, configured: &HashSet<&str>) -> String {
+    let mut out = String::new();
+    let mut keep = false;
+    let mut lines = dump.lines().peekable();
+    while let Some(line) = lines.next() {
+        let is_function = !line.starts_with(char::is_whitespace)
+            && line.trim_end().ends_with(" ()")
+            && lines.peek().is_some_and(|next| next.trim_end() == "{");
+        if is_function {
+            break;
+        }
+        if let Some(rest) = line.strip_prefix("declare -") {
+            let flags = rest.split_whitespace().next().unwrap_or("");
+            let name = declared_name(line).unwrap_or("");
+            keep = !flags.contains(['r', 'x'])
+                && !DYNAMIC_VAR_DENYLIST.contains(&name)
+                && !configured.contains(name);
+        }
+        // A line that is not a declaration continues the value above it.
+        if keep {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Give the shell what the package's earlier phases left in their variables
+///
+/// PMS keeps a variable's value from one phase function to the next; for a
+/// binary package the earlier ones ran where it was built. As for the install
+/// worker, the ebuild is sourced for its functions and the variables go on top.
+async fn restore_package_variables(
+    shell: &mut portage_repo::EbuildShell,
+    ebuild: &Ebuild,
+    work_root: &Utf8Path,
+    saved_bz2: &[u8],
+) -> Result<()> {
+    let temp = work_root.join("temp");
+    std::fs::create_dir_all(temp.as_std_path()).with_context(|| format!("creating {temp}"))?;
+    let configured = capture_variables(shell, work_root)
+        .await
+        .map_err(|e| anyhow!("listing the configured variables: {e}"))?;
+    let configured = String::from_utf8_lossy(&configured);
+    let configured: HashSet<&str> = configured.lines().filter_map(declared_name).collect();
+
+    let dump = decompress_bzip2(saved_bz2).map_err(|e| anyhow!("saved environment: {e}"))?;
+    let variables = package_variables(&String::from_utf8_lossy(&dump), &configured);
+    let path = temp.join("environment.binpkg");
+    std::fs::write(path.as_std_path(), variables).with_context(|| format!("writing {path}"))?;
+
+    shell
+        .source_ebuild(ebuild)
+        .await
+        .context("sourcing ebuild for the saved environment")?;
+    shell
+        .source_env_file(path.as_std_path())
+        .await
+        .with_context(|| format!("restoring the saved environment {path}"))?;
+    shell.mark_phase_sourced(ebuild);
+    Ok(())
+}
+
 async fn capture_variables(
     shell: &mut portage_repo::EbuildShell,
     work_root: &Utf8Path,
@@ -3529,6 +3612,34 @@ mod tests {
         }
         assert_eq!(shell.get_var("FROM_SETUP").as_deref(), Some("1"));
         assert_eq!(shell.get_var("FROM_PRETEND"), None);
+    }
+
+    #[test]
+    fn package_variables_keeps_what_the_build_set_and_the_host_did_not() {
+        let dump = concat!(
+            "declare -- CHOST=\"build-host\"\n",
+            "declare -x LD_PRELOAD=\"/build/lib.so\"\n",
+            "declare -r FROZEN=\"1\"\n",
+            "declare -a PIPESTATUS=([0]=\"0\")\n",
+            "declare -- MY_STATE=\"first\n",
+            "second ()\n",
+            "third\"\n",
+            "declare -a MY_LIST=([0]=\"a\")\n",
+            "pkg_setup () \n",
+            "{ \n",
+            "    declare -- INSIDE=\"body\"\n",
+            "}\n",
+        );
+        let configured = HashSet::from(["CHOST"]);
+        assert_eq!(
+            package_variables(dump, &configured),
+            concat!(
+                "declare -- MY_STATE=\"first\n",
+                "second ()\n",
+                "third\"\n",
+                "declare -a MY_LIST=([0]=\"a\")\n",
+            )
+        );
     }
 
     #[test]

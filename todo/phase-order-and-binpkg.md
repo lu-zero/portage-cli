@@ -1,7 +1,9 @@
 # Phase order around install, packaging and merge
 
-Status: 🟡 audit done 2026-10-08; items 1, 4, 5 and 6 fixed the same day on
-branch `phase-order`; 2, 3 and 7 open. See "Progress" at the end. Started from
+Status: 🟢 audit done 2026-10-08; items 1 to 7 fixed 2026-10-08/09. One
+difference from Portage is left, the collision check running after
+`pkg_preinst`, and it waits on [[merge-path-tidy-up]]. See "Progress" at
+the end. Started from
 one failure (a binary package of `sys-apps/baselayout` that cannot be
 installed) and widened to how `em` orders the phases against PMS and
 Portage 3.0.82.
@@ -170,13 +172,51 @@ directory to compute CONTENTS; it scans it.
 Checks: one new unit test (a scan lists what a merge installs and writes
 nothing); workspace 2264 tests, clippy, fmt, rustdoc clean.
 
+## Progress (2026-10-09)
+
+- **2 — `pkg_setup` on a binary install.** The binary group is now
+  `pretend, setup, qmerge`. Live with a probe ebuild that logs each
+  phase: `pretend, setup, preinst, postinst`, all with
+  `MERGE_TYPE=binary`.
+- **3 — the package's saved state.** Before `pkg_setup` the ebuild is
+  sourced for its functions and the package's saved variables are put
+  on top, as the install worker already does across its process
+  boundary. Live: a plain variable set in `src_install` on the build
+  side is seen by `pkg_setup`, `pkg_preinst` and `pkg_postinst` of the
+  binary install.
+  What is restored: variables that are not exported, not read-only, and
+  not already set by the installing system's configuration. Limits:
+  - **Functions still come from the repository's ebuild.** The saved
+    function bodies are not used because a printed body containing a
+    heredoc does not parse back (same reason the worker handoff carries
+    variables only). A package whose ebuild has left the tree, or
+    changed, is therefore still not installed from its own code.
+  - **Exported variables are not restored.** They cannot be told apart
+    from the build process's own environment, which the dump also
+    holds (`LD_PRELOAD` of the fake-root library, for one). `pkg_setup`
+    running again covers the usual exported ones (`PYTHON`, …); a
+    variable exported in a `src_*` phase and read in `pkg_postinst` is
+    lost.
+- **7 — `pkg_pretend`.** Its shell state is thrown away when it returns,
+  for ebuilds that define it; others keep the single sourcing. A binary
+  install now runs it too, before the saved variables are applied. It
+  still runs per package, just before `pkg_setup`, not for the whole
+  plan up front as emerge does; PMS leaves the time open.
+- **`-B` leaving `lib lib64 usr var` in an empty root: not an `em`
+  defect.** baselayout's own `pkg_setup` writes the library layout into
+  `EROOT`, and `-B` runs `pkg_setup`. Portage does the same. A probe
+  ebuild built with `-B` leaves only `em`'s own `var/` state.
+
+Found on the way, not fixed:
+
+- The saved environment holds the build process's environment, e.g.
+  `LD_PRELOAD`. `pkg_prerm`/`pkg_postrm` source the whole dump at
+  uninstall, so they get it back.
+- `setup::host_tools::tests::resolve_takes_the_first_extra_path_hit_that_behaves`
+  failed once in a full run and passed three times alone.
+
 Open:
 
-- **2 — `pkg_setup` on a binary install** and **3 — its environment.**
-  The package does carry `metadata/environment.bz2`, so the data for 3
-  is there. Both belong together: run `setup` from the saved
-  environment, then the merge.
-- **7 — `pkg_pretend`.** Untouched.
 - **Collision check before `pkg_preinst`** (the remaining half of 5).
   Two effects of checking after it, as `em` does:
   - an abort leaves whatever `pkg_preinst` already did to `ROOT` (a
@@ -192,5 +232,3 @@ Open:
   function" there gives the merge a way to learn `ED` before any phase,
   and the scan then moves ahead of `pkg_preinst` in every case,
   including a bare `em ebuild … qmerge`.
-- Seen in passing, not investigated: `-B` into an empty `--root` left
-  `lib lib64 usr var` there, although nothing should be installed.

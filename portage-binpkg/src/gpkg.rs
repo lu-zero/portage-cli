@@ -805,6 +805,38 @@ fn decompress_to_file(compressed: &Path, out: &Path) -> Result<()> {
 /// what [`write_gpkg`] packs into `<basename>/metadata.tar.zst` and what the
 /// binhost `Packages` index and the `-k` consumer read back.
 pub fn read_metadata(container: &Path) -> Result<BTreeMap<String, String>> {
+    let staging = stage_metadata(container)?;
+
+    // Read each field file. Skip binary/large non-field members.
+    let mut map = BTreeMap::new();
+    for entry in std::fs::read_dir(staging.path().join("metadata"))? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "environment.bz2" || name.ends_with(".ebuild") {
+            continue;
+        }
+        let content = std::fs::read_to_string(entry.path())?;
+        map.insert(name, content.trim_end_matches('\n').to_string());
+    }
+    Ok(map)
+}
+
+/// The package's saved build environment (`metadata/environment.bz2`), still
+/// compressed; `None` when the package carries none.
+///
+/// Not signature-checked here. A consumer that requires signatures calls
+/// [`extract_image`] with its policy first.
+pub fn read_environment(container: &Path) -> Result<Option<Vec<u8>>> {
+    let staging = stage_metadata(container)?;
+    match std::fs::read(staging.path().join("metadata/environment.bz2")) {
+        Ok(data) => Ok(Some(data)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Unpack the container's `metadata/` directory into a temporary directory
+fn stage_metadata(container: &Path) -> Result<tempfile::TempDir> {
     let staging = tempfile::Builder::new().prefix("em-gpkg-read-").tempdir()?;
     let root = staging.path().to_path_buf();
 
@@ -831,19 +863,7 @@ pub fn read_metadata(container: &Path) -> Result<BTreeMap<String, String>> {
             .arg(&root),
     )?;
 
-    // 5. Read each field file. Skip binary/large non-field members.
-    let mut map = BTreeMap::new();
-    let meta_dir = root.join("metadata");
-    for entry in std::fs::read_dir(&meta_dir)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name == "environment.bz2" || name.ends_with(".ebuild") {
-            continue;
-        }
-        let content = std::fs::read_to_string(entry.path())?;
-        map.insert(name, content.trim_end_matches('\n').to_string());
-    }
-    Ok(map)
+    Ok(staging)
 }
 
 #[cfg(test)]
@@ -914,6 +934,10 @@ mod tests {
         // The skipped members must not appear.
         assert!(!out.contains_key("environment.bz2"));
         assert!(!out.contains_key("foo-1.0.ebuild"));
+        assert_eq!(
+            read_environment(&container).unwrap().as_deref(),
+            Some(&b"not real bzip"[..])
+        );
     }
 
     // `extract_image` recovers the image tree with the `image/` prefix stripped

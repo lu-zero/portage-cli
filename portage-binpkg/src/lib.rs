@@ -28,7 +28,7 @@ pub mod scan;
 pub use error::{Error, Result};
 pub use gpg::{Keyring, SigningKey};
 pub use gpkg::{
-    GpkgInput, SignatureReport, VerifyPolicy, extract_image, read_metadata,
+    GpkgInput, SignatureReport, VerifyPolicy, extract_image, read_environment, read_metadata,
     verify_container_signature, write_gpkg,
 };
 pub use index::{
