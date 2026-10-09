@@ -2812,22 +2812,22 @@ fn walk_image(
     rewrite_d: bool,
     walk: Walk,
 ) -> Result<WalkResult> {
-    let merge = walk == Walk::Merge;
-    if !image_dir.exists() {
-        return Ok(WalkResult {
+    let mut pass = ImagePass {
+        d_dir,
+        cp,
+        rewrite_d,
+        walk,
+        result: WalkResult {
             contents: vec![],
             size: 0,
             protected: vec![],
-        });
+        },
+        hardlinks: std::collections::HashMap::new(),
+    };
+    if !image_dir.exists() {
+        return Ok(pass.result);
     }
 
-    let mut contents: Vec<ContentsEntry> = Vec::new();
-    let mut total_size: u64 = 0;
-    let mut protected: Vec<Utf8PathBuf> = Vec::new();
-    // Source (dev, ino) -> first merged dest, for re-creating intra-image
-    // hardlinks as shared inodes in ROOT.
-    let mut hardlinks: std::collections::HashMap<(u64, u64), Utf8PathBuf> =
-        std::collections::HashMap::new();
     let mut queue: std::collections::VecDeque<Utf8PathBuf> = std::collections::VecDeque::new();
     queue.push_back(image_dir.to_path_buf());
 
@@ -2848,207 +2848,249 @@ fn walk_image(
             // Reject `..` / absolute components in the relative image path so a
             // hostile image cannot write outside dest_root.
             let dest_path = safe_dest_under(dest_root, &Utf8PathBuf::from("/").join(rel))?;
-            let installed = Utf8PathBuf::from("/").join(rel);
+            let entry = ImageEntry {
+                installed: Utf8PathBuf::from("/").join(rel),
+                meta: std::fs::symlink_metadata(src_path.as_std_path())
+                    .with_context(|| format!("stat {src_path}"))?,
+                src_path,
+                dest_path,
+            };
 
-            let meta = std::fs::symlink_metadata(src_path.as_std_path())
-                .with_context(|| format!("stat {src_path}"))?;
-
-            if meta.file_type().is_symlink() {
-                let raw_target = std::fs::read_link(src_path.as_std_path())
-                    .with_context(|| format!("readlink {src_path}"))?;
-                let mut target: Utf8PathBuf = raw_target
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("non-UTF-8 symlink target"))?;
-                if rewrite_d
-                    && target.is_absolute()
-                    && let Ok(rest) = target.strip_prefix(d_dir)
-                {
-                    let rewritten = Utf8PathBuf::from("/").join(rest);
-                    tracing::info!(
-                        "rewriting absolute symlink {installed} -> {target} to {rewritten}"
-                    );
-                    target = rewritten;
-                }
-                // Symlinks are config-protectable too (portage bug #485598):
-                // divert when an existing link points somewhere different.
-                let write_path = if cp.is_protected(&installed) {
-                    match std::fs::read_link(dest_path.as_std_path()) {
-                        Ok(existing) if existing == target.as_std_path() => dest_path.clone(),
-                        Ok(_) => {
-                            let (next, latest) = scan_cfg(&dest_path);
-                            let reuse = latest.filter(|p| {
-                                std::fs::read_link(p.as_std_path())
-                                    .is_ok_and(|t| t == target.as_std_path())
-                            });
-                            protected.push(installed.clone());
-                            reuse.unwrap_or(next)
-                        }
-                        Err(_) => dest_path.clone(),
-                    }
-                } else {
-                    dest_path.clone()
-                };
-                if merge {
-                    if std::fs::symlink_metadata(write_path.as_std_path()).is_ok() {
-                        std::fs::remove_file(write_path.as_std_path())
-                            .with_context(|| format!("removing {write_path}"))?;
-                    }
-                    std::os::unix::fs::symlink(target.as_std_path(), write_path.as_std_path())
-                        .with_context(|| format!("symlink {write_path}"))?;
-                    // Preserve the link's own mtime (std follows symlinks; this
-                    // does not), so the on-disk time matches CONTENTS.
-                    set_symlink_times(&write_path, &meta);
-                    preserve_owner(&write_path, &meta);
-                }
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs());
-                contents.push(ContentsEntry {
-                    kind: ContentsKind::Sym,
-                    path: installed,
-                    md5: None,
-                    mtime,
-                    target: Some(target),
-                });
-            } else if meta.is_dir() {
-                if merge {
-                    std::fs::create_dir_all(dest_path.as_std_path())
-                        .with_context(|| format!("mkdir {dest_path}"))?;
-                    preserve_owner(&dest_path, &meta);
-                }
-                contents.push(ContentsEntry {
-                    kind: ContentsKind::Dir,
-                    path: installed,
-                    md5: None,
-                    mtime: None,
-                    target: None,
-                });
-                queue.push_back(src_path);
-            } else if meta.is_file() {
-                if walk == (Walk::Scan { digests: false }) {
-                    total_size += meta.len();
-                    contents.push(ContentsEntry {
-                        kind: ContentsKind::Obj,
-                        path: installed,
-                        md5: None,
-                        mtime: None,
-                        target: None,
-                    });
-                    continue;
-                }
-                if merge && let Some(parent) = dest_path.parent() {
-                    std::fs::create_dir_all(parent.as_std_path())
-                        .with_context(|| format!("mkdir {parent}"))?;
-                }
-                let src_data = std::fs::read(src_path.as_std_path())
-                    .with_context(|| format!("reading {src_path}"))?;
-                let md5_str = format!("{:x}", md5::compute(&src_data));
-
-                // Config protection: an existing, differing file in a
-                // protected path is written to a `._cfg` sidecar (.keep
-                // placeholders are never protected). CONTENTS still records
-                // the real path with the new md5, matching portage.
-                let is_keep = meta.len() == 0
-                    && installed
-                        .file_name()
-                        .is_some_and(|n| n.starts_with(".keep"));
-                let write_path = if !is_keep
-                    && cp.is_protected(&installed)
-                    && std::fs::symlink_metadata(dest_path.as_std_path()).is_ok()
-                {
-                    let same = std::fs::read(dest_path.as_std_path())
-                        .is_ok_and(|d| format!("{:x}", md5::compute(&d)) == md5_str);
-                    if same {
-                        dest_path.clone()
-                    } else {
-                        let (next, latest) = scan_cfg(&dest_path);
-                        let reuse = latest.filter(|p| {
-                            std::fs::read(p.as_std_path())
-                                .is_ok_and(|d| format!("{:x}", md5::compute(&d)) == md5_str)
-                        });
-                        protected.push(installed.clone());
-                        reuse.unwrap_or(next)
-                    }
-                } else {
-                    dest_path.clone()
-                };
-
-                // Hardlink preservation: a file already hardlinked inside the
-                // image (nlink > 1) is recreated as a hardlink in ROOT,
-                // sharing one inode, rather than copied independently (matches
-                // portage's source-inode `_hardlink_merge_map`).
-                use std::os::unix::fs::MetadataExt;
-                let inode = (meta.dev(), meta.ino());
-                let mut skip_copy = !merge;
-                if merge
-                    && meta.nlink() > 1
-                    && let Some(first) = hardlinks.get(&inode)
-                {
-                    let _ = std::fs::remove_file(write_path.as_std_path());
-                    if std::fs::hard_link(first.as_std_path(), write_path.as_std_path()).is_ok() {
-                        skip_copy = true;
-                    }
-                }
-
-                if !skip_copy {
-                    // Portage unlinks the destination before installing. A bare
-                    // `std::fs::copy` opens the existing file O_WRONLY|O_TRUNC,
-                    // which is EACCES when the destination is read-only (e.g.
-                    // bash's mode-0555 `bashbug` on re-merge). Removing first
-                    // lets the copy create a fresh file, which needs only write
-                    // permission on the *directory* (not the file). Ignore
-                    // NotFound (fresh install); any other unlink error falls
-                    // through to `copy`, which surfaces the canonical message.
-                    if let Err(e) = std::fs::remove_file(write_path.as_std_path())
-                        && e.kind() != std::io::ErrorKind::NotFound
-                    {
-                        let _ = e;
-                    }
-                    std::fs::copy(src_path.as_std_path(), write_path.as_std_path())
-                        .with_context(|| format!("copy {src_path} → {write_path}"))?;
-                    std::fs::set_permissions(write_path.as_std_path(), meta.permissions())
-                        .with_context(|| format!("chmod {write_path}"))?;
-                    // Preserve the image file's mtime (portage does), so the
-                    // on-disk time matches what CONTENTS records.
-                    if let Ok(modified) = meta.modified()
-                        && let Ok(f) = std::fs::File::options()
-                            .write(true)
-                            .open(write_path.as_std_path())
-                    {
-                        let _ = f.set_modified(modified);
-                    }
-                    if meta.nlink() > 1 {
-                        hardlinks.insert(inode, write_path.clone());
-                    }
-                }
-                if merge {
-                    preserve_owner(&write_path, &meta);
-                }
-
-                total_size += meta.len();
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs());
-                contents.push(ContentsEntry {
-                    kind: ContentsKind::Obj,
-                    path: installed,
-                    md5: Some(md5_str),
-                    mtime,
-                    target: None,
-                });
+            if entry.meta.file_type().is_symlink() {
+                pass.symlink(entry)?;
+            } else if entry.meta.is_dir() {
+                queue.push_back(entry.src_path.clone());
+                pass.dir(entry)?;
+            } else if entry.meta.is_file() {
+                pass.file(entry)?;
             }
         }
     }
 
-    Ok(WalkResult {
-        contents,
-        size: total_size,
-        protected,
-    })
+    Ok(pass.result)
+}
+
+/// One entry of the image and where it goes
+struct ImageEntry {
+    src_path: Utf8PathBuf,
+    /// The path under the destination root
+    dest_path: Utf8PathBuf,
+    /// The path as CONTENTS records it
+    installed: Utf8PathBuf,
+    meta: std::fs::Metadata,
+}
+
+impl ImageEntry {
+    fn mtime(&self) -> Option<u64> {
+        let modified = self.meta.modified().ok()?;
+        Some(modified.duration_since(UNIX_EPOCH).ok()?.as_secs())
+    }
+}
+
+/// The state of one [`walk_image`] pass
+struct ImagePass<'a> {
+    d_dir: &'a Utf8Path,
+    cp: &'a ConfigProtect,
+    rewrite_d: bool,
+    walk: Walk,
+    result: WalkResult,
+    /// Source (dev, ino) -> first merged dest, for re-creating intra-image
+    /// hardlinks as shared inodes in ROOT
+    hardlinks: std::collections::HashMap<(u64, u64), Utf8PathBuf>,
+}
+
+impl ImagePass<'_> {
+    fn merging(&self) -> bool {
+        self.walk == Walk::Merge
+    }
+
+    fn record(
+        &mut self,
+        kind: ContentsKind,
+        entry: ImageEntry,
+        md5: Option<String>,
+        target: Option<Utf8PathBuf>,
+    ) {
+        let mtime = match kind {
+            ContentsKind::Sym => entry.mtime(),
+            ContentsKind::Obj if md5.is_some() => entry.mtime(),
+            _ => None,
+        };
+        self.result.contents.push(ContentsEntry {
+            kind,
+            path: entry.installed,
+            md5,
+            mtime,
+            target,
+        });
+    }
+
+    fn dir(&mut self, entry: ImageEntry) -> Result<()> {
+        if self.merging() {
+            std::fs::create_dir_all(entry.dest_path.as_std_path())
+                .with_context(|| format!("mkdir {}", entry.dest_path))?;
+            preserve_owner(&entry.dest_path, &entry.meta);
+        }
+        self.record(ContentsKind::Dir, entry, None, None);
+        Ok(())
+    }
+
+    fn symlink(&mut self, entry: ImageEntry) -> Result<()> {
+        let ImageEntry {
+            src_path,
+            dest_path,
+            installed,
+            meta,
+        } = &entry;
+        let raw_target = std::fs::read_link(src_path.as_std_path())
+            .with_context(|| format!("readlink {src_path}"))?;
+        let mut target: Utf8PathBuf = raw_target
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("non-UTF-8 symlink target"))?;
+        if self.rewrite_d
+            && target.is_absolute()
+            && let Ok(rest) = target.strip_prefix(self.d_dir)
+        {
+            let rewritten = Utf8PathBuf::from("/").join(rest);
+            tracing::info!("rewriting absolute symlink {installed} -> {target} to {rewritten}");
+            target = rewritten;
+        }
+        // Symlinks are config-protectable too (portage bug #485598):
+        // divert when an existing link points somewhere different.
+        let write_path = if self.cp.is_protected(installed) {
+            match std::fs::read_link(dest_path.as_std_path()) {
+                Ok(existing) if existing == target.as_std_path() => dest_path.clone(),
+                Ok(_) => {
+                    let (next, latest) = scan_cfg(dest_path);
+                    let reuse = latest.filter(|p| {
+                        std::fs::read_link(p.as_std_path()).is_ok_and(|t| t == target.as_std_path())
+                    });
+                    self.result.protected.push(installed.clone());
+                    reuse.unwrap_or(next)
+                }
+                Err(_) => dest_path.clone(),
+            }
+        } else {
+            dest_path.clone()
+        };
+        if self.merging() {
+            if std::fs::symlink_metadata(write_path.as_std_path()).is_ok() {
+                std::fs::remove_file(write_path.as_std_path())
+                    .with_context(|| format!("removing {write_path}"))?;
+            }
+            std::os::unix::fs::symlink(target.as_std_path(), write_path.as_std_path())
+                .with_context(|| format!("symlink {write_path}"))?;
+            // Preserve the link's own mtime (std follows symlinks; this
+            // does not), so the on-disk time matches CONTENTS.
+            set_symlink_times(&write_path, meta);
+            preserve_owner(&write_path, meta);
+        }
+        self.record(ContentsKind::Sym, entry, None, Some(target));
+        Ok(())
+    }
+
+    fn file(&mut self, entry: ImageEntry) -> Result<()> {
+        self.result.size += entry.meta.len();
+        if self.walk == (Walk::Scan { digests: false }) {
+            self.record(ContentsKind::Obj, entry, None, None);
+            return Ok(());
+        }
+        let ImageEntry {
+            src_path,
+            dest_path,
+            installed,
+            meta,
+        } = &entry;
+        let src_data =
+            std::fs::read(src_path.as_std_path()).with_context(|| format!("reading {src_path}"))?;
+        let md5_str = format!("{:x}", md5::compute(&src_data));
+
+        // Config protection: an existing, differing file in a protected path
+        // is written to a `._cfg` sidecar (.keep placeholders are never
+        // protected). CONTENTS still records the real path with the new md5,
+        // matching portage.
+        let is_keep = meta.len() == 0
+            && installed
+                .file_name()
+                .is_some_and(|n| n.starts_with(".keep"));
+        let write_path = if !is_keep
+            && self.cp.is_protected(installed)
+            && std::fs::symlink_metadata(dest_path.as_std_path()).is_ok()
+        {
+            let same = std::fs::read(dest_path.as_std_path())
+                .is_ok_and(|d| format!("{:x}", md5::compute(&d)) == md5_str);
+            if same {
+                dest_path.clone()
+            } else {
+                let (next, latest) = scan_cfg(dest_path);
+                let reuse = latest.filter(|p| {
+                    std::fs::read(p.as_std_path())
+                        .is_ok_and(|d| format!("{:x}", md5::compute(&d)) == md5_str)
+                });
+                self.result.protected.push(installed.clone());
+                reuse.unwrap_or(next)
+            }
+        } else {
+            dest_path.clone()
+        };
+
+        if self.merging() {
+            self.install_file(src_path, &write_path, meta)?;
+        }
+        self.record(ContentsKind::Obj, entry, Some(md5_str), None);
+        Ok(())
+    }
+
+    /// Put one regular file of the image at `write_path`
+    fn install_file(
+        &mut self,
+        src_path: &Utf8Path,
+        write_path: &Utf8Path,
+        meta: &std::fs::Metadata,
+    ) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+
+        if let Some(parent) = write_path.parent() {
+            std::fs::create_dir_all(parent.as_std_path())
+                .with_context(|| format!("mkdir {parent}"))?;
+        }
+        // A file already hardlinked inside the image (nlink > 1) is recreated
+        // as a hardlink in ROOT, sharing one inode, rather than copied
+        // independently (matches portage's source-inode `_hardlink_merge_map`).
+        let inode = (meta.dev(), meta.ino());
+        let mut linked = false;
+        if meta.nlink() > 1
+            && let Some(first) = self.hardlinks.get(&inode)
+        {
+            let _ = std::fs::remove_file(write_path.as_std_path());
+            linked = std::fs::hard_link(first.as_std_path(), write_path.as_std_path()).is_ok();
+        }
+        if !linked {
+            // Portage unlinks the destination before installing: `copy` would
+            // open an existing file for writing, which fails on a read-only
+            // one (bash's mode-0555 `bashbug` on re-merge). A fresh file needs
+            // write permission on the directory only.
+            let _ = std::fs::remove_file(write_path.as_std_path());
+            std::fs::copy(src_path.as_std_path(), write_path.as_std_path())
+                .with_context(|| format!("copy {src_path} → {write_path}"))?;
+            std::fs::set_permissions(write_path.as_std_path(), meta.permissions())
+                .with_context(|| format!("chmod {write_path}"))?;
+            // Preserve the image file's mtime (portage does), so the on-disk
+            // time matches what CONTENTS records.
+            if let Ok(modified) = meta.modified()
+                && let Ok(f) = std::fs::File::options()
+                    .write(true)
+                    .open(write_path.as_std_path())
+            {
+                let _ = f.set_modified(modified);
+            }
+            if meta.nlink() > 1 {
+                self.hardlinks.insert(inode, write_path.to_owned());
+            }
+        }
+        preserve_owner(write_path, meta);
+        Ok(())
+    }
 }
 
 /// Set the merged path's owner to the image entry's uid/gid (`lchown`, so a
