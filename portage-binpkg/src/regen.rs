@@ -111,6 +111,7 @@ fn build_entry(rel: &str, full: &Path) -> Result<(String, BTreeMap<String, Strin
     copy_field(&meta, &mut f, "CXXFLAGS");
     copy_field(&meta, &mut f, "LDFLAGS");
     copy_field(&meta, &mut f, "RUSTFLAGS");
+    copy_field(&meta, &mut f, crate::index::BUILD_ENV_KEY_FIELD);
     copy_field(&meta, &mut f, "CBUILD");
     copy_field(&meta, &mut f, "PROVIDES");
     copy_field(&meta, &mut f, "REQUIRES");

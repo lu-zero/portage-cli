@@ -42,6 +42,7 @@ pub(crate) async fn build_binpkg_standalone(
     ebuild: &Ebuild,
     work_root: &Utf8Path,
     root: &Utf8Path,
+    build_env_key: &str,
 ) -> Result<Utf8PathBuf> {
     shell.apply_iuse_effective();
     let env = shell.collect_env();
@@ -91,12 +92,16 @@ pub(crate) async fn build_binpkg_standalone(
         crate::style::warn_line!("could not write environment.bz2: {e}");
     }
 
+    let key_file = installed.path().join(portage_binpkg::BUILD_ENV_KEY_FIELD);
+    let key = portage_binpkg::encode_build_env_key(build_env_key);
+    std::fs::write(key_file.as_std_path(), format!("{key}\n"))
+        .with_context(|| format!("writing {key_file}"))?;
+
     write_binpkg(shell, ebuild, work_root, root, installed.path())
 }
 
 /// Shared GPKG-writing core: pack `image_dir` (`${D}`) + `metadata_dir` (a
 /// VDB-shaped directory -- the real VDB entry for a normal `-b` merge via
-/// [`build_binpkg`], or a scratch one for `-B` via
 /// [`build_binpkg_standalone`]) into a GPKG under `PKGDIR`.
 fn write_binpkg(
     shell: &portage_repo::EbuildShell,

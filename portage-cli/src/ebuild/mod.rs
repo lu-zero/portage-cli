@@ -1268,6 +1268,9 @@ struct PackageSetup {
     work_root: Utf8PathBuf,
     /// `FEATURES` as configured for this package
     features: std::collections::HashSet<String>,
+    /// The key of the flags this package is configured to build with, before
+    /// the ebuild has had a chance to change them
+    build_env_key: String,
     /// Portage `EbuildBuildDir`: exclusive use of this package tree for the
     /// whole phase chain (also blocks a second concurrent `em` on the same path).
     _builddir_lock: Option<std::fs::File>,
@@ -1462,12 +1465,21 @@ impl PackageSetup {
             .map(str::to_string)
             .collect();
 
+        let flags = |name: &str| shell.get_var(name).unwrap_or_default();
+        let build_env_key = portage_binpkg::build_env_key(
+            &flags("CFLAGS"),
+            &flags("CXXFLAGS"),
+            &flags("LDFLAGS"),
+            &flags("RUSTFLAGS"),
+        );
+
         Ok(Self {
             ebuild,
             repo,
             shell,
             work_root,
             features,
+            build_env_key,
             _builddir_lock: builddir_lock,
         })
     }
@@ -1482,6 +1494,7 @@ impl PackageSetup {
             mut shell,
             work_root,
             features,
+            build_env_key,
         } = self;
         let GroupRun {
             group,
@@ -1619,7 +1632,15 @@ impl PackageSetup {
                     // The package holds the image as src_install left it: a binary
                     // install runs pkg_preinst itself, on the installing system.
                     if buildpkg && group.should_buildpkg() {
-                        match build_binpkg_standalone(&mut shell, &ebuild, &work_root, root).await {
+                        match build_binpkg_standalone(
+                            &mut shell,
+                            &ebuild,
+                            &work_root,
+                            root,
+                            &build_env_key,
+                        )
+                        .await
+                        {
                             Ok(path) => tracing::info!("Created binary package: {path}"),
                             Err(e) if matches!(group, PhaseGroup::BuildOnly) => {
                                 return Err(e.context("--buildpkgonly: creating binary package"));
@@ -3921,6 +3942,7 @@ mod tests {
                 shell,
                 work_root: work.clone(),
                 features: Default::default(),
+                build_env_key: String::new(),
                 _builddir_lock: None,
             };
             setup
@@ -4076,6 +4098,8 @@ mod tests {
             .await
             .unwrap();
         let package = probe.package("root").expect("a package next to the merge");
+        let index = fs::read_to_string(probe.path("root/var/cache/binpkgs/Packages")).unwrap();
+        assert!(index.contains("BUILD_ENV_KEY: generic\n"), "{index}");
         fs::create_dir_all(probe.path("root2")).unwrap();
         probe
             .run_group(&ebuild, PhaseGroup::BinpkgMerge, "root2", Some(&package))

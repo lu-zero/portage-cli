@@ -125,6 +125,8 @@ pub(crate) struct ContainerFacts {
     pub ldflags: String,
     /// Recorded build-time `RUSTFLAGS` (empty when absent)
     pub rustflags: String,
+    /// The recorded key of the configured flags, when the package has one
+    pub recorded_key: Option<String>,
     /// `BUILD_ID`: the metadata field, else the filename suffix, else absent
     /// for the implicit single-instance form
     pub build_id: Option<u32>,
@@ -153,6 +155,9 @@ impl ContainerFacts {
             cxxflags: field("CXXFLAGS"),
             ldflags: field("LDFLAGS"),
             rustflags: field("RUSTFLAGS"),
+            recorded_key: meta
+                .get(crate::index::BUILD_ENV_KEY_FIELD)
+                .map(|v| crate::index::decode_build_env_key(v)),
             build_id: meta
                 .get("BUILD_ID")
                 .and_then(|s| s.parse().ok())
@@ -160,9 +165,17 @@ impl ContainerFacts {
         })
     }
 
-    /// The build-environment key over the recorded flag sets
+    /// The build-environment key: the recorded one, else derived from the
+    /// recorded flag sets (a package written before the key was recorded)
     pub(crate) fn build_env_key(&self) -> String {
-        crate::index::build_env_key(&self.cflags, &self.cxxflags, &self.ldflags, &self.rustflags)
+        self.recorded_key.clone().unwrap_or_else(|| {
+            crate::index::build_env_key(
+                &self.cflags,
+                &self.cxxflags,
+                &self.ldflags,
+                &self.rustflags,
+            )
+        })
     }
 
     /// The build id, with the implicit single-instance form as `0`
@@ -196,6 +209,30 @@ mod tests {
     #[test]
     fn parse_build_id_from_name_none_for_single_instance() {
         assert_eq!(parse_build_id_from_name("app-test/foo-1.0.gpkg.tar"), None);
+    }
+
+    // glibc on arm64 appends a machine flag itself; its package must still
+    // carry the key of what was configured.
+    #[test]
+    fn the_recorded_key_wins_over_the_flags_the_ebuild_left() {
+        let built = [
+            ("CATEGORY", "sys-libs"),
+            ("PF", "glibc-2.44"),
+            ("CFLAGS", "-O2 -pipe -mbranch-protection=none"),
+        ];
+        let unrecorded = ContainerFacts::from_metadata(&meta(&built), "x").unwrap();
+        assert_ne!(unrecorded.build_env_key(), "");
+
+        let mut recorded = built.to_vec();
+        recorded.push(("BUILD_ENV_KEY", "generic"));
+        let recorded = ContainerFacts::from_metadata(&meta(&recorded), "x").unwrap();
+        assert_eq!(recorded.build_env_key(), "");
+
+        let fields = BTreeMap::from([
+            ("CFLAGS", "-O2 -pipe -mbranch-protection=none"),
+            ("BUILD_ENV_KEY", "generic"),
+        ]);
+        assert_eq!(crate::index::build_env_key_from_fields(&fields), "");
     }
 
     #[test]

@@ -259,12 +259,41 @@ pub fn parse_index_blocks(text: &str) -> Vec<BTreeMap<&str, &str>> {
 /// `em maint binpkg list`/`fingerprint`-style consumers can derive it from a
 /// block without re-parsing the four fields by hand.
 pub fn build_env_key_from_fields(fields: &BTreeMap<&str, &str>) -> String {
+    if let Some(recorded) = fields.get(BUILD_ENV_KEY_FIELD) {
+        return decode_build_env_key(recorded);
+    }
     build_env_key(
         fields.get("CFLAGS").copied().unwrap_or(""),
         fields.get("CXXFLAGS").copied().unwrap_or(""),
         fields.get("LDFLAGS").copied().unwrap_or(""),
         fields.get("RUSTFLAGS").copied().unwrap_or(""),
     )
+}
+
+/// The metadata and index field holding the key of the flags a package was
+/// *configured* to build with
+///
+/// The recorded `CFLAGS` and friends are what the ebuild left, as in Portage,
+/// and an ebuild may add a machine flag of its own (glibc on arm64 does). A
+/// key derived from those would never equal the one a configuration asks for.
+pub const BUILD_ENV_KEY_FIELD: &str = "BUILD_ENV_KEY";
+
+/// The field value for `key`. The empty key is spelled out, because an empty
+/// field is not written.
+pub fn encode_build_env_key(key: &str) -> String {
+    if key.is_empty() {
+        "generic".to_owned()
+    } else {
+        key.to_owned()
+    }
+}
+
+/// The key a [`BUILD_ENV_KEY_FIELD`] value stands for
+pub(crate) fn decode_build_env_key(value: &str) -> String {
+    match value.trim() {
+        "generic" => String::new(),
+        key => key.to_owned(),
+    }
 }
 
 /// Short, path-safe display/slug form of a build-env key: `"generic"` for

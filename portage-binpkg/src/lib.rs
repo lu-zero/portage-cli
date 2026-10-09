@@ -32,8 +32,9 @@ pub use gpkg::{
     verify_container_signature, write_gpkg,
 };
 pub use index::{
-    BinpkgEntry, BinpkgIndex, RemoteBinpkgIndex, build_env_key, parse_index_blocks,
-    parse_index_header, parse_packages_entries, use_compatible,
+    BUILD_ENV_KEY_FIELD, BinpkgEntry, BinpkgIndex, RemoteBinpkgIndex, build_env_key,
+    encode_build_env_key, parse_index_blocks, parse_index_header, parse_packages_entries,
+    use_compatible,
 };
 pub use regen::index_pkgdir;
 pub use scan::{checksum, find_gpkg_containers, parse_build_id_from_name};
