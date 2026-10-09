@@ -164,3 +164,32 @@ printer fix is refused with "does not read back" and the root is left
 empty; baselayout and ca-certificates built now install from their
 packages into a root identical to the source-built one, 520 entries,
 link targets included.
+
+## Which saved variables come back (2026-10-09, found by the full stage run)
+
+With the ebuild no longer sourced, a variable it exports at global scope
+exists only in the saved environment. The restore had left out every
+name the phase runner exports, `CTARGET` among them, so binutils'
+`pkg_postinst` called `binutils-config -2.47` ("invalid switch") and the
+package-installed root had its toolchain activated differently from the
+source-built one (65 differing tree entries).
+
+Now everything is restored except what the shield names, read-only and
+bash-maintained variables, and the few that describe the saving
+process: `PATH`, `LD_LIBRARY_PATH`, `TERM`, `COLUMNS`, `NOCOLOR`,
+`NO_COLOR`, `LANG`, `LC_*`. What the phase runner sets for every phase
+is restored and then set again by it, which is harmless.
+
+## Full stage run, every fix in (sandbox `em-stage-final`, arm64)
+
+Native `em toolchain --setup` and `em stages --stage1` from source with
+`-b`, then both with `-K` into a second root:
+
+- all four steps exit 0; 42 min for the toolchain, 13 min for stage1,
+  under a minute for the package-only root;
+- second root: 159 binary installs, no source build (glibc included),
+  no unreadable environment;
+- 141 packages in each root, every CONTENTS path list identical;
+- the two trees outside `var/`: 32239 entries each, none differing once
+  the root's own path is normalised in link targets, and no regular file
+  of a different size.

@@ -311,7 +311,7 @@ pub struct EbuildShell {
 ///
 /// External processes (make, ./configure, …) inherit them. CHOST, CBUILD and
 /// CTARGET are here because a `source`d assignment is not exported by itself.
-pub const PM_EXPORTED_VARS: &[&str] = &[
+const PM_EXPORTED_VARS: &[&str] = &[
     "CATEGORY",
     "PN",
     "PV",

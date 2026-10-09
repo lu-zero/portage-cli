@@ -3322,13 +3322,24 @@ struct Shield {
     exported: HashSet<String>,
 }
 
+/// Whether a saved variable describes the process that saved it and not the
+/// package: where programs and libraries are found, the terminal, the locale.
+///
+/// What the phase runner sets for every phase (`D`, `ROOT`, `T`, …) needs no
+/// entry: it is set again whatever the package saved. What an ebuild exports
+/// at global scope (`CTARGET`) must come back, since the ebuild is not sourced.
+fn describes_the_process(name: &str) -> bool {
+    matches!(
+        name,
+        "PATH" | "LD_LIBRARY_PATH" | "TERM" | "COLUMNS" | "NOCOLOR" | "NO_COLOR" | "LANG"
+    ) || name.starts_with("LC_")
+}
+
 /// The variables a package's saved environment adds to a shell
 ///
 /// `dump` is `declare -p` output followed by function definitions. Left out:
-/// what `shield` names, read-only and bash-maintained variables, and the
-/// exported ones the package manager provides to every phase anyway.
-/// Functions come from the ebuild: a printed body with a heredoc does not
-/// parse back.
+/// what `shield` names, read-only and bash-maintained variables, and those
+/// that [describe the saving process](describes_the_process).
 fn package_variables(dump: &str, shield: &Shield) -> String {
     let mut out = String::new();
     let mut keep = false;
@@ -3344,11 +3355,14 @@ fn package_variables(dump: &str, shield: &Shield) -> String {
             let flags = rest.split_whitespace().next().unwrap_or("");
             let name = declared_name(line).unwrap_or("");
             let shielded = if flags.contains('x') {
-                shield.exported.contains(name) || portage_repo::PM_EXPORTED_VARS.contains(&name)
+                shield.exported.contains(name)
             } else {
                 shield.plain.contains(name)
             };
-            keep = !flags.contains('r') && !DYNAMIC_VAR_DENYLIST.contains(&name) && !shielded;
+            keep = !flags.contains('r')
+                && !DYNAMIC_VAR_DENYLIST.contains(&name)
+                && !describes_the_process(name)
+                && !shielded;
         }
         // A line that is not a declaration continues the value above it.
         if keep {
@@ -4415,6 +4429,8 @@ mod tests {
             "declare -- CHOST=\"build-host\"\n",
             "declare -x LD_PRELOAD=\"/build/lib.so\"\n",
             "declare -x PATH=\"/build/bin\"\n",
+            "declare -x LC_ALL=\"C\"\n",
+            "declare -x CTARGET=\"build-target\"\n",
             "declare -x EPYTHON=\"python3.14\"\n",
             "declare -r FROZEN=\"1\"\n",
             "declare -a PIPESTATUS=([0]=\"0\")\n",
@@ -4434,6 +4450,7 @@ mod tests {
         assert_eq!(
             package_variables(dump, &shield),
             concat!(
+                "declare -x CTARGET=\"build-target\"\n",
                 "declare -x EPYTHON=\"python3.14\"\n",
                 "declare -- MY_STATE=\"first\n",
                 "second ()\n",

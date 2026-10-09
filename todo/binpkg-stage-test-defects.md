@@ -21,8 +21,9 @@ Checked live after the fixes:
 - 4: glibc rebuilt with `-b`, listed with key `generic`, installed with
   `-K` into an empty root.
 
-Not redone: the whole stage with all four fixes in one run. The
-packages in the sandbox's `/root/pk` predate fixes 3 and 4.
+Redone 2026-10-09 with every fix in one run, sandbox `em-stage-final`:
+see the last section of [[saved-environment-functions]]. The two roots
+are identical.
 
 Why the unit tests missed 2: without a metadata cache entry the
 `pkg_pretend` check assumes the ebuild defines it and isolates the
