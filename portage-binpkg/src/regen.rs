@@ -159,12 +159,15 @@ fn write_index(
 
     for (_cpv, fields) in entries {
         for (k, v) in fields {
+            // One line per field, and a blank line ends an entry: a value
+            // spanning lines (an ebuild's DEPEND) has to be folded onto one.
+            let v = v.split_whitespace().collect::<Vec<_>>().join(" ");
             if v.is_empty() {
                 continue;
             }
             text.push_str(k);
             text.push_str(": ");
-            text.push_str(v);
+            text.push_str(&v);
             text.push('\n');
         }
         text.push('\n');
@@ -205,6 +208,10 @@ mod tests {
             ("CFLAGS", "-O2 -pipe -mcpu=ampere1a"),
             ("CXXFLAGS", "-O2 -pipe -mcpu=ampere1a"),
             ("RUSTFLAGS", "-C target-cpu=neoverse-n1"),
+            (
+                "DEPEND",
+                "\n\t\n\n\tvirtual/zlib:=\n\treadline? ( sys-libs/readline:= )",
+            ),
         ] {
             std::fs::write(meta.join(k), format!("{v}\n")).unwrap();
         }
@@ -246,6 +253,7 @@ mod tests {
         assert!(idx.contains("SHA1: "));
         assert!(idx.contains("SIZE: "));
         assert!(idx.contains("MTIME: "));
+        assert!(idx.contains("DEPEND: virtual/zlib:= readline? ( sys-libs/readline:= )\n"));
 
         // Parser surface: provenance available without affecting reuse.
         let parsed = crate::BinpkgIndex::open(pkgdir.as_std_path()).unwrap();
