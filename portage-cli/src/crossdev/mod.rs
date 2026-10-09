@@ -107,16 +107,14 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
     }
 
     let extras = ex_pkg_atoms(args)?;
+    let spec = spec::SysrootSpec::builtin(&target, &extras);
 
     if args.show_target_cfg {
         show_target_cfg(&target, globals, &extras);
         return Ok(());
     }
     if args.print_spec {
-        print!(
-            "{}",
-            spec::SysrootSpec::builtin(&target, &extras).to_toml()?
-        );
+        print!("{}", spec.to_toml()?);
         return Ok(());
     }
     // `--root` after `crossdev` is a parse error; prefix `--root` is a try_into
@@ -126,14 +124,14 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
             &target,
             globals,
             args,
-            &extras,
+            &spec,
             config_plan::RefreshPolicy::Sync,
         )
         .await
         .map(|_| ());
     }
     if args.setup {
-        return setup(&target, globals, args, &extras).await;
+        return setup(&target, globals, args, &spec).await;
     }
     bail!(
         "em crossdev does setup only for now — pass --init-target to lay down the \
@@ -177,7 +175,7 @@ async fn setup(
     target: &CrossTarget,
     globals: &Cli,
     args: &CrossdevArgs,
-    extras: &[Cpn],
+    spec: &spec::SysrootSpec,
 ) -> Result<()> {
     // Same-tuple as host CHOST is not cross: ebuilds treat CTARGET==CHOST as
     // native and install into host paths (collisions with real packages).
@@ -195,7 +193,7 @@ async fn setup(
         target,
         globals,
         args,
-        extras,
+        spec,
         config_plan::RefreshPolicy::FillGapsOnly,
     )
     .await?;
@@ -241,7 +239,7 @@ async fn setup(
     // staged plan still sees `cross-*` packages.
     let pretend_alias;
     let extra_aliases: &[portage_repo::RepoEntry] = if globals.pretend() {
-        pretend_alias = [alias_repo_entry(target, extras)];
+        pretend_alias = [alias_repo_entry(target, spec)];
         &pretend_alias
     } else {
         &[]
@@ -255,8 +253,8 @@ async fn setup(
     let make_conf_holder;
     let sysroot_override = if globals.pretend() {
         let gentoo_path = main_repo(globals)?.path().to_owned();
-        profile_dir_holder = gentoo_path.join("profiles").join(target.profile_path());
-        make_conf_holder = make_conf_body(target, globals.outer_roots().merge_root());
+        profile_dir_holder = gentoo_path.join("profiles").join(&spec.profile);
+        make_conf_holder = make_conf_body(target, &spec.cflags, globals.outer_roots().merge_root());
         Some(portage_resolve::use_env::SysrootOverride {
             profile_dir: &profile_dir_holder,
             make_conf: &make_conf_holder,
@@ -1093,7 +1091,7 @@ async fn init_target(
     target: &CrossTarget,
     globals: &Cli,
     _args: &CrossdevArgs,
-    extras: &[Cpn],
+    spec: &spec::SysrootSpec,
     policy: config_plan::RefreshPolicy,
 ) -> Result<config_plan::Outcome> {
     let ask = globals.merge_flags().ask;
@@ -1130,11 +1128,12 @@ async fn init_target(
         &gentoo_path,
         target,
         &category,
-        extras,
+        spec,
     )?);
-    entries.extend(cross_env_entries(target, globals, &gentoo_path, extras)?);
+    entries.extend(cross_env_entries(target, globals, &gentoo_path, spec)?);
     entries.extend(sysroot_config_entries(
         target,
+        spec,
         &sysroot,
         globals.outer_roots().merge_root(),
         &gentoo_path,
@@ -1144,7 +1143,7 @@ async fn init_target(
         &gentoo_path,
         target,
         &category,
-        extras,
+        spec,
     ));
 
     let outcome = config_plan::apply(&entries, globals.pretend(), ask, policy)?;
@@ -1179,20 +1178,21 @@ fn alias_repo_conf_entry(
     gentoo: &Utf8Path,
     target: &CrossTarget,
     category: &str,
-    extras: &[Cpn],
+    spec: &spec::SysrootSpec,
 ) -> Result<config_plan::ConfigEntry> {
     // Validate every source package exists under ::gentoo, with a clear error
     // naming the cross package it's needed for, before declaring the alias.
     // Covers `--ex-pkg`/`--ex-gdb` extras too — same requirement, same error
     // shape, so a typo'd or nonexistent extra is rejected up front instead of
     // surfacing later as an opaque resolver `NoVersions`.
-    for (real_cat, pkg, _) in target.packages() {
+    for cpn in spec.packages() {
+        let (real_cat, pkg) = (cpn.category.as_str(), cpn.package.as_str());
         let dst = gentoo.join(real_cat).join(pkg);
         if !dst.is_dir() {
             bail!("{real_cat}/{pkg} not found at {dst} (needed for {category}/{pkg})");
         }
     }
-    for cpn in extras {
+    for cpn in spec.extras() {
         let dst = gentoo
             .join(cpn.category.as_str())
             .join(cpn.package.as_str());
@@ -1210,24 +1210,18 @@ fn alias_repo_conf_entry(
         path: conf_dir.join(format!("{name}.conf")),
         name,
         category: category.to_owned(),
-        packages_line: alias_packages_line(target, extras),
+        packages_line: alias_packages_line(spec),
     })
 }
 
 /// In-memory form of the crossdev alias — same identity as
 /// [`alias_repo_conf_entry`]'s on-disk file, for `load_repos` without writing
 /// (e.g. `crossdev --setup -p` on a never-initialized target).
-fn alias_repo_entry(target: &CrossTarget, extras: &[Cpn]) -> portage_repo::RepoEntry {
+fn alias_repo_entry(target: &CrossTarget, spec: &spec::SysrootSpec) -> portage_repo::RepoEntry {
     use std::collections::{HashMap, HashSet};
 
     let category = target.category();
-    let mut pkgs: HashSet<Cpn> = HashSet::new();
-    for (cat, pkg, _) in target.packages() {
-        pkgs.insert(Cpn::new(cat, pkg));
-    }
-    for cpn in extras {
-        pkgs.insert(*cpn);
-    }
+    let pkgs: HashSet<Cpn> = spec.packages().into_iter().chain(spec.extras()).collect();
     let mut aliases = HashMap::new();
     aliases.insert(category, pkgs);
     portage_repo::RepoEntry {
@@ -1296,12 +1290,11 @@ fn ensure_self_contained_prefix(globals: &Cli) -> Result<Utf8PathBuf> {
 /// `--ex-gdb` `extras`. The parser re-parses each token as a `Cpn`, so this
 /// is pure config-file serialisation — no identity is carried as an opaque
 /// string downstream.
-fn alias_packages_line(target: &CrossTarget, extras: &[Cpn]) -> String {
-    target
-        .packages()
-        .into_iter()
-        .map(|(cat, pkg, _)| format!("{cat}/{pkg}"))
-        .chain(extras.iter().map(Cpn::to_string))
+fn alias_packages_line(spec: &spec::SysrootSpec) -> String {
+    spec.packages()
+        .iter()
+        .chain(&spec.extras())
+        .map(Cpn::to_string)
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -1377,6 +1370,7 @@ async fn ensure_config_site_packages(globals: &Cli) -> Result<()> {
 /// Write the cross sysroot `etc/portage/{make.conf,make.profile}`
 fn sysroot_config_entries(
     target: &CrossTarget,
+    spec: &spec::SysrootSpec,
     sysroot: &Utf8Path,
     outer_root: &Utf8Path,
     gentoo: &Utf8Path,
@@ -1401,16 +1395,16 @@ fn sysroot_config_entries(
     // of bug just fixed for the alias-packages entry.
     entries.push(config_plan::ConfigEntry::File {
         path: portage.join("make.conf"),
-        desired: make_conf_body(target, outer_root),
+        desired: make_conf_body(target, &spec.cflags, outer_root),
     });
 
     // Link make.profile DIRECTLY (absolute) to the target-arch profile — eselect
     // profile validates against the host arch and refuses a foreign one.
-    let profile_dir = gentoo.join("profiles").join(target.profile_path());
+    let profile_dir = gentoo.join("profiles").join(&spec.profile);
     if !profile_dir.is_dir() {
         bail!(
             "target profile '{}' not found at {profile_dir}",
-            target.profile_path()
+            spec.profile
         );
     }
     entries.push(config_plan::ConfigEntry::Symlink {
@@ -1429,7 +1423,7 @@ fn sysroot_repos_conf_entries(
     gentoo: &Utf8Path,
     target: &CrossTarget,
     category: &str,
-    extras: &[Cpn],
+    spec: &spec::SysrootSpec,
 ) -> Vec<config_plan::ConfigEntry> {
     let dir = sysroot.join("etc/portage/repos.conf");
     let name = overlay_name(target);
@@ -1442,7 +1436,7 @@ fn sysroot_repos_conf_entries(
             path: dir.join(format!("{name}.conf")),
             name,
             category: category.to_owned(),
-            packages_line: alias_packages_line(target, extras),
+            packages_line: alias_packages_line(spec),
         },
     ]
 }
@@ -1471,7 +1465,7 @@ fn sysroot_repos_conf_entries(
 /// sub-configures too — no override exists there — breaking
 /// `dev-lang/python`'s CBUILD mini-python under `--target` (found live).
 /// Target packages still get scoped `PKG_CONFIG` via the pkgconf wrapper.
-fn make_conf_body(target: &CrossTarget, outer_root: &Utf8Path) -> String {
+fn make_conf_body(target: &CrossTarget, cflags: &str, outer_root: &Utf8Path) -> String {
     let arch = target.gentoo_arch();
     let tuple = &target.tuple;
     let cbuild = host_chost();
@@ -1493,7 +1487,7 @@ fn make_conf_body(target: &CrossTarget, outer_root: &Utf8Path) -> String {
          # thing. Point it at the outer EROOT's own native pkgconfig dirs (host\n\
          # BDEPEND packages build there), not the bare host `/`.\n\
          BUILD_PKG_CONFIG_LIBDIR=\"{outer_root}/usr/lib64/pkgconfig:{outer_root}/usr/lib/pkgconfig:{outer_root}/usr/share/pkgconfig\"\n",
-        target.cflags(),
+        cflags,
     )
 }
 
@@ -1632,7 +1626,7 @@ fn cross_env_entries(
     target: &CrossTarget,
     globals: &Cli,
     gentoo: &Utf8Path,
-    extras: &[Cpn],
+    spec: &spec::SysrootSpec,
 ) -> Result<Vec<config_plan::ConfigEntry>> {
     let eclass_dir = gentoo.join("eclass");
     let host_ml = multilib::query(&host_chost(), &eclass_dir)?;
@@ -1672,7 +1666,10 @@ fn cross_env_entries(
     // Prefer the host's installed/release-branch pin over a blanket `**`
     // (which would also pick live `9999` ebuilds).
     let mut keyword_entries = String::new();
-    for (real_cat, pkg, arch) in target.packages() {
+    for cpn in spec.packages() {
+        let (real_cat, pkg) = (cpn.category.as_str(), cpn.package.as_str());
+        // Host, as real crossdev treats a package its table does not name.
+        let arch = target::cross_package_arch(real_cat, pkg).unwrap_or(target::PackageArch::Host);
         let body = format!(
             "{header}{}",
             multilib::env_block(&host_ml, &target_ml, arch.is_target())
@@ -1698,7 +1695,7 @@ fn cross_env_entries(
     // Gentoo convention — not live in the churning sense — still resolves,
     // since nothing installed on the host falls through to the newest
     // available version, branch-bounded).
-    for cpn in extras {
+    for cpn in spec.extras() {
         let pkg = cpn.package;
         let body = format!(
             "{header}{}",
@@ -1883,7 +1880,8 @@ mod tests {
         target: &CrossTarget,
         category: &str,
     ) -> Result<()> {
-        let entry = alias_repo_conf_entry(globals, gentoo, target, category, &[])?;
+        let spec = spec::SysrootSpec::builtin(target, &[]);
+        let entry = alias_repo_conf_entry(globals, gentoo, target, category, &spec)?;
         config_plan::apply_now(std::slice::from_ref(&entry))
     }
 
@@ -2037,7 +2035,7 @@ mod tests {
     #[test]
     fn alias_packages_line_is_the_real_cpns_in_stage_order() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let line = alias_packages_line(&target, &[]);
+        let line = alias_packages_line(&spec::SysrootSpec::builtin(&target, &[]));
         // Every token is a real ::gentoo cpn, in packages() order, no cross
         // category, no version — pure derivation source for Location::Alias.
         let tokens: Vec<&str> = line.split_whitespace().collect();
@@ -2115,6 +2113,7 @@ mod tests {
 
         // Missing extra: rejected up front, same shape as a missing base package.
         let missing = [Cpn::new("sys-devel", "rust-std")];
+        let missing = spec::SysrootSpec::builtin(&target, &missing);
         let err = alias_repo_conf_entry(&globals, &gentoo, &target, &category, &missing)
             .expect_err("missing --ex-pkg source rejected");
         assert!(format!("{err:#}").contains("sys-devel/rust-std"));
@@ -2490,7 +2489,7 @@ mod tests {
         let expected = format!(
             "[{name}]\nalias-source = gentoo\nalias-target = {category}\n\
              alias-packages = {}\n",
-            alias_packages_line(&target, &[])
+            alias_packages_line(&spec::SysrootSpec::builtin(&target, &[]))
         );
         assert_eq!(refreshed, expected);
     }
@@ -2602,7 +2601,7 @@ mod tests {
     #[test]
     fn make_conf_body_never_sets_ctarget() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let body = make_conf_body(&target, Utf8Path::new("/"));
+        let body = make_conf_body(&target, target.cflags(), Utf8Path::new("/"));
         assert!(
             !body.lines().any(|l| l.starts_with("CTARGET=")),
             "sysroot make.conf must not set CTARGET:\n{body}"
@@ -2618,7 +2617,7 @@ mod tests {
     #[test]
     fn make_conf_body_sets_makeopts() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let body = make_conf_body(&target, Utf8Path::new("/"));
+        let body = make_conf_body(&target, target.cflags(), Utf8Path::new("/"));
         assert!(body.contains("MAKEOPTS="), "sysroot make.conf:\n{body}");
         assert!(
             !body.contains("MAKEOPTS=\"\""),
@@ -2639,7 +2638,7 @@ mod tests {
     #[test]
     fn make_conf_body_no_longer_sets_static_pkg_config_sysroot_scoping() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let body = make_conf_body(&target, Utf8Path::new("/"));
+        let body = make_conf_body(&target, target.cflags(), Utf8Path::new("/"));
         assert!(
             !body.contains("PKG_CONFIG_SYSROOT_DIR="),
             "must not be ambient for the whole phase:\n{body}"
@@ -2663,7 +2662,7 @@ mod tests {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
         let sysroot = "/var/tmp/cross-stage1-riscv64/usr/riscv64-unknown-linux-gnu";
         let outer_root = "/var/tmp/cross-stage1-riscv64";
-        let body = make_conf_body(&target, Utf8Path::new(outer_root));
+        let body = make_conf_body(&target, target.cflags(), Utf8Path::new(outer_root));
         assert!(
             body.contains(&format!(
                 "BUILD_PKG_CONFIG_LIBDIR=\"{outer_root}/usr/lib64/pkgconfig"

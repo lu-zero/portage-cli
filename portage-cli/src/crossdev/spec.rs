@@ -175,6 +175,26 @@ impl SysrootSpec {
         }
     }
 
+    /// The cross toolchain's own packages in bootstrap order, extras left out
+    pub fn packages(&self) -> Vec<Cpn> {
+        let Toolchains { gcc, clang } = &self.toolchain;
+        let mut pkgs = Vec::new();
+        pkgs.extend(gcc.as_ref().map(|t| t.binutils.cpn));
+        pkgs.extend(clang.as_ref().map(|t| t.wrappers.cpn));
+        pkgs.extend(self.kernel_headers.as_ref().map(|k| k.atom.cpn));
+        pkgs.extend(gcc.as_ref().map(|t| t.compiler.cpn));
+        pkgs.push(self.libc.atom.cpn);
+        if let Some(t) = clang {
+            pkgs.extend([t.rtlib.cpn, t.unwind.cpn, t.cxxabi.cpn, t.cxx.cpn]);
+        }
+        pkgs
+    }
+
+    /// The packages built for the target besides its toolchain (`--ex-pkg`)
+    pub fn extras(&self) -> Vec<Cpn> {
+        self.extra.iter().map(|dep| dep.cpn).collect()
+    }
+
     /// The spec as the TOML a user edits
     pub fn to_toml(&self) -> Result<String> {
         toml::to_string(self).context("serializing the sysroot spec to TOML")
@@ -237,6 +257,30 @@ built-by = "gcc"
         let spec = builtin("riscv64-unknown-elf", false);
         assert_eq!(spec.kernel_headers, None);
         assert_eq!(spec.libc.atom.to_string(), "sys-libs/newlib");
+    }
+
+    // The config generators read the spec; the built-in one must name what
+    // the in-code table does, in its order.
+    #[test]
+    fn builtin_spec_lists_the_packages_of_its_target() {
+        for (tuple, llvm) in [
+            ("riscv64-unknown-linux-gnu", false),
+            ("aarch64-unknown-linux-musl", false),
+            ("aarch64-unknown-linux-musl", true),
+            ("arm-none-eabi", false),
+        ] {
+            let target = CrossTarget::parse(tuple, llvm).unwrap();
+            let table: Vec<Cpn> = target
+                .packages()
+                .into_iter()
+                .map(|(cat, pkg, _)| Cpn::new(cat, pkg))
+                .collect();
+            assert_eq!(
+                SysrootSpec::builtin(&target, &[]).packages(),
+                table,
+                "{tuple}"
+            );
+        }
     }
 
     #[test]

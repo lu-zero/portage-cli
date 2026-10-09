@@ -1,7 +1,8 @@
 # `cross-sysroot.toml` — a target spec file for cross sysroots
 
 Status: 🟡 design agreed 2026-10-07 (Luca); step 1 done 2026-10-08 (the
-built-in spec and `--print-spec`), steps 2–5 open. Supersedes
+built-in spec and `--print-spec`), step 2 mostly done 2026-10-09 (see
+"Progress"), steps 3–5 open. Supersedes
 the flag-based approach in [[crossdev-gcc-version-flag]], whose first
 implementation (`--gcc`/`--libc`/… writing exact pins) was dropped as the
 wrong shape.
@@ -128,3 +129,35 @@ variant of a built-in tuple.
    `system.built-by` and `exceptions` → `package.env`; `profile` override;
    mixed gcc+clang bootstrap ordering.
 5. Regression-test against a real board build in crossdev-stages.
+
+## Progress (2026-10-09): step 2
+
+`em crossdev` builds the built-in spec once in `run` and the config
+generators read it: `init_target`, `setup`, `alias_repo_conf_entry`,
+`alias_repo_entry`, `alias_packages_line`, `sysroot_repos_conf_entries`,
+`sysroot_config_entries`, `make_conf_body`, `cross_env_entries`. They
+take the toolchain packages from `SysrootSpec::packages()`, the extras
+from `spec.extra`, and the profile and CFLAGS from the spec.
+
+Behaviour-neutral, checked two ways:
+
+- a test asserts the built-in spec lists the same packages in the same
+  order as `CrossTarget::packages()` for gnu, musl, `-L` musl and bare
+  metal;
+- `--init-target --ex-pkg dev-debug/gdb` into a scratch prefix, binary
+  before and after: every file written is byte-identical for
+  `riscv64-unknown-linux-gnu`, `x86_64-unknown-linux-musl -L` and
+  `arm-none-eabi`.
+
+Still reading `CrossTarget` instead of the spec:
+
+- **`toolchain_plan` in `crossdev/stages.rs`.** It goes through
+  `BootstrapKind`, shared with the native `em toolchain --setup`, so
+  this is the "native twin" question above and wants deciding first.
+- **Host-or-target env per package** (`cross_package_arch`): a table
+  keyed by package name, not something the spec states. A spec naming a
+  package outside the table gets the host environment, as `--ex-pkg`
+  does.
+- `show_target_cfg`, which only prints.
+- Whether a package is LLVM-model (`target.llvm` in `env_mapping`,
+  the keyword bound by `llvm_slot`).
