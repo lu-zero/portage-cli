@@ -73,6 +73,7 @@ pub(super) struct Prepared<'a> {
     pub(super) root_deps: Vec<(PortagePackage, PortageVersionSet)>,
     pub(super) root_cpns: std::collections::HashSet<Cpn>,
     pub(super) unsatisfiable: Vec<super::output::UnsatisfiableTarget>,
+    pub(super) masked_root_targets: Vec<(Cpv, String)>,
     pub(super) slot_map: SlotMap,
     pub(super) widened_slot_map: Option<SlotMap>,
     pub(super) sysroot_installed: Vec<(PortagePackage, Version)>,
@@ -304,6 +305,7 @@ pub(super) async fn prepare<'a>(
         deps: root_deps,
         cpns: root_cpns,
         unsatisfiable,
+        masked_kept: masked_root_targets,
     } = classify_root_targets(
         atoms,
         &data,
@@ -509,6 +511,7 @@ pub(super) async fn prepare<'a>(
         root_deps,
         root_cpns,
         unsatisfiable,
+        masked_root_targets,
         slot_map,
         widened_slot_map,
         sysroot_installed,

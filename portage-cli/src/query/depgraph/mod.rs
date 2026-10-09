@@ -643,6 +643,47 @@ fn apply_order_filters(
     (order, exclude_omitted, resume_omitted)
 }
 
+/// Installed versions the solution keeps although policy filters them out,
+/// each with the reason, sorted by package
+///
+/// A kept version whose ebuild is simply gone is not listed: nothing masks it.
+fn masked_installed_kept(
+    solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
+    dropped_roots: &[(Cpv, String)],
+    provider: &PortageDependencyProvider,
+    data: &repo::RepoData,
+    final_policy: &repo::ResolvePolicy,
+) -> Vec<(Cpv, String)> {
+    let selected = solution
+        .iter()
+        .filter(|(pkg, ver)| !pkg.is_virtual() && provider.selection_is_installed_only(pkg, ver))
+        .map(|(pkg, ver)| (*pkg.cpn(), ver.clone()));
+    // With no visible version at all the package never enters the solve: a
+    // dependency on it is dropped, a root target is left out (`dropped_roots`),
+    // and the installed version satisfies either silently.
+    let dropped = provider.dropped_deps_of(solution).flat_map(|d| {
+        provider
+            .installed_versions(&d.package)
+            .filter(|ver| d.version_set.contains(ver))
+            .map(|ver| (*d.package.cpn(), ver.clone()))
+    });
+    let mut kept: Vec<(Cpv, String)> = selected
+        .chain(dropped)
+        .filter_map(|(cpn, ver)| {
+            let only = PortageVersionSet::from_operator(Operator::Equal, false, ver.clone());
+            let filtered = repo::filter_reasons_for(data, &cpn, &only, final_policy)
+                .into_iter()
+                .find(|c| c.cpv.version == ver)?;
+            let why = repo::filter_reason_text(&filtered.reasons);
+            Some((filtered.cpv, why))
+        })
+        .chain(dropped_roots.iter().cloned())
+        .collect();
+    kept.sort_by_key(|(cpv, _)| cpv.to_string());
+    kept.dedup();
+    kept
+}
+
 /// Widened phase-2 selections, as autounmask candidates.
 ///
 /// A chosen version *outside* acceptance is the hard-solve-failure case the
@@ -747,6 +788,9 @@ struct RootTargets {
     cpns: std::collections::HashSet<Cpn>,
     /// Atoms dropped with a warning, reported after the plan
     unsatisfiable: Vec<output::UnsatisfiableTarget>,
+    /// Installed versions that satisfied a silently dropped atom, with why
+    /// policy filters them
+    masked_kept: Vec<(Cpv, String)>,
 }
 
 /// Classify each requested atom into a solver root dep, a reported
@@ -766,6 +810,7 @@ fn classify_root_targets(
     // reported after the plan (world-family provenance only — anything else is
     // fatal below).
     let mut unsatisfiable: Vec<output::UnsatisfiableTarget> = Vec::new();
+    let mut masked_kept: Vec<(Cpv, String)> = Vec::new();
     for target in atoms {
         let atom = &target.atom;
         let dep = Dep::parse(atom).map_err(|e| anyhow::anyhow!("bad atom '{atom}': {e}"))?;
@@ -803,7 +848,21 @@ fn classify_root_targets(
                     unsatisfiable.push(unsat);
                     continue;
                 }
-                targets::RootTargetDecision::DropSilently => continue,
+                targets::RootTargetDecision::DropSilently => {
+                    let is_installed = |cpv: &Cpv| {
+                        installed
+                            .get(&cpv.cpn)
+                            .is_some_and(|slots| slots.values().any(|v| *v == cpv.version))
+                    };
+                    masked_kept.extend(
+                        unsat
+                            .reasons
+                            .iter()
+                            .filter(|c| is_installed(&c.cpv))
+                            .map(|c| (c.cpv.clone(), repo::filter_reason_text(&c.reasons))),
+                    );
+                    continue;
+                }
                 targets::RootTargetDecision::Fatal => {
                     anyhow::bail!(output::unsatisfiable_target_message(
                         &unsat, data, multi_repo
@@ -818,6 +877,7 @@ fn classify_root_targets(
         deps,
         cpns,
         unsatisfiable,
+        masked_kept,
     })
 }
 

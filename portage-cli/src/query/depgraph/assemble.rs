@@ -54,6 +54,7 @@ pub(super) fn assemble(
         provided_avail,
         root_cpns,
         unsatisfiable,
+        masked_root_targets,
         host_installed_cpvs,
         base_installed_cpvs,
         target_installed_cpvs,
@@ -326,6 +327,17 @@ pub(super) fn assemble(
         let held_back = provider.check_held_back_targets(&solution);
         if !held_back.is_empty() {
             output::report_held_back_targets(&held_back);
+        }
+
+        let masked = super::masked_installed_kept(
+            &solution,
+            &masked_root_targets,
+            &provider,
+            &data,
+            &final_policy,
+        );
+        if !masked.is_empty() {
+            output::report_masked_installed(&masked);
         }
 
         let ru_violations = required_use::find_violations(&data, &order, &final_policy, &ceded);

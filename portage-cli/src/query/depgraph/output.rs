@@ -344,6 +344,21 @@ pub(super) fn report_repo_constraint_violations(violations: &[portage_atom_pubgr
     }
 }
 
+/// Report installed packages the plan leaves in place although config masks
+/// them. Advisory only: a root target or a deep update would have replaced
+/// them with a visible version.
+pub(super) fn report_masked_installed(masked: &[(Cpv, String)]) {
+    let mut out = anstream::stderr();
+    writeln!(
+        out,
+        "\n{C_OFF}***{C_OFF:#} Installed packages kept although masked:\n"
+    )
+    .ok();
+    for (cpv, why) in masked {
+        writeln!(out, "  {C_PKG}{cpv}{C_PKG:#} (masked by: {why})").ok();
+    }
+}
+
 /// Report root targets (`@system`/`@world` members, explicit atoms) the
 /// solver landed below their newest visible version. Advisory only — the
 /// plan is never mutated because of this; it just names a divergence that
