@@ -1,7 +1,8 @@
 # Phases should run from the saved environment, functions included
 
-Status: 🔴 cause found 2026-10-09, not fixed. The fix is in the brush
-fork's function printer, not in `em`. Follows from item 3 of
+Status: 🟡 printer fixed in the brush fork 2026-10-09 (branch
+`heredoc-line-print`, `e80dfeaf`, not pushed, `em` not bumped). A parser
+defect found on the way is open: [[brush-heredoc-line-continuation]]. Follows from item 3 of
 [[phase-order-and-binpkg]].
 
 ## What Portage does
@@ -79,3 +80,14 @@ print their operators without knowing a body is pending.
    parse back.
 3. Then decide whether binary install and uninstall switch to the saved
    functions, keeping the ebuild as the fallback.
+
+## Progress (2026-10-09)
+
+Step 1 is done in `~/Sources/brush`, branch `heredoc-line-print`, one
+commit on top of the pinned `3f1ab573`: bodies are queued while an
+and-or list is rendered and written after it. Four printer tests
+(print, parse back, print again) and a compat case that prints a
+function, re-evaluates it and runs it. Parser crate tests and the whole
+compat suite against bash pass (2495 succeeded, 0 failed).
+
+Not done: pushing the branch, bumping the `rev` here, steps 2 and 3.
