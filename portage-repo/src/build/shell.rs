@@ -969,6 +969,139 @@ impl EbuildShell {
         }
     }
 
+    /// Write PATH shims for the `do*`/`new*` install helpers into `helper_dir`
+    ///
+    /// `find -exec` and `xargs` need a real executable, not an in-shell builtin.
+    /// Each shim re-invokes `em __helper <name>`, which runs the same builtin
+    /// against the exported build environment.
+    fn write_helper_shims(helper_dir: &Path, em: &Path) -> Result<()> {
+        if let Err(e) = std::fs::create_dir_all(helper_dir) {
+            return Err(Error::Shell(format!(
+                "creating helper shim dir {}: {e}",
+                helper_dir.display()
+            )));
+        }
+        use std::os::unix::fs::PermissionsExt;
+        for name in commands::HELPER_NAMES {
+            let shim = helper_dir.join(name);
+            let script = format!(
+                "#!/bin/sh\nexec '{}' __helper '{name}' \"$@\"\n",
+                em.display()
+            );
+            if std::fs::write(&shim, script).is_ok() {
+                let _ = std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        Ok(())
+    }
+
+    /// Source the bashrc hooks: each profile's `profile.bashrc`, then the user's
+    ///
+    /// Not PMS; as portage's `__source_all_bashrcs`. A hook may define the phase
+    /// function or change the environment, so this runs before the function is
+    /// looked up, and a `die` in one aborts the phase.
+    async fn source_bashrc_hooks(&mut self, func_name: &str) -> Result<()> {
+        if self.bashrc_files.is_empty() {
+            return Ok(());
+        }
+        let mut script = String::new();
+        for f in &self.bashrc_files {
+            // __try_source: source if readable; bashrc is trusted code.
+            script.push_str(&format!("[[ -r '{0}' ]] && source '{0}'\n", f.as_str()));
+        }
+        self.run_string(&script).await.ok();
+        if let Some(msg) = self.die_flag.take() {
+            return Err(Error::Shell(format!(
+                "bashrc (before {func_name}): die: {msg}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Call the phase function, if the ebuild or the EAPI defaults define it
+    ///
+    /// Output goes to the phase log when one is set; `die` aborts the phase.
+    async fn call_phase_function(&mut self, func_name: &str) -> Result<()> {
+        let phase_defined = self.shell.funcs().get(func_name).is_some();
+        if phase_defined {
+            // Kept alive until after the phase returns: dropping it closes the
+            // pty and joins its reader, so the phase's output is fully drained
+            // to the console and the log before anything else happens.
+            let mut pty = None;
+            let invocation = match &self.phase_log {
+                Some((log, quiet)) => {
+                    if let Some(parent) = log.parent() {
+                        std::fs::create_dir_all(parent).ok();
+                    }
+                    let marker = format!(">>> {func_name}\n");
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(log)
+                        .and_then(|mut f| std::io::Write::write_all(&mut f, marker.as_bytes()));
+                    // `< /dev/null` on every shape below: a phase must never
+                    // reach the user's terminal. Portage redirects the same way
+                    // (outside FEATURES=interactive), and brush's `read`/
+                    // `mapfile` put whatever fd 0 names into non-canonical mode
+                    // with echo off, restored only when their guard drops — an
+                    // ebuild `read` would otherwise corrupt the real terminal.
+                    //
+                    // A phase aborts only via `die` (the shared flag checked
+                    // below), matching portage: the build helpers self-die on
+                    // failure (`emake`/`econf`/`unpack`/the install helpers) and
+                    // `eapply`/explicit `die` raise it directly. We deliberately
+                    // do NOT treat the phase function's *trailing* exit status as
+                    // fatal — many stock phases legitimately end on a non-zero
+                    // command (e.g. binutils' `find … -exec rmdir {} +` to trim
+                    // empty dirs), which portage tolerates.
+                    if *quiet {
+                        format!("{{ {func_name} ; }} < /dev/null >> {log} 2>&1")
+                    } else {
+                        // A pty on fd 1, so the phase and everything it spawns
+                        // sees a real terminal — the only thing that satisfies
+                        // `gentoo-functions`' per-call `[ -t 1 ]`, which no
+                        // amount of TERM/COLUMNS can. `em`'s own reader takes
+                        // the place of `tee`. Falls back when there is no
+                        // console to render to, as portage falls back to a
+                        // plain pipe.
+                        pty = pty::PhasePty::open(log);
+                        match &pty {
+                            Some(pty) => {
+                                format!(
+                                    "{{ {func_name} ; }} < /dev/null > {} 2>&1",
+                                    pty.slave_path()
+                                )
+                            }
+                            // The process-sub body may be polled after the
+                            // phase (and even after the build tree is cleaned
+                            // up); cd out of the cwd it cloned so the lazy
+                            // `tee` spawn never starts from a deleted ${S}.
+                            None => {
+                                format!(
+                                    "{{ {func_name} ; }} < /dev/null > >(cd / && tee -a {log}) 2>&1"
+                                )
+                            }
+                        }
+                    }
+                }
+                None => format!("{{ {func_name} ; }} < /dev/null"),
+            };
+            let phase_result = self.run_string(&invocation).await;
+            // Drain and close the pty before looking at how the phase went: a
+            // failing phase's own output is the first thing anyone reads.
+            drop(pty);
+            phase_result?;
+            // `die` aborts the phase even when it ran in a subshell or a
+            // helper pipeline whose exit status the phase ignored.
+            if let Some(msg) = self.die_flag.take() {
+                return Err(Error::Shell(format!("{func_name}: die: {msg}")));
+            }
+        } else {
+            tracing::warn!("{func_name} not defined, nothing to do");
+        }
+        Ok(())
+    }
+
     /// `ROOT`, `EPREFIX`, `ED`, `EROOT`, `SYSROOT` and `ESYSROOT` for a package
     /// merging into `root_str` (which ends in `/`) with its image at `d`
     ///
@@ -1813,31 +1946,11 @@ impl EbuildShell {
         // DISTDIR is already set by init_build_env() from env or ~/.cache/distfiles;
         // do not override it here.
 
-        // Drop PATH shims for the do*/new* install helpers so ebuilds that run
-        // them via `find -exec`/`xargs` (which need a real executable, not an
-        // in-shell builtin) work. Each shim re-invokes `em __helper <name>`,
-        // which runs the same builtin logic against the exported build env.
         // Written once per package; the directory is prepended to PATH each
         // phase (init_build_env rebuilds PATH from scratch).
         let helper_dir = work_root.join(".em-helpers");
         if need_source && let Ok(em) = std::env::current_exe() {
-            if let Err(e) = std::fs::create_dir_all(&helper_dir) {
-                return Err(Error::Shell(format!(
-                    "creating helper shim dir {}: {e}",
-                    helper_dir.display()
-                )));
-            }
-            use std::os::unix::fs::PermissionsExt;
-            for name in commands::HELPER_NAMES {
-                let shim = helper_dir.join(name);
-                let script = format!(
-                    "#!/bin/sh\nexec '{}' __helper '{name}' \"$@\"\n",
-                    em.display()
-                );
-                if std::fs::write(&shim, script).is_ok() {
-                    let _ = std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755));
-                }
-            }
+            Self::write_helper_shims(&helper_dir, &em)?;
         }
         let path = self.get_var("PATH").unwrap_or_default();
         self.set_var("PATH", &format!("{}:{path}", helper_dir.display()));
@@ -2056,106 +2169,9 @@ impl EbuildShell {
         // split-usr` (live 2026-08-07, 27 packages under --prefix --target).
         self.die_flag.take();
 
-        // Source portage bashrc hooks (profile.bashrc files, then the user's
-        // /etc/portage/bashrc) with the full phase environment available — not
-        // PMS; matches portage's __source_all_bashrcs. A bashrc may define the
-        // phase function or tweak the env (e.g. overlay search paths), so it
-        // runs before the function is resolved below.
-        if !self.bashrc_files.is_empty() {
-            let mut script = String::new();
-            for f in &self.bashrc_files {
-                // __try_source: source if readable; bashrc is trusted code.
-                script.push_str(&format!("[[ -r '{0}' ]] && source '{0}'\n", f.as_str()));
-            }
-            self.run_string(&script).await.ok();
-            if let Some(msg) = self.die_flag.take() {
-                return Err(Error::Shell(format!(
-                    "bashrc (before {func_name}): die: {msg}"
-                )));
-            }
-        }
+        self.source_bashrc_hooks(func_name).await?;
 
-        // Run the phase function (may have been defined by the ebuild or by
-        // __ebuild_phase_funcs as a fallback calling default()).
-        let phase_defined = self.shell.funcs().get(func_name).is_some();
-        if phase_defined {
-            // Kept alive until after the phase returns: dropping it closes the
-            // pty and joins its reader, so the phase's output is fully drained
-            // to the console and the log before anything else happens.
-            let mut pty = None;
-            let invocation = match &self.phase_log {
-                Some((log, quiet)) => {
-                    if let Some(parent) = log.parent() {
-                        std::fs::create_dir_all(parent).ok();
-                    }
-                    let marker = format!(">>> {func_name}\n");
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(log)
-                        .and_then(|mut f| std::io::Write::write_all(&mut f, marker.as_bytes()));
-                    // `< /dev/null` on every shape below: a phase must never
-                    // reach the user's terminal. Portage redirects the same way
-                    // (outside FEATURES=interactive), and brush's `read`/
-                    // `mapfile` put whatever fd 0 names into non-canonical mode
-                    // with echo off, restored only when their guard drops — an
-                    // ebuild `read` would otherwise corrupt the real terminal.
-                    //
-                    // A phase aborts only via `die` (the shared flag checked
-                    // below), matching portage: the build helpers self-die on
-                    // failure (`emake`/`econf`/`unpack`/the install helpers) and
-                    // `eapply`/explicit `die` raise it directly. We deliberately
-                    // do NOT treat the phase function's *trailing* exit status as
-                    // fatal — many stock phases legitimately end on a non-zero
-                    // command (e.g. binutils' `find … -exec rmdir {} +` to trim
-                    // empty dirs), which portage tolerates.
-                    if *quiet {
-                        format!("{{ {func_name} ; }} < /dev/null >> {log} 2>&1")
-                    } else {
-                        // A pty on fd 1, so the phase and everything it spawns
-                        // sees a real terminal — the only thing that satisfies
-                        // `gentoo-functions`' per-call `[ -t 1 ]`, which no
-                        // amount of TERM/COLUMNS can. `em`'s own reader takes
-                        // the place of `tee`. Falls back when there is no
-                        // console to render to, as portage falls back to a
-                        // plain pipe.
-                        pty = pty::PhasePty::open(log);
-                        match &pty {
-                            Some(pty) => {
-                                format!(
-                                    "{{ {func_name} ; }} < /dev/null > {} 2>&1",
-                                    pty.slave_path()
-                                )
-                            }
-                            // The process-sub body may be polled after the
-                            // phase (and even after the build tree is cleaned
-                            // up); cd out of the cwd it cloned so the lazy
-                            // `tee` spawn never starts from a deleted ${S}.
-                            None => {
-                                format!(
-                                    "{{ {func_name} ; }} < /dev/null > >(cd / && tee -a {log}) 2>&1"
-                                )
-                            }
-                        }
-                    }
-                }
-                None => format!("{{ {func_name} ; }} < /dev/null"),
-            };
-            let phase_result = self.run_string(&invocation).await;
-            // Drain and close the pty before looking at how the phase went: a
-            // failing phase's own output is the first thing anyone reads.
-            drop(pty);
-            phase_result?;
-            // `die` aborts the phase even when it ran in a subshell or a
-            // helper pipeline whose exit status the phase ignored.
-            if let Some(msg) = self.die_flag.take() {
-                return Err(Error::Shell(format!("{func_name}: die: {msg}")));
-            }
-        } else {
-            tracing::warn!("{func_name} not defined, nothing to do");
-        }
-
-        Ok(())
+        self.call_phase_function(func_name).await
     }
 
     /// Pre-parse every `.eclass` file in the shell's configured eclass directories
