@@ -3577,41 +3577,133 @@ mod tests {
     // (or the other bash dynamic vars) into the Install worker pins a stale
     // snapshot that brush never resizes on later pipelines.
     // The fix is simply never dumping them in the first place.
-    /// A one-package repository in `dir`, for tests that run real phases
-    fn probe_repo(dir: &std::path::Path, phases: &str) -> (Repository, Ebuild) {
-        let repo = Utf8Path::from_path(dir).unwrap().join("repo");
-        fs::create_dir_all(repo.join("metadata")).unwrap();
-        fs::create_dir_all(repo.join("profiles")).unwrap();
-        fs::create_dir_all(repo.join("app-misc/probe")).unwrap();
-        fs::write(repo.join("metadata/layout.conf"), "masters =\n").unwrap();
-        fs::write(repo.join("profiles/repo_name"), "probe\n").unwrap();
-        let path = repo.join("app-misc/probe/probe-1.ebuild");
-        let head = "EAPI=8\nDESCRIPTION=\"probe\"\nSLOT=\"0\"\nS=\"${WORKDIR}\"\n";
-        fs::write(&path, format!("{head}{phases}")).unwrap();
-        let repo = Repository::builder().in_memory_cache().open(&repo).unwrap();
-        (repo, Ebuild::from_path(&path).unwrap())
+    /// A scratch repository, work area and root for tests that run real
+    /// phases and merges
+    struct Probe {
+        dir: tempfile::TempDir,
     }
+
+    impl Probe {
+        fn new() -> Self {
+            let probe = Self {
+                dir: tempfile::tempdir().unwrap(),
+            };
+            let repo = probe.path("repo");
+            fs::create_dir_all(repo.join("metadata")).unwrap();
+            fs::create_dir_all(repo.join("profiles")).unwrap();
+            fs::write(repo.join("metadata/layout.conf"), "masters =\n").unwrap();
+            fs::write(repo.join("profiles/repo_name"), "probe\n").unwrap();
+            fs::create_dir_all(probe.path("root")).unwrap();
+            probe
+        }
+
+        fn path(&self, rel: &str) -> Utf8PathBuf {
+            Utf8Path::from_path(self.dir.path()).unwrap().join(rel)
+        }
+
+        /// Write `app-misc/<pf>.ebuild` with `phases` as its body. `note <word>`
+        /// in a phase appends the word to the probe's log.
+        fn ebuild(&self, pn: &str, pv: &str, phases: &str) -> Ebuild {
+            let dir = self.path("repo/app-misc").join(pn);
+            fs::create_dir_all(&dir).unwrap();
+            let path = dir.join(format!("{pn}-{pv}.ebuild"));
+            let log = self.path("log");
+            let head = format!(
+                "EAPI=8\nDESCRIPTION=\"probe\"\nSLOT=\"0\"\nS=\"${{WORKDIR}}\"\n\
+                 note() {{ echo \"$*\" >> '{log}'; }}\n"
+            );
+            fs::write(&path, format!("{head}{phases}")).unwrap();
+            Ebuild::from_path(&path).unwrap()
+        }
+
+        fn repo(&self) -> Repository {
+            Repository::builder()
+                .in_memory_cache()
+                .open(self.path("repo"))
+                .unwrap()
+        }
+
+        fn log(&self) -> String {
+            let log = fs::read_to_string(self.path("log")).unwrap_or_default();
+            log.split_whitespace().collect::<Vec<_>>().join(" ")
+        }
+
+        /// Run `phases` for `ebuild` in a shell of its own, merging into the
+        /// probe's root
+        async fn run(&self, ebuild: &Ebuild, phases: &[RunPhase]) -> Result<()> {
+            let repo = self.repo();
+            let mut shell = repo.shell().await.unwrap();
+            let pf = format!("{}-{}", ebuild.name(), ebuild.version());
+            let work = self.path("work").join(pf);
+            for phase in phases {
+                let context = PhaseContext {
+                    fetch_all_uri: false,
+                    merge_state: None,
+                };
+                let root = self.path("root");
+                run_one_phase(&mut shell, ebuild, &repo, *phase, &work, &root, context).await?;
+            }
+            Ok(())
+        }
+    }
+
+    const BUILD_AND_MERGE: &[RunPhase] = &[RunPhase::SETUP, RunPhase::INSTALL, RunPhase::Qmerge];
 
     #[tokio::test]
     async fn pkg_pretend_leaves_nothing_for_pkg_setup() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (repo, ebuild) = probe_repo(
-            tmp.path(),
-            "pkg_pretend() { FROM_PRETEND=1; }\npkg_setup() { FROM_SETUP=1; }\n",
+        let probe = Probe::new();
+        let ebuild = probe.ebuild(
+            "probe",
+            "1",
+            "pkg_pretend() { FROM_PRETEND=1; }\npkg_setup() { note \"${FROM_PRETEND-unset}\"; }\n",
         );
-        let mut shell = repo.shell().await.unwrap();
-        let work = Utf8PathBuf::try_from(tmp.path().join("work")).unwrap();
-        for phase in [RunPhase::PRETEND, RunPhase::SETUP] {
-            let context = PhaseContext {
-                fetch_all_uri: false,
-                merge_state: None,
-            };
-            run_one_phase(&mut shell, &ebuild, &repo, phase, &work, &work, context)
-                .await
-                .unwrap();
-        }
-        assert_eq!(shell.get_var("FROM_SETUP").as_deref(), Some("1"));
-        assert_eq!(shell.get_var("FROM_PRETEND"), None);
+        probe
+            .run(&ebuild, &[RunPhase::PRETEND, RunPhase::SETUP])
+            .await
+            .unwrap();
+        assert_eq!(probe.log(), "unset");
+    }
+
+    const INSTALLS_A_FILE: &str = "src_install() { note install; dodir /usr/share/probe; \
+         echo \"${PV}\" > \"${ED}/usr/share/probe/file\" || die; }\n";
+
+    #[tokio::test]
+    async fn a_merge_runs_preinst_then_installs_then_postinst() {
+        let probe = Probe::new();
+        let installed = probe.path("root/usr/share/probe/file");
+        let ebuild = probe.ebuild(
+            "probe",
+            "1",
+            &format!(
+                "pkg_setup() {{ note setup; }}\n{INSTALLS_A_FILE}\
+                 pkg_preinst() {{ [[ -e '{installed}' ]] && note early; note preinst; }}\n\
+                 pkg_postinst() {{ [[ -e '{installed}' ]] && note there; note postinst; }}\n"
+            ),
+        );
+        probe.run(&ebuild, BUILD_AND_MERGE).await.unwrap();
+
+        assert_eq!(probe.log(), "setup install preinst there postinst");
+        let contents = probe.path("root/var/db/pkg/app-misc/probe-1/CONTENTS");
+        let contents = fs::read_to_string(contents).unwrap();
+        assert!(
+            contents.contains("obj /usr/share/probe/file "),
+            "{contents}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_collision_aborts_the_merge_with_the_other_owner_intact() {
+        let probe = Probe::new();
+        let owner = probe.ebuild("owner", "1", INSTALLS_A_FILE);
+        let intruder = probe.ebuild("intruder", "7", INSTALLS_A_FILE);
+        probe.run(&owner, BUILD_AND_MERGE).await.unwrap();
+
+        let refused = probe.run(&intruder, BUILD_AND_MERGE).await;
+
+        assert!(refused.is_err());
+        let file = fs::read_to_string(probe.path("root/usr/share/probe/file")).unwrap();
+        assert_eq!(file.trim(), "1");
+        assert!(!probe.path("root/var/db/pkg/app-misc/intruder-7").exists());
     }
 
     #[test]
