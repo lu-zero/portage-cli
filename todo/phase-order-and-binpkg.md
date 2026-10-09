@@ -239,3 +239,34 @@ Found on the way, fixed 2026-10-09:
   the bare image directory while the merge reads `image/EPREFIX`. Empty
   CONTENTS, no files, exit 0. Now unpacked into `ED`. Test: the
   build-then-install case runs with and without a prefix.
+
+## Stage test (2026-10-09)
+
+Sandbox `em-binpkg-stage` (arm64): native `em toolchain --setup` and
+`em stages --stage1` from source with `-b` into one root, then the same
+from packages into a second root.
+
+Result with the fixes below: both steps exit 0 in the second root, 157
+binary installs and 2 source builds (glibc, see the last point), 141
+packages in each root, every CONTENTS path list identical.
+
+Found by it:
+
+- **The index lost entries with a multi-line value** (sqlite, libpcre2:
+  "tar failed" on the package directory). Fixed: one line per field.
+- **A regression of the saved-variable restore.** The list of
+  configured variables was taken after `pkg_pretend` had sourced the
+  ebuild, so everything was shielded and the ebuild sourced twice;
+  `app-alternatives/awk` died in `pkg_postinst` on `USE flag 'mawk' not
+  in IUSE_EFFECTIVE`. Fixed: the list is taken at unpack time. The unit
+  tests did not see it because their scratch repository has no metadata
+  cache, which makes `pkg_pretend` isolate every time.
+- **Every relative symlink in a package was corrupted** (`../x` stored
+  as `image./x`) by the tar rename of the image members. Old defect,
+  hidden until binary installs worked at all. Fixed and checked with
+  newly built packages: baselayout and ca-certificates, 297 links
+  identical between a source and a binary install.
+- **Not fixed: glibc's packages are never reused on arm64.** See
+  [[binpkg-build-env-key-from-final-flags]].
+
+The packages in that sandbox's `/root/pk` predate the symlink fix.
