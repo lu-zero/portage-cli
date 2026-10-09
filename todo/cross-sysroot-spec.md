@@ -235,3 +235,16 @@ is also pure, and a backend that wants "the ordered steps for this
 spec" wants it too, but it roughly triples the crate. Suggest: start
 `crossdev-core` with target + spec, move the plan when crossdev-stages
 actually asks for it.
+
+## Decided 2026-10-09 (Luca)
+
+- **Flag: the rustc way.** `--target` takes the tuple or a path to a
+  spec file; no dedicated flag.
+- **Spec versus profile is open, and to be thought through later.** The
+  Gentoo way to describe a system is a profile, so a spec file overlaps
+  with one; catalyst has the same pair (a spec file next to the profile
+  it names). What belongs in which is not settled, and the persistence
+  proposal above waits on it.
+- **Crate home: not yet.** First plan what the shared surface has to
+  hold, then pick the crate. Until then target and spec stay where they
+  are, in `portage-cli`'s crossdev module.
