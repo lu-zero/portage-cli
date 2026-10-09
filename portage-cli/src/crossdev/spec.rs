@@ -175,6 +175,46 @@ impl SysrootSpec {
         }
     }
 
+    /// The spec of the native toolchain bootstrap for `chost`: GCC, glibc and
+    /// kernel headers
+    ///
+    /// `profile` and `cflags` stay empty: the host's own configuration applies.
+    pub fn native(chost: &str) -> Self {
+        let atom = |cat: &str, pkg: &str| Dep::new(Cpn::new(cat, pkg));
+        Self {
+            tuple: chost.to_owned(),
+            profile: String::new(),
+            cflags: String::new(),
+            extra: Vec::new(),
+            toolchain: Toolchains {
+                gcc: Some(GccToolchain {
+                    compiler: atom("sys-devel", "gcc"),
+                    binutils: atom("sys-devel", "binutils"),
+                }),
+                ..Toolchains::default()
+            },
+            libc: LibcSpec {
+                atom: atom("sys-libs", "glibc"),
+                built_by: ToolchainId::Gcc,
+            },
+            kernel_headers: Some(KernelHeadersSpec {
+                atom: atom("sys-kernel", "linux-headers"),
+            }),
+            system: SystemSpec {
+                built_by: ToolchainId::Gcc,
+                exceptions: BTreeMap::new(),
+            },
+        }
+    }
+
+    /// The LLVM slot the clang toolchain is bound to, if the spec names one
+    pub fn llvm_slot(&self) -> Option<String> {
+        match self.toolchain.clang.as_ref()?.compiler.slot_dep.as_ref()? {
+            portage_atom::SlotDep::Slot { slot, .. } => slot.as_ref().map(ToString::to_string),
+            _ => None,
+        }
+    }
+
     /// The cross toolchain's own packages in bootstrap order, extras left out
     pub fn packages(&self) -> Vec<Cpn> {
         let Toolchains { gcc, clang } = &self.toolchain;

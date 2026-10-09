@@ -37,7 +37,10 @@
 use anyhow::Result;
 use portage_repo::ProfileStack;
 
-use super::target::{CrossTarget, Libc};
+use portage_atom::Dep;
+
+use super::spec::SysrootSpec;
+use super::target::CrossTarget;
 
 /// gcc USE forced off for **every** cross gcc build (crossdev `GUSE_DISABLE`)
 const GCC_DISABLE: &[&str] = &["-objc", "-objc++", "-objc-gc", "-vtv"];
@@ -87,17 +90,6 @@ pub struct StagePlan {
     pub steps: Vec<StageStep>,
 }
 
-impl Libc {
-    /// Package name in `::gentoo` (the `cross-*` overlay symlinks the same name)
-    fn pkg_name(self) -> &'static str {
-        match self {
-            Libc::Glibc => "glibc",
-            Libc::Musl => "musl",
-            Libc::Newlib => "newlib",
-        }
-    }
-}
-
 /// The flavour of staged toolchain bootstrap: **cross** or **native**
 ///
 /// The ordered step sequence ([`toolchain_plan`]) is identical; only how each component is
@@ -130,40 +122,12 @@ impl BootstrapKind {
         }
     }
 
-    /// The atom for an LLVM-model component, bound to the resolved LLVM slot
-    fn llvm_atom(&self, real_cat: &str, pkg: &str) -> String {
-        let atom = self.atom(real_cat, pkg);
-        match self {
-            BootstrapKind::Cross(CrossTarget {
-                llvm_slot: Some(slot),
-                ..
-            }) => format!("={atom}-{slot}*"),
-            _ => atom,
-        }
-    }
-
-    /// LLVM/Clang model (target runtimes, no two-stage gcc) vs the GCC
-    /// two-stage.
-    fn llvm(&self) -> bool {
-        match self {
-            BootstrapKind::Cross(t) => t.llvm,
-            BootstrapKind::Native => false,
-        }
-    }
-
-    /// Whether the target OS has a kernel (the `sys-kernel/linux-headers` step)
-    fn has_kernel(&self) -> bool {
-        match self {
-            BootstrapKind::Cross(t) => t.has_kernel,
-            BootstrapKind::Native => true,
-        }
-    }
-
-    /// The libc package name (`glibc` / `musl` / `newlib`)
-    fn libc_pkg(&self) -> &'static str {
-        match self {
-            BootstrapKind::Cross(t) => t.libc.pkg_name(),
-            BootstrapKind::Native => "glibc",
+    /// The atom for an LLVM-model component, bound to the spec's LLVM slot
+    fn llvm_atom(&self, spec: &SysrootSpec, dep: &Dep) -> String {
+        let atom = self.atom(dep.cpn.category.as_str(), dep.cpn.package.as_str());
+        match spec.llvm_slot() {
+            Some(slot) => format!("={atom}-{slot}*"),
+            None => atom,
         }
     }
 
@@ -200,8 +164,15 @@ impl BootstrapKind {
 /// kernel-headers needs no change; the libc step merges `sys-libs/<libc>`
 /// with `--nodeps` (breaking the glibc-needs-gcc cycle), bypassing that
 /// RDEPEND, so it reads the flag itself.
-pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: bool) -> StagePlan {
+pub fn toolchain_plan(
+    kind: &BootstrapKind,
+    spec: &SysrootSpec,
+    self_contained: bool,
+    prefix_guest: bool,
+) -> StagePlan {
     let atom = |real_cat: &str, pkg: &str| kind.atom(real_cat, pkg);
+    let libc = spec.libc.atom.cpn;
+    let libc_atom = || kind.atom(libc.category.as_str(), libc.package.as_str());
     let owned = |toks: &[&str]| toks.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let mut steps = Vec::new();
 
@@ -224,17 +195,22 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
         into_sysroot: baselayout_into_sysroot,
     });
 
-    if kind.llvm() {
+    if let Some(clang) = spec
+        .toolchain
+        .clang
+        .as_ref()
+        .filter(|_| spec.toolchain.gcc.is_none())
+    {
         // LLVM model: host clang already cross-targets, so there is no two-stage
         // gcc. baselayout → wrappers → kernel headers → libc → runtimes.
         steps.push(StageStep {
             label: "clang wrappers".into(),
-            atoms: vec![kind.llvm_atom("sys-devel", "clang-crossdev-wrappers")],
+            atoms: vec![kind.llvm_atom(spec, &clang.wrappers)],
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
         });
-        if kind.has_kernel() {
+        if spec.kernel_headers.is_some() {
             steps.push(StageStep {
                 label: "kernel headers".into(),
                 atoms: vec![kind.kernel_headers_atom()],
@@ -247,33 +223,33 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
         // links against those builtins (long-double helpers on aarch64).
         steps.push(StageStep {
             label: "libc headers".into(),
-            atoms: vec![atom("sys-libs", kind.libc_pkg())],
+            atoms: vec![libc_atom()],
             use_override: owned(&["headers-only"]),
             nodeps: false,
             into_sysroot: false,
         });
         steps.push(StageStep {
             label: "compiler-rt".into(),
-            atoms: vec![kind.llvm_atom("llvm-runtimes", "compiler-rt")],
+            atoms: vec![kind.llvm_atom(spec, &clang.rtlib)],
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
         });
         steps.push(StageStep {
             label: "libc".into(),
-            atoms: vec![atom("sys-libs", kind.libc_pkg())],
+            atoms: vec![libc_atom()],
             use_override: owned(&["-headers-only"]),
             nodeps: false,
             into_sysroot: false,
         });
         for (rt, use_override) in [
-            ("libunwind", owned(&["static-libs"])),
-            ("libcxxabi", vec![]),
-            ("libcxx", vec![]),
+            (&clang.unwind, owned(&["static-libs"])),
+            (&clang.cxxabi, vec![]),
+            (&clang.cxx, vec![]),
         ] {
             steps.push(StageStep {
-                label: rt.into(),
-                atoms: vec![kind.llvm_atom("llvm-runtimes", rt)],
+                label: rt.cpn.package.as_str().into(),
+                atoms: vec![kind.llvm_atom(spec, rt)],
                 use_override,
                 nodeps: false,
                 into_sysroot: false,
@@ -342,7 +318,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
     // (and libxcrypt) into ROOT and cycles with glibc. `--nodeps` on libc
     // mirrors cross's headers-first break: use already-merged headers + BROOT.
     if let BootstrapKind::Native = kind {
-        if kind.has_kernel() {
+        if spec.kernel_headers.is_some() {
             steps.push(StageStep {
                 label: "kernel headers".into(),
                 atoms: vec![kind.kernel_headers_atom()],
@@ -354,7 +330,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
         if !prefix_guest {
             steps.push(StageStep {
                 label: "libc".into(),
-                atoms: vec![atom("sys-libs", kind.libc_pkg())],
+                atoms: vec![libc_atom()],
                 use_override: vec![],
                 nodeps: true,
                 into_sysroot: false,
@@ -388,7 +364,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
         nodeps: false,
         into_sysroot: false,
     });
-    if kind.has_kernel() {
+    if spec.kernel_headers.is_some() {
         // Target `linux-headers` into the sysroot does not satisfy
         // `virtual/os-headers` on the EPREFIX installed view (glibc BDEPEND).
         // Host-shared mode already has it; self-contained needs it merged.
@@ -415,7 +391,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
     // without `--nodeps`.
     steps.push(StageStep {
         label: "libc".into(),
-        atoms: vec![atom("sys-libs", kind.libc_pkg())],
+        atoms: vec![libc_atom()],
         use_override: vec![],
         nodeps: false,
         into_sysroot: false,
@@ -525,6 +501,15 @@ pub fn stage1_plan(stack: &ProfileStack, bootstrap_use: &[String]) -> Result<Sta
 mod tests {
     use super::*;
 
+    /// The plan for `kind` under its built-in spec
+    fn plan_of(kind: &BootstrapKind, self_contained: bool, prefix_guest: bool) -> StagePlan {
+        let spec = match kind {
+            BootstrapKind::Cross(t) => SysrootSpec::builtin(t, &[]),
+            BootstrapKind::Native => SysrootSpec::native("x86_64-pc-linux-gnu"),
+        };
+        toolchain_plan(kind, &spec, self_contained, prefix_guest)
+    }
+
     fn labels(plan: &StagePlan) -> Vec<&str> {
         plan.steps.iter().map(|s| s.label.as_str()).collect()
     }
@@ -592,7 +577,7 @@ mod tests {
     #[test]
     fn gcc_glibc_plan_is_the_two_stage_bootstrap() {
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        let plan = plan_of(&BootstrapKind::Cross(t), false, false);
         // gcc-stage1 comes right after binutils (real crossdev's own order,
         // verified live 2026-08-24) — it needs neither kernel-headers nor a
         // separate libc-headers pass, and running any glibc pass first forces
@@ -653,7 +638,7 @@ mod tests {
         ] {
             let t = CrossTarget::parse(tuple, false).unwrap();
             let category = t.category();
-            let plan = toolchain_plan(&BootstrapKind::Cross(t.clone()), true, false);
+            let plan = plan_of(&BootstrapKind::Cross(t.clone()), true, false);
             let packages_set: std::collections::HashSet<(String, String)> = t
                 .packages()
                 .into_iter()
@@ -724,7 +709,7 @@ mod tests {
         // A from-scratch `--root DIR` crossdev EPREFIX has no host-shared
         // merged-usr skeleton or libs — same needs as native
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), true, false);
+        let plan = plan_of(&BootstrapKind::Cross(t), true, false);
         assert_eq!(labels(&plan)[0], "baselayout");
         assert!(plan.steps[0].atoms[0].ends_with("/baselayout"));
         let binutils = plan.steps.iter().find(|s| s.label == "binutils").unwrap();
@@ -754,7 +739,7 @@ mod tests {
         // debuginfod stays on (host satisfies DEPEND). os-headers is
         // self-contained-only.
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        let plan = plan_of(&BootstrapKind::Cross(t), false, false);
         assert_eq!(labels(&plan)[0], "baselayout");
         assert_eq!(plan.steps[0].atoms, ["sys-apps/baselayout"]);
         let binutils = plan.steps.iter().find(|s| s.label == "binutils").unwrap();
@@ -765,7 +750,7 @@ mod tests {
     #[test]
     fn llvm_plan_seeds_baselayout_before_wrappers() {
         let t = CrossTarget::parse("aarch64-unknown-linux-musl", true).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        let plan = plan_of(&BootstrapKind::Cross(t), false, false);
         assert_eq!(labels(&plan)[0], "baselayout");
         assert_eq!(plan.steps[0].atoms, ["sys-apps/baselayout"]);
         assert!(
@@ -778,7 +763,7 @@ mod tests {
 
     #[test]
     fn native_baselayout_does_not_force_sysroot() {
-        let plan = toolchain_plan(&BootstrapKind::Native, true, false);
+        let plan = plan_of(&BootstrapKind::Native, true, false);
         assert_eq!(plan.steps[0].label, "baselayout");
         assert!(
             !plan.steps[0].into_sysroot,
@@ -789,7 +774,7 @@ mod tests {
     #[test]
     fn baremetal_newlib_has_no_kernel_headers() {
         let t = CrossTarget::parse("riscv64-unknown-elf", false).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        let plan = plan_of(&BootstrapKind::Cross(t), false, false);
         assert!(!labels(&plan).contains(&"kernel headers"));
         assert!(plan.steps.iter().any(|s| s.atoms[0].ends_with("/newlib")));
     }
@@ -797,7 +782,7 @@ mod tests {
     #[test]
     fn llvm_plan_has_runtimes_not_two_stage_gcc() {
         let t = CrossTarget::parse("aarch64-unknown-linux-musl", true).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        let plan = plan_of(&BootstrapKind::Cross(t), false, false);
         let l = labels(&plan);
         assert!(l.contains(&"clang wrappers"));
         assert!(l.contains(&"compiler-rt"));
@@ -808,7 +793,7 @@ mod tests {
     #[test]
     fn llvm_plan_builds_compiler_rt_between_libc_headers_and_libc() {
         let t = CrossTarget::parse("aarch64-unknown-linux-musl", true).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        let plan = plan_of(&BootstrapKind::Cross(t), false, false);
         let l = labels(&plan);
         let pos = |name: &str| l.iter().position(|s| *s == name).unwrap();
         assert!(pos("libc headers") < pos("compiler-rt"));
@@ -819,7 +804,7 @@ mod tests {
     fn llvm_plan_binds_wrappers_and_runtimes_to_the_llvm_slot() {
         let mut t = CrossTarget::parse("aarch64-unknown-linux-musl", true).unwrap();
         t.llvm_slot = Some(21);
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        let plan = plan_of(&BootstrapKind::Cross(t), false, false);
         let atom = |label: &str| {
             plan.steps
                 .iter()
@@ -843,7 +828,7 @@ mod tests {
         // builds full glibc, then a single full gcc links against it.
         // toolchain.eclass gates all stage1 affordances on is_crosscompile, so a
         // native gcc is always --enable-shared and needs a full libc present.
-        let plan = toolchain_plan(&BootstrapKind::Native, true, false);
+        let plan = plan_of(&BootstrapKind::Native, true, false);
         assert_eq!(
             labels(&plan),
             [
@@ -905,7 +890,7 @@ mod tests {
         // under prefix-guest via its own RDEPEND conditional (no plan change
         // needed there) — only the libc step, which bypasses virtual/libc
         // entirely via --nodeps, needs an explicit skip.
-        let plan = toolchain_plan(&BootstrapKind::Native, true, true);
+        let plan = plan_of(&BootstrapKind::Native, true, true);
         assert_eq!(
             labels(&plan),
             [
@@ -933,7 +918,7 @@ mod tests {
         // use_outer_eroot), so its debuginfod deps are host-satisfied —
         // no need to force the flag off (behaviour-preserving).
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        let plan = plan_of(&BootstrapKind::Cross(t), false, false);
         let binutils = plan
             .steps
             .iter()

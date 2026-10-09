@@ -208,6 +208,7 @@ async fn setup(
     let self_contained = globals.outer_roots().is_self_contained_root();
     let plan = stages::toolchain_plan(
         &stages::BootstrapKind::Cross(target.clone()),
+        spec,
         self_contained,
         false,
     );
@@ -576,7 +577,8 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
         ensure_self_contained_prefix(globals)?;
     }
     let prefix_guest = native_prefix_guest(globals, &roots).await;
-    let plan = stages::toolchain_plan(&stages::BootstrapKind::Native, true, prefix_guest);
+    let spec = spec::SysrootSpec::native(&host_chost());
+    let plan = stages::toolchain_plan(&stages::BootstrapKind::Native, &spec, true, prefix_guest);
     let mut out = anstream::stdout();
     let verb = if globals.pretend() {
         "Plan"

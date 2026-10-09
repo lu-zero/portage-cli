@@ -149,11 +149,20 @@ Behaviour-neutral, checked two ways:
   `riscv64-unknown-linux-gnu`, `x86_64-unknown-linux-musl -L` and
   `arm-none-eabi`.
 
+`toolchain_plan` reads the spec too (2026-10-09, after Luca's yes to
+the native twin): which model, whether there are kernel headers, the
+libc, the clang wrappers and runtimes and the LLVM slot come from it.
+`em toolchain --setup` passes `SysrootSpec::native(CHOST)`, the GCC,
+glibc and headers the native plan had hardcoded; its `profile` and
+`cflags` are empty because the host's configuration applies. The plan
+tests are unchanged and pass, and `--setup -p` prints the same steps
+before and after for the three targets above and for the native
+bootstrap.
+
 Still reading `CrossTarget` instead of the spec:
 
-- **`toolchain_plan` in `crossdev/stages.rs`.** It goes through
-  `BootstrapKind`, shared with the native `em toolchain --setup`, so
-  this is the "native twin" question above and wants deciding first.
+- The GCC-model package names in `toolchain_plan` (`binutils`, `gcc`)
+  are still literals; only the LLVM-model ones come from the spec.
 - **Host-or-target env per package** (`cross_package_arch`): a table
   keyed by package name, not something the spec states. A spec naming a
   package outside the table gets the host environment, as `--ex-pkg`
@@ -161,3 +170,68 @@ Still reading `CrossTarget` instead of the spec:
 - `show_target_cfg`, which only prints.
 - Whether a package is LLVM-model (`target.llvm` in `env_mapping`,
   the keyword bound by `llvm_slot`).
+
+## What rustc and Meson implement (studied 2026-10-09)
+
+Sources: the rustc book's "Custom Targets" page; Meson's "Machine
+files" and "Cross compilation" pages.
+
+| | rustc | Meson |
+|---|---|---|
+| Flag | the existing `--target` | dedicated `--cross-file` / `--native-file` |
+| Value | built-in name, else a path to a JSON file, else `NAME.json` found on `RUST_TARGET_PATH` | a path, or a bare name found in `./`, then `$XDG_DATA_HOME/meson/cross`, then `$XDG_DATA_DIRS/meson/cross` |
+| Several files | no: one file is the whole target | yes: the flag repeats, a later file overrides an earlier one |
+| Partial file | no | yes, that is what layering is for |
+| Print the built-in | `--print target-spec-json`, nightly only | none; distributions ship files under `/usr/share/meson/cross` |
+| Native twin | none: a target is a target | `--native-file`, "nearly identical" format |
+| When read | every invocation | at the first setup only; later edits are ignored and the documented fix is to wipe the build tree |
+| Stability | format unstable, pin the compiler | stable, documented |
+
+What that suggests for `em`, as a proposal, not decided:
+
+- **rustc's flag shape.** `--target` already exists on every command
+  and already names the thing. `--target riscv64-unknown-linux-gnu`
+  stays the built-in; `--target ./k3.toml` (anything with a `/` or
+  ending in `.toml`) reads a file, whose `tuple` field says which
+  target it is. No second flag to keep in step with the first.
+- **Meson's partial files, without its layering.** The note already
+  assumes a file may describe a variant of a built-in tuple. So a file
+  needs `tuple` and whatever differs; the rest comes from the built-in
+  for that tuple. One file, not a stack: nothing here needs a stack yet.
+- **Neither tool's persistence.** rustc re-reads the file every time,
+  so the file must stay put; Meson reads it once and then ignores it,
+  which is its documented wart. `em` has a place neither has: the
+  sysroot. `--init-target` writes the spec in effect to
+  `<sysroot>/etc/portage/cross-sysroot.toml` (overwriting, as it does
+  its other config); `--setup` and later `--target T` invocations read
+  that copy; a bare tuple with no saved copy means the built-in. Under
+  `--target T --root R` the copy stays in the cross sysroot the
+  toolchain was built from; `R` records nothing.
+- **A search path** (`RUST_TARGET_PATH`, XDG) is what lets a
+  distribution or a tool like crossdev-stages ship named specs
+  (`--target k3`). Useful, and separable: add it when there is a
+  second spec to ship.
+- **Native twin**: Meson's precedent, same format with a few fields
+  that do not apply. Done here in the type (`SysrootSpec::native`);
+  what a native spec *file* leaves out is open.
+
+## Crate home, sized (2026-10-09)
+
+Luca: maybe a `crossdev-core`, depending on how big the API is. Today:
+
+- `crossdev/target.rs` (486 lines) and `crossdev/spec.rs` (about 370):
+  23 public items between them. `CrossTarget` (parse a tuple, category,
+  arch, profile path, CFLAGS, package table), `PackageArch`, and
+  `SysrootSpec` with its seven part types, `builtin`, `native`,
+  `packages`, `extras`, `llvm_slot`, `to_toml`.
+- Dependencies: `gentoo-core` (`Arch`), `portage-atom` (`Dep`, `Cpn`),
+  `serde`, `toml`, and `anyhow`, which a library crate would trade for
+  an error type of its own.
+- Nothing in either file touches `Cli`, the filesystem or a shell.
+
+So the split is cheap and clean. The one judgement call is
+`crossdev/stages.rs` (`toolchain_plan`, about 900 lines with tests): it
+is also pure, and a backend that wants "the ordered steps for this
+spec" wants it too, but it roughly triples the crate. Suggest: start
+`crossdev-core` with target + spec, move the plan when crossdev-stages
+actually asks for it.
