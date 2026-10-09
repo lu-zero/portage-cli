@@ -1,8 +1,9 @@
 # The shell drops or rejects what follows a here-document on its line
 
-Status: 🔴 found 2026-10-09 while fixing the function printer
-([[saved-environment-functions]]). In the brush fork's winnow parser,
-which is the one `em` builds with (`experimental-parser`). Not fixed.
+Status: ✅ fixed 2026-10-09 in the brush fork (`fc8f96f6` on
+`for-portage-repo`, pushed) and `em` moved to it. Found while fixing the
+function printer ([[saved-environment-functions]]), in the fork's winnow
+parser, which is the one `em` builds with (`experimental-parser`).
 
 ## What happens
 
@@ -53,3 +54,21 @@ stands. Two ways:
 
 Three compat cases for this are in the fork as known failures
 (`brush-shell/tests/cases/compat/here.yaml`).
+
+## Fixed (2026-10-09)
+
+The first direction. The operator's line is parsed in place; the body
+is read ahead when the operator is met and its lines are recorded per
+parse; the newline parser steps over them when it consumes the newline
+ending the operator's line. The trailing-string plumbing is gone. An
+unquoted delimiter now also ends at an operator character (`<<EOF;`).
+
+Checked: every row of the table and 17 further shapes give bash's
+output; a parser test has both parsers agree on twelve such lines; the
+three compat cases pass; the fork's compat suite has 2498 succeeding and
+0 failing. In `em`: an ebuild whose second `cat > … <<-EOF || die`
+fails was installed as if it had worked before, and now dies.
+
+Known limits, as before the change: the operator's line is taken to end
+at the first newline, so a quoted string or a backslash continuation
+that spans lines after the operator is not handled.

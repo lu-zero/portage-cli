@@ -4051,6 +4051,37 @@ mod tests {
         assert!(!probe.path("root/var/db/pkg/app-misc/probe-1").exists());
     }
 
+    // The saved environment is the package's code at uninstall when its ebuild
+    // is gone: every function in it has to read back, here-documents included.
+    #[tokio::test]
+    async fn the_saved_environment_can_be_sourced_again() {
+        let probe = Probe::new();
+        let ebuild = probe.ebuild(
+            "probe",
+            "1",
+            &format!(
+                "{INSTALLS_A_FILE}\
+                 piped() {{\n\tcat <<-EOF | tr a-z A-Z\n\t\tpiped\n\tEOF\n}}\n\
+                 checked() {{\n\tcat <<-EOF || note failed\n\t\tchecked\n\tEOF\n}}\n"
+            ),
+        );
+        probe.run(&ebuild, BUILD_AND_MERGE).await.unwrap();
+
+        let saved = probe.path("root/var/db/pkg/app-misc/probe-1/environment.bz2");
+        let dump = decompress_bzip2(&fs::read(saved).unwrap()).unwrap();
+        let script = probe.path("saved-environment");
+        fs::write(&script, dump).unwrap();
+        let out = probe.path("out");
+
+        let repo = probe.repo();
+        let mut shell = repo.shell().await.unwrap();
+        shell
+            .run_string(&format!(". '{script}' && {{ piped; checked; }} > '{out}'"))
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(out).unwrap(), "PIPED\nchecked\n");
+    }
+
     #[tokio::test]
     async fn a_collision_aborts_the_merge_with_the_other_owner_intact() {
         let probe = Probe::new();

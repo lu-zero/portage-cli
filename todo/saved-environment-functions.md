@@ -1,7 +1,7 @@
 # Phases should run from the saved environment, functions included
 
 Status: 🟡 printer fixed in the brush fork 2026-10-09 (`e80dfeaf` on
-`for-portage-repo`, pushed) and `em` moved to it; steps 2 and 3 open. A parser
+`for-portage-repo`, pushed) and `em` moved to it; step 2 done, step 3 a decision. A parser
 defect found on the way is open: [[brush-heredoc-line-continuation]]. Follows from item 3 of
 [[phase-order-and-binpkg]].
 
@@ -92,4 +92,8 @@ compat suite against bash pass (2495 succeeded, 0 failed).
 
 Landed on `for-portage-repo`, pushed, and the `rev` here bumped the same
 day. Live: baselayout's saved environment, the one that failed, now
-parses with `bash -n`. Steps 2 and 3 are not done.
+parses with `bash -n`. Step 2 is done: `the_saved_environment_can_be_sourced_again` builds a
+package whose functions hold here-documents before a pipe and before
+`||`, sources its saved environment in a fresh shell and runs them.
+Step 3, whether binary installs and uninstalls switch to the saved
+functions, is a decision and not taken.
