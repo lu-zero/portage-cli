@@ -1,7 +1,7 @@
 # Phases should run from the saved environment, functions included
 
-Status: 🟡 printer fixed in the brush fork 2026-10-09 (branch
-`heredoc-line-print`, `e80dfeaf`, not pushed, `em` not bumped). A parser
+Status: 🟡 printer fixed in the brush fork 2026-10-09 (`e80dfeaf` on
+`for-portage-repo`, pushed) and `em` moved to it; steps 2 and 3 open. A parser
 defect found on the way is open: [[brush-heredoc-line-continuation]]. Follows from item 3 of
 [[phase-order-and-binpkg]].
 
@@ -90,4 +90,6 @@ and-or list is rendered and written after it. Four printer tests
 function, re-evaluates it and runs it. Parser crate tests and the whole
 compat suite against bash pass (2495 succeeded, 0 failed).
 
-Not done: pushing the branch, bumping the `rev` here, steps 2 and 3.
+Landed on `for-portage-repo`, pushed, and the `rev` here bumped the same
+day. Live: baselayout's saved environment, the one that failed, now
+parses with `bash -n`. Steps 2 and 3 are not done.
