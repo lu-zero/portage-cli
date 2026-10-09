@@ -1,8 +1,8 @@
 # A masked installed version was still a build candidate
 
-Status: 🟡 both fixes committed 2026-10-07; the warning is not (see "The
-warning"). Cross-reviewed by a second model the same day; its findings
-are folded in below.
+Status: ✅ both fixes committed 2026-10-07, the warning 2026-10-09 on top
+of the depgraph split. Cross-reviewed by a second model the day of the
+fixes; its findings are folded in below.
 Found while adding `em crossdev` version preferences
 ([[crossdev-gcc-version-flag]]). Two separate causes turned up; the
 first note written here blamed only the first, and the crossdev symptom
