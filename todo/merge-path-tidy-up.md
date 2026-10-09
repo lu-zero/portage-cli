@@ -204,9 +204,9 @@ Open:
 - **More of `run_phase`.** Toolchain selection, `PATH` and helper
   shims, and the sourcing with its `E_*` accumulation are separable
   blocks. 55 shell tests cover them.
-- **A missing profile.** `PackageSetup::load` warns and builds without
-  profile defaults. Not changed, because it is not local: `em`'s merge
-  driver (`emerge.rs`), `em info`, config protection and `em use` all
-  accept a missing profile the same way and say so. Making the build
-  path alone an error would be inconsistent; making all of them errors
-  is a policy change. Luca to decide.
+- **A missing profile: stays a warning** (Luca, 2026-10-09), as in the
+  merge driver, `em info`, config protection and `em use`. Note that
+  this is *not* what emerge does: `_emerge/main.py::profile_check`
+  prints "Your current profile is invalid" and returns 1 for every
+  action but help, info, search, sync and version. Luca assumed emerge
+  warned; revisit if that changes the decision.
