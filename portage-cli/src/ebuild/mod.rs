@@ -3839,6 +3839,32 @@ mod tests {
                  note() {{ echo \"$*\" >> '{log}'; }}\n"
             );
             fs::write(&path, format!("{head}{phases}")).unwrap();
+
+            // A metadata cache entry, as a real tree has: what the ebuild
+            // defines decides, for one, whether pkg_pretend is isolated.
+            let defined: Vec<&str> = [
+                ("pkg_pretend()", "pretend"),
+                ("pkg_setup()", "setup"),
+                ("src_install()", "install"),
+                ("pkg_preinst()", "preinst"),
+                ("pkg_postinst()", "postinst"),
+                ("pkg_prerm()", "prerm"),
+                ("pkg_postrm()", "postrm"),
+            ]
+            .into_iter()
+            .filter_map(|(function, phase)| phases.contains(function).then_some(phase))
+            .collect();
+            let cache = self.path("repo/metadata/md5-cache/app-misc");
+            fs::create_dir_all(&cache).unwrap();
+            let entry = format!(
+                "DEFINED_PHASES={}\nDESCRIPTION=probe\nEAPI=8\nSLOT=0\n",
+                if defined.is_empty() {
+                    "-".to_owned()
+                } else {
+                    defined.join(" ")
+                }
+            );
+            fs::write(cache.join(format!("{pn}-{pv}")), entry).unwrap();
             Ebuild::from_path(&path).unwrap()
         }
 
