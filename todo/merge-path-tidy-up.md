@@ -1,6 +1,7 @@
 # Tidy the build-and-merge path: four oversized functions, and the tests to do it safely
 
-Status: 🟡 first cut done 2026-10-08 (`run_inner` in two), the rest open. Decided with Luca: several
+Status: 🟡 harness, `run_merge` and `run_group` done 2026-10-09; `walk_image`
+and the rest of `run_phase` open. See "Progress" at the end. Decided with Luca: several
 hundred lines in one function is a problem in itself, and every
 phase-order defect in [[phase-order-and-binpkg]] sat in the seams
 between these four.
@@ -155,3 +156,40 @@ already populate.
    then `run_group` into its stages; cases 3, 4 and 6 on `run_group`.
 4. `run_phase` setup/execution split, then move the collision check.
 5. Items 2, 3 and 7 of [[phase-order-and-binpkg]] onto the new shape.
+
+## Progress (2026-10-09)
+
+- **Harness.** `Probe` in `ebuild/mod.rs` tests: a scratch repository,
+  work area and root, real phases through `run_one_phase`, whole groups
+  through `PackageSetup::run_group` on a setup filled in by hand. Seven
+  tests: `pkg_pretend` isolation, merge order, replacement order with
+  `REPLACED_BY_VERSION` and a value kept from `pkg_postinst` to
+  `pkg_postrm`, collision abort before `pkg_preinst`, build with a
+  package then install from it (with and without a prefix, `MERGE_TYPE`
+  and restored variables included), build-only. Cases 1 to 7 above are
+  all covered except `REPLACING_VERSIONS`.
+  The harness found two defects the hand checks had missed: the saved
+  environment was not read back at uninstall, and a binary install
+  under a prefix installed nothing. Both fixed, see
+  [[phase-order-and-binpkg]].
+- **`run_merge`: 245 → 176 lines.** `check_collisions`,
+  `register_merged`, `report_protected` are functions; the body reads as
+  the sequence. The preserved-libs bookkeeping is still inline.
+- **`run_group`: 280 → 191 lines**, most of it the phase loop.
+  `clean_stale_tree`, `extract_binpkg`, `restore_worker_env`,
+  `preset_replacing_versions`, `drop_build_tree` are functions.
+- **`run_phase`: one cut.** `effective_eprefix`, `ed_under` and the
+  public `image_ed` came out, which was what the collision check
+  needed. The function is still about 500 lines.
+
+Open:
+
+- `walk_image` into plan and apply (246 lines, one flag, 14 tests).
+- The rest of `run_phase`: its own comment already asks for a
+  `RootVars { root, eprefix, ed, eroot, sysroot, esysroot }` value
+  built by one function; then toolchain selection and `PATH`.
+- `PackageSetup::load` and `run_group` still share the whole
+  `PhaseGroupRun`; the tests show `run_group` needs `group`, `work_dir`,
+  `root`, `roots`, `buildpkg`, `binpkg` and little else.
+- Whether a missing profile becomes an error in `load`.
+- A test for `REPLACING_VERSIONS`.

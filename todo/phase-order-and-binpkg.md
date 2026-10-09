@@ -1,9 +1,8 @@
 # Phase order around install, packaging and merge
 
-Status: 🟢 audit done 2026-10-08; items 1 to 7 fixed 2026-10-08/09. One
-difference from Portage is left, the collision check running after
-`pkg_preinst`, and it waits on [[merge-path-tidy-up]]. See "Progress" at
-the end. Started from
+Status: ✅ audit done 2026-10-08; every item fixed 2026-10-08/09 and
+covered by tests in `portage-cli/src/ebuild/mod.rs` (`Probe`). The two
+limits of item 3 are stated under "Progress (2026-10-09)". Started from
 one failure (a binary package of `sys-apps/baselayout` that cannot be
 installed) and widened to how `em` orders the phases against PMS and
 Portage 3.0.82.
@@ -222,21 +221,15 @@ Found on the way, not fixed:
   uninstall, so they get it back.
 - `setup::host_tools::tests::resolve_takes_the_first_extra_path_hit_that_behaves`
   failed once in a full run and passed three times alone.
-
-Open:
-
-- **Collision check before `pkg_preinst`** (the remaining half of 5).
-  Two effects of checking after it, as `em` does:
-  - an abort leaves whatever `pkg_preinst` already did to `ROOT` (a
-    directory layout, a migration step, a stopped service) with no
-    package installed to account for it; Portage aborts first and
-    leaves `ROOT` untouched;
-  - files `pkg_preinst` adds to the image are collision-checked, which
-    Portage does not do, so `em` can refuse a merge Portage accepts.
-  Neither writes over another package's files. Decided 2026-10-08
-  (Luca): take this up when `EbuildShell::run_phase` is tidied — it is
-  several hundred lines, which is a problem in itself. Separating "set
-  up the environment for this build tree" from "run this phase
-  function" there gives the merge a way to learn `ED` before any phase,
-  and the scan then moves ahead of `pkg_preinst` in every case,
-  including a bare `em ebuild … qmerge`.
+- **5, second half — collisions before `pkg_preinst`.** Done without
+  waiting for the whole `run_phase` split: the derivation of the
+  effective `EPREFIX` and of `ED` moved out of `run_phase` into
+  `EbuildShell::image_ed`, which needs no phase to have run. The scan
+  and the check now come first; an abort leaves the root untouched and
+  `pkg_preinst` unrun, and what `pkg_preinst` adds to the image is no
+  longer checked, as in Portage.
+- **A binary install under a prefix installed nothing** (found while
+  checking the above live). A package holds `ED`; it was unpacked into
+  the bare image directory while the merge reads `image/EPREFIX`. Empty
+  CONTENTS, no files, exit 0. Now unpacked into `ED`. Test: the
+  build-then-install case runs with and without a prefix.
