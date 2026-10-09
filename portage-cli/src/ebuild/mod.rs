@@ -1602,7 +1602,9 @@ impl PackageSetup {
                 if *phase == RunPhase::SETUP
                     && let Some(saved) = package_environment.take()
                 {
-                    restore_package_variables(&mut shell, &ebuild, &work_root, &saved).await?;
+                    let configured = variable_names(&mut shell, &work_root).await?;
+                    restore_package_variables(&mut shell, &ebuild, &work_root, &saved, &configured)
+                        .await?;
                 }
 
                 // Serialise the merge critical section under `--jobs`: builds (compile
@@ -2355,6 +2357,15 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
 
     let old_sourced = match &old_ebuild {
         Some(e) => {
+            // What the package's own phases set when it was installed. It was
+            // saved on this system, so nothing here has to be shielded from it.
+            if let Ok(saved) = std::fs::read(old_pkg.path().join("environment.bz2"))
+                && let Err(e) =
+                    restore_package_variables(shell, e, old_work_root, &saved, &HashSet::new())
+                        .await
+            {
+                crate::style::warn_line!("could not restore the saved environment: {e:#}");
+            }
             shell
                 .run_phase(e, "prerm", old_work_root.as_std_path(), root.as_std_path())
                 .await
@@ -3083,7 +3094,7 @@ fn filter_declare_dump(text: &str) -> String {
 /// variables whose name is not in `configured`. Exported ones are environment,
 /// which the installing system and a fresh `pkg_setup` provide. Functions come
 /// from the ebuild: a printed body with a heredoc does not parse back.
-fn package_variables(dump: &str, configured: &HashSet<&str>) -> String {
+fn package_variables(dump: &str, configured: &HashSet<String>) -> String {
     let mut out = String::new();
     let mut keep = false;
     let mut lines = dump.lines().peekable();
@@ -3110,27 +3121,41 @@ fn package_variables(dump: &str, configured: &HashSet<&str>) -> String {
     out
 }
 
+/// The names of the variables set in the shell
+async fn variable_names(
+    shell: &mut portage_repo::EbuildShell,
+    work_root: &Utf8Path,
+) -> Result<HashSet<String>> {
+    let temp = work_root.join("temp");
+    std::fs::create_dir_all(temp.as_std_path()).with_context(|| format!("creating {temp}"))?;
+    let dump = capture_variables(shell, work_root)
+        .await
+        .map_err(|e| anyhow!("listing the shell's variables: {e}"))?;
+    let dump = String::from_utf8_lossy(&dump);
+    Ok(dump
+        .lines()
+        .filter_map(declared_name)
+        .map(str::to_owned)
+        .collect())
+}
+
 /// Give the shell what the package's earlier phases left in their variables
 ///
-/// PMS keeps a variable's value from one phase function to the next; for a
-/// binary package the earlier ones ran where it was built. As for the install
-/// worker, the ebuild is sourced for its functions and the variables go on top.
+/// PMS keeps a variable's value from one phase function to the next, a later
+/// uninstall included; for a binary package the earlier ones ran where it was
+/// built. As for the install worker, the ebuild is sourced for its functions
+/// and the variables go on top, except those named in `configured`.
 async fn restore_package_variables(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
     work_root: &Utf8Path,
     saved_bz2: &[u8],
+    configured: &HashSet<String>,
 ) -> Result<()> {
     let temp = work_root.join("temp");
     std::fs::create_dir_all(temp.as_std_path()).with_context(|| format!("creating {temp}"))?;
-    let configured = capture_variables(shell, work_root)
-        .await
-        .map_err(|e| anyhow!("listing the configured variables: {e}"))?;
-    let configured = String::from_utf8_lossy(&configured);
-    let configured: HashSet<&str> = configured.lines().filter_map(declared_name).collect();
-
     let dump = decompress_bzip2(saved_bz2).map_err(|e| anyhow!("saved environment: {e}"))?;
-    let variables = package_variables(&String::from_utf8_lossy(&dump), &configured);
+    let variables = package_variables(&String::from_utf8_lossy(&dump), configured);
     let path = temp.join("environment.binpkg");
     std::fs::write(path.as_std_path(), variables).with_context(|| format!("writing {path}"))?;
 
@@ -3692,6 +3717,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_replacement_removes_the_old_version_between_preinst_and_postinst() {
+        let probe = Probe::new();
+        let old = probe.ebuild(
+            "probe",
+            "1",
+            &format!(
+                "{INSTALLS_A_FILE}pkg_postinst() {{ FROM_POSTINST=kept; }}\n\
+                 pkg_prerm() {{ note \"prerm-1:by=${{REPLACED_BY_VERSION}}\"; }}\n\
+                 pkg_postrm() {{ note \"postrm-1:${{FROM_POSTINST-lost}}\"; }}\n"
+            ),
+        );
+        let new = probe.ebuild(
+            "probe",
+            "2",
+            &format!(
+                "{INSTALLS_A_FILE}pkg_preinst() {{ note preinst-2; }}\n\
+                 pkg_postinst() {{ note postinst-2; }}\n"
+            ),
+        );
+        probe.run(&old, BUILD_AND_MERGE).await.unwrap();
+        probe.run(&new, BUILD_AND_MERGE).await.unwrap();
+
+        assert_eq!(
+            probe.log(),
+            "install install preinst-2 prerm-1:by=2 postrm-1:kept postinst-2"
+        );
+        let file = fs::read_to_string(probe.path("root/usr/share/probe/file")).unwrap();
+        assert_eq!(file.trim(), "2");
+        assert!(!probe.path("root/var/db/pkg/app-misc/probe-1").exists());
+    }
+
+    #[tokio::test]
     async fn a_collision_aborts_the_merge_with_the_other_owner_intact() {
         let probe = Probe::new();
         let owner = probe.ebuild("owner", "1", INSTALLS_A_FILE);
@@ -3722,7 +3779,7 @@ mod tests {
             "    declare -- INSIDE=\"body\"\n",
             "}\n",
         );
-        let configured = HashSet::from(["CHOST"]);
+        let configured = HashSet::from(["CHOST".to_owned()]);
         assert_eq!(
             package_variables(dump, &configured),
             concat!(

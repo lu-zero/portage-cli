@@ -207,6 +207,14 @@ nothing); workspace 2264 tests, clippy, fmt, rustdoc clean.
   `EROOT`, and `-B` runs `pkg_setup`. Portage does the same. A probe
   ebuild built with `-B` leaves only `em`'s own `var/` state.
 
+- **6, second half — the saved state at uninstall.** Saving the
+  environment after `pkg_postinst` was not enough: `pkg_prerm` and
+  `pkg_postrm` source the ebuild copy kept in the VDB and only fell back
+  to the saved environment when that copy was missing, so a value set
+  at install time never reached them. Found by the first merge-level
+  test. The saved variables now go on top of the sourced ebuild there
+  too.
+
 Found on the way, not fixed:
 
 - The saved environment holds the build process's environment, e.g.
