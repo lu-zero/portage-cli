@@ -3731,6 +3731,62 @@ mod tests {
             }
             Ok(())
         }
+
+        /// Run a whole phase group for `ebuild` on a setup filled in by hand,
+        /// merging into `root` (a directory of the probe)
+        async fn run_group(
+            &self,
+            ebuild: &Ebuild,
+            group: PhaseGroup,
+            root: &str,
+            binpkg: Option<&Utf8Path>,
+        ) -> Result<()> {
+            let repo = self.repo();
+            let shell = repo.shell().await.unwrap();
+            let pf = format!("{}-{}", ebuild.name(), ebuild.version());
+            let work = self.path("work").join(root).join(pf);
+            let root = self.path(root);
+            let setup = PackageSetup {
+                ebuild: ebuild.clone(),
+                repo,
+                shell,
+                work_root: work.clone(),
+                features: Default::default(),
+                _builddir_lock: None,
+            };
+            setup
+                .run_group(PhaseGroupRun {
+                    ebuild_path: ebuild.path().as_str(),
+                    cpv: None,
+                    group: &group,
+                    work_dir: Some(&work),
+                    repo_override: None,
+                    root: &root,
+                    use_flags: None,
+                    distdir: None,
+                    phase_log: None,
+                    roots: RootContext::default(),
+                    merge_gate: None,
+                    buildpkg: true,
+                    binpkg,
+                    force_verify_signature: false,
+                    activity: None,
+                })
+                .await
+        }
+
+        /// The one binary package under `root`'s default `PKGDIR`
+        fn package(&self, root: &str) -> Option<Utf8PathBuf> {
+            let dir = self.path(root).join("var/cache/binpkgs/app-misc");
+            let mut found = fs::read_dir(dir).ok()?.flatten();
+            Utf8PathBuf::try_from(found.next()?.path()).ok()
+        }
+    }
+
+    /// The packager honours `PKGDIR` from the process environment, which
+    /// would take these tests' packages out of their scratch root.
+    fn pkgdir_is_redirected() -> bool {
+        std::env::var_os("PKGDIR").is_some()
     }
 
     const BUILD_AND_MERGE: &[RunPhase] = &[RunPhase::SETUP, RunPhase::INSTALL, RunPhase::Qmerge];
@@ -3822,6 +3878,65 @@ mod tests {
         let file = fs::read_to_string(probe.path("root/usr/share/probe/file")).unwrap();
         assert_eq!(file.trim(), "1");
         assert!(!probe.path("root/var/db/pkg/app-misc/intruder-7").exists());
+    }
+
+    const NOTES_ITS_PHASES: &str = "pkg_setup() { note \"setup:${MERGE_TYPE}\"; }\n\
+         src_install() { FROM_INSTALL=built; dodir /usr/share/probe; \
+         echo hi > \"${ED}/usr/share/probe/file\" || die; }\n\
+         pkg_preinst() { note \"preinst:${MERGE_TYPE}:${FROM_INSTALL-lost}\"; \
+         rm \"${ED}/usr/share/probe/file\" || die; }\n\
+         pkg_postinst() { note postinst; }\n";
+
+    #[tokio::test]
+    async fn a_package_built_with_a_merge_installs_like_the_source_did() {
+        if pkgdir_is_redirected() {
+            return;
+        }
+        let probe = Probe::new();
+        let ebuild = probe.ebuild("probe", "1", NOTES_ITS_PHASES);
+        probe
+            .run_group(&ebuild, PhaseGroup::Full, "root", None)
+            .await
+            .unwrap();
+        let package = probe.package("root").expect("a package next to the merge");
+        fs::create_dir_all(probe.path("root2")).unwrap();
+        probe
+            .run_group(&ebuild, PhaseGroup::BinpkgMerge, "root2", Some(&package))
+            .await
+            .unwrap();
+
+        // pkg_preinst removes the file from the image on both sides, which it
+        // can only do the second time if the package still held it.
+        assert_eq!(
+            probe.log(),
+            "setup:source preinst:source:built postinst \
+             setup:binary preinst:binary:built postinst"
+        );
+        let contents = |root: &str| {
+            let path = probe
+                .path(root)
+                .join("var/db/pkg/app-misc/probe-1/CONTENTS");
+            fs::read_to_string(path).unwrap()
+        };
+        assert_eq!(contents("root"), contents("root2"));
+    }
+
+    #[tokio::test]
+    async fn a_build_only_run_packages_and_installs_nothing() {
+        if pkgdir_is_redirected() {
+            return;
+        }
+        let probe = Probe::new();
+        let ebuild = probe.ebuild("probe", "1", NOTES_ITS_PHASES);
+        probe
+            .run_group(&ebuild, PhaseGroup::BuildOnly, "root", None)
+            .await
+            .unwrap();
+
+        assert_eq!(probe.log(), "setup:buildonly");
+        assert!(probe.package("root").is_some());
+        assert!(!probe.path("root/var/db/pkg/app-misc").exists());
+        assert!(!probe.path("root/usr").exists());
     }
 
     #[test]
