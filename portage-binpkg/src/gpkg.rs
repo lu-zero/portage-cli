@@ -837,6 +837,21 @@ pub fn read_environment(container: &Path) -> Result<Option<Vec<u8>>> {
     }
 }
 
+/// The ebuild the package was built from (`metadata/<PF>.ebuild`); `None` when
+/// the package carries none.
+///
+/// Not signature-checked here, like [`read_environment`].
+pub fn read_ebuild(container: &Path) -> Result<Option<Vec<u8>>> {
+    let staging = stage_metadata(container)?;
+    for entry in std::fs::read_dir(staging.path().join("metadata"))? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|e| e == "ebuild") {
+            return Ok(Some(std::fs::read(path)?));
+        }
+    }
+    Ok(None)
+}
+
 /// Unpack the container's `metadata/` directory into a temporary directory
 fn stage_metadata(container: &Path) -> Result<tempfile::TempDir> {
     let staging = tempfile::Builder::new().prefix("em-gpkg-read-").tempdir()?;

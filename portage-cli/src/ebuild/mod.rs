@@ -1490,7 +1490,7 @@ impl PackageSetup {
         // The lock is bound first so that it is released last.
         let Self {
             _builddir_lock,
-            ebuild,
+            mut ebuild,
             repo,
             mut shell,
             work_root,
@@ -1544,7 +1544,17 @@ impl PackageSetup {
                     exported: configured,
                 };
                 restore_package_environment(&mut shell, &ebuild, &work_root, &saved, &shield)
-                    .await?;
+                    .await
+                    .with_context(|| format!("{bp} cannot be installed"))?;
+            } else if let Some(shipped) = portage_binpkg::read_ebuild(bp.as_std_path())
+                .with_context(|| format!("reading the ebuild of {bp}"))?
+            {
+                // No saved environment: the phases come from the ebuild the
+                // package was built from, not from what the tree holds now.
+                let copy = wd.join(format!("{}-{}.ebuild", ebuild.name(), ebuild.version()));
+                std::fs::write(copy.as_std_path(), shipped)
+                    .with_context(|| format!("writing {copy}"))?;
+                ebuild = Ebuild::with_cpv(ebuild.cpv().clone(), &copy);
             }
         }
 
@@ -2480,23 +2490,44 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
             // What the package's own phases set when it was installed. It was
             // saved on this system, so its plain variables go in as they are;
             // an exported one yields to what this shell already exports.
-            if let Ok(saved) = std::fs::read(old_pkg.path().join("environment.bz2")) {
-                let restored = async {
-                    let shield = Shield {
-                        plain: HashSet::new(),
-                        exported: variable_names(shell, old_work_root).await?,
-                    };
-                    restore_package_environment(shell, e, old_work_root, &saved, &shield).await
-                };
-                if let Err(e) = restored.await {
-                    crate::style::warn_line!("could not restore the saved environment: {e:#}");
+            // Without a saved environment the ebuild copy is sourced instead.
+            let env_file = old_pkg.path().join("environment.bz2");
+            let restored = match std::fs::read(env_file.as_std_path()) {
+                Ok(saved) => {
+                    async {
+                        let shield = Shield {
+                            plain: HashSet::new(),
+                            exported: variable_names(shell, old_work_root).await?,
+                        };
+                        restore_package_environment(shell, e, old_work_root, &saved, &shield).await
+                    }
+                    .await
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(anyhow!("reading {env_file}: {e}")),
+            };
+            match restored {
+                Ok(()) => {
+                    shell
+                        .run_phase(e, "prerm", old_work_root.as_std_path(), root.as_std_path())
+                        .await
+                        .context("pkg_prerm failed")?;
+                    true
+                }
+                // As Portage does: the removal goes on without its phases, and
+                // the user is told how to get them to run.
+                Err(error) => {
+                    crate::style::error_line!(
+                        "pkg_prerm and pkg_postrm of {} were not run: {error:#}",
+                        old_pkg.cpv()
+                    );
+                    crate::style::error_line!(
+                        "Removing {env_file} beforehand makes them run from {old_pf}.ebuild \
+                         next to it, with the eclasses of the current repository."
+                    );
+                    false
                 }
             }
-            shell
-                .run_phase(e, "prerm", old_work_root.as_std_path(), root.as_std_path())
-                .await
-                .context("pkg_prerm failed")?;
-            true
         }
         None => match &staged_env {
             Some(env_file) => {
@@ -3372,8 +3403,9 @@ fn package_functions(dump: &str) -> &str {
 /// neither the ebuild nor its eclasses have to be what they were then. The
 /// variables `shield` names stay the shell's.
 ///
-/// A saved environment without functions, or one that does not read back, is
-/// replaced by the ebuild for the functions, with the variables on top.
+/// A saved environment that does not read back is an error, as in Portage:
+/// running other code in its place would hide a damaged package. One that
+/// holds no functions at all gets them from the ebuild, variables on top.
 async fn restore_package_environment(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
@@ -3400,11 +3432,10 @@ async fn restore_package_environment(
         let sourced = shell.source_env_file(path.as_std_path()).await;
         let read = shell.get_var(READ).is_some();
         let _ = shell.run_string(&format!("unset {READ}")).await;
-        if sourced.is_ok() && read {
-            shell.mark_phase_sourced(ebuild);
-            return Ok(());
-        }
-        tracing::debug!("saved environment of {} does not read back", ebuild.cpv());
+        sourced.with_context(|| format!("sourcing the saved environment {path}"))?;
+        anyhow::ensure!(read, "the saved environment does not read back: {path}");
+        shell.mark_phase_sourced(ebuild);
+        return Ok(());
     }
 
     write(&variables)?;
@@ -4229,44 +4260,117 @@ mod tests {
         assert_eq!(probe.log(), "install install installed");
     }
 
-    #[tokio::test]
-    async fn a_saved_environment_that_does_not_parse_falls_back_to_the_ebuild() {
+    /// A saved environment holding a function the shell cannot read back
+    fn unreadable_environment() -> Vec<u8> {
         use std::io::Write;
 
-        let probe = Probe::new();
-        let ebuild = probe.ebuild("probe", "1", "pkg_setup() { note \"ebuild:${STATE}\"; }\n");
         let dump = concat!(
             "declare -- STATE=\"saved\"\n",
-            "pkg_setup () \n{ \n    note package\n}\n",
             "broken () \n{ \n    cat <<EOF\nbody\nEOF\n     |tr a-z A-Z\n}\n",
         );
         let mut saved = BzEncoder::new(Vec::new(), Compression::fast());
         saved.write_all(dump.as_bytes()).unwrap();
-        let saved = saved.finish().unwrap();
+        saved.finish().unwrap()
+    }
 
+    // As in Portage: other code is not run in place of a package's own.
+    #[tokio::test]
+    async fn a_saved_environment_that_does_not_read_back_is_an_error() {
+        let probe = Probe::new();
+        let ebuild = probe.ebuild("probe", "1", "pkg_setup() { note ebuild; }\n");
         let repo = probe.repo();
         let mut shell = repo.shell().await.unwrap();
         let work = probe.path("work/probe-1");
-        restore_package_environment(&mut shell, &ebuild, &work, &saved, &Shield::default())
+        let saved = unreadable_environment();
+        let restored =
+            restore_package_environment(&mut shell, &ebuild, &work, &saved, &Shield::default())
+                .await;
+        let error = format!("{:#}", restored.unwrap_err());
+        assert!(error.contains("does not read back"), "{error}");
+        assert!(!shell.is_phase_sourced(&ebuild));
+    }
+
+    const NOTES_ITS_REMOVAL: &str = "pkg_prerm() { note prerm; }\npkg_postrm() { note postrm; }\n";
+
+    #[tokio::test]
+    async fn a_removal_goes_on_without_its_phases_when_the_environment_is_unreadable() {
+        let probe = Probe::new();
+        let old = probe.ebuild(
+            "probe",
+            "1",
+            &format!("{INSTALLS_A_FILE}{NOTES_ITS_REMOVAL}"),
+        );
+        probe.run(&old, BUILD_AND_MERGE).await.unwrap();
+        let vdb = probe.path("root/var/db/pkg/app-misc/probe-1");
+        fs::write(vdb.join("environment.bz2"), unreadable_environment()).unwrap();
+
+        let new = probe.ebuild("probe", "2", INSTALLS_A_FILE);
+        probe.run(&new, BUILD_AND_MERGE).await.unwrap();
+
+        assert_eq!(probe.log(), "install install");
+        assert!(!vdb.exists());
+        assert!(probe.path("root/var/db/pkg/app-misc/probe-2").exists());
+    }
+
+    #[tokio::test]
+    async fn a_removal_without_a_saved_environment_runs_the_ebuild_copy() {
+        let probe = Probe::new();
+        let old = probe.ebuild(
+            "probe",
+            "1",
+            &format!("{INSTALLS_A_FILE}{NOTES_ITS_REMOVAL}"),
+        );
+        probe.run(&old, BUILD_AND_MERGE).await.unwrap();
+        let vdb = probe.path("root/var/db/pkg/app-misc/probe-1");
+        fs::remove_file(vdb.join("environment.bz2")).unwrap();
+        let copy = vdb.join("probe-1.ebuild");
+        let text = fs::read_to_string(&copy).unwrap();
+        fs::write(&copy, text.replace("note prerm", "note prerm-of-the-copy")).unwrap();
+
+        let new = probe.ebuild("probe", "2", INSTALLS_A_FILE);
+        probe.run(&new, BUILD_AND_MERGE).await.unwrap();
+
+        assert_eq!(probe.log(), "install install prerm-of-the-copy postrm");
+    }
+
+    #[tokio::test]
+    async fn a_package_without_a_saved_environment_runs_the_ebuild_it_ships() {
+        let probe = Probe::new();
+        let says = |word: &str| format!("pkg_postinst() {{ note {word}; }}\n");
+        let tree = probe.ebuild("probe", "1", &says("from-the-tree"));
+
+        let image = probe.path("image");
+        fs::create_dir_all(image.join("usr/share/probe")).unwrap();
+        fs::write(image.join("usr/share/probe/file"), "1\n").unwrap();
+        let meta = probe.path("meta");
+        fs::create_dir_all(&meta).unwrap();
+        for (file, value) in [("CATEGORY", "app-misc"), ("PF", "probe-1"), ("SLOT", "0")] {
+            fs::write(meta.join(file), format!("{value}\n")).unwrap();
+        }
+        let shipped = fs::read_to_string(tree.path()).unwrap();
+        fs::write(
+            meta.join("probe-1.ebuild"),
+            shipped.replace("from-the-tree", "shipped"),
+        )
+        .unwrap();
+        let package = probe.path("probe-1-1.gpkg.tar");
+        portage_binpkg::write_gpkg(
+            &portage_binpkg::GpkgInput {
+                image_dir: image.as_std_path(),
+                metadata_dir: meta.as_std_path(),
+                basename: "probe-1",
+                signing: None,
+            },
+            package.as_std_path(),
+        )
+        .unwrap();
+
+        probe
+            .run_group(&tree, PhaseGroup::BinpkgMerge, "root", Some(&package))
             .await
             .unwrap();
-        let context = PhaseContext {
-            fetch_all_uri: false,
-            merge_state: None,
-        };
-        let root = probe.path("root");
-        run_one_phase(
-            &mut shell,
-            &ebuild,
-            &repo,
-            RunPhase::SETUP,
-            &work,
-            &root,
-            context,
-        )
-        .await
-        .unwrap();
-        assert_eq!(probe.log(), "ebuild:saved");
+        assert_eq!(probe.log(), "shipped");
+        assert!(probe.path("root/usr/share/probe/file").exists());
     }
 
     #[tokio::test]

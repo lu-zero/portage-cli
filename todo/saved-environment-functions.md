@@ -1,9 +1,8 @@
 # Phases should run from the saved environment, functions included
 
-Status: ✅ done 2026-10-09: the printer is fixed in the brush fork and a
-binary install and an uninstall run the package's saved functions, as
-Portage does. The ebuild remains the fallback and is still read for
-the EAPI.
+Status: ✅ done 2026-10-09: the printer is fixed in the brush fork, a
+binary install and an uninstall run the package's saved functions, and
+a missing or unreadable saved environment is handled as emerge does.
 
 ## What Portage does
 
@@ -131,3 +130,37 @@ exit 0, 141 packages with CONTENTS identical to the source-built root.
 Three of those installs (baselayout's) hit the unparseable environment
 and took the fallback; the first attempt, without the marker, skipped
 baselayout's `pkg_preinst` and left a split-usr layout.
+
+## As emerge handles a bad saved environment (2026-10-09, Luca: copy it)
+
+Read in Portage 3.0.82 (`doebuild.py::_prepare_env_file`, `ebuild.sh`,
+`Binpkg.py`, `vartree.py::unmerge`), for behaviour only.
+
+| Saved environment | emerge | `em` now |
+|---|---|---|
+| present and readable | sourced; the ebuild is not | same |
+| missing | the ebuild stored with the package, or the VDB's copy, is sourced; eclasses from the current repository | same: `read_ebuild` takes it out of the package |
+| present, not readable, at install | dies ("error sourcing environment") | error naming the file; nothing is installed |
+| present, not readable, at uninstall | `FAILED prerm`/`postrm`, the files are removed anyway, and the user is told to delete `environment.bz2` to retry from the ebuild copy | `pkg_prerm` and `pkg_postrm` are not run, an error says so and gives the same way out, the removal goes on |
+
+This replaces the silent fallback of the step above, which ran the
+ebuild's code whenever the saved one did not read back. It had hidden
+three unreadable baselayout environments in the sandbox run.
+
+Still a fallback: a saved environment that reads back but defines no
+functions at all gets them from the ebuild.
+
+One place where `em` does more than emerge and was left alone: at
+uninstall with the ebuild copy missing but an environment present, `em`
+runs the phases from the environment; emerge skips them.
+
+Tests: an unreadable environment is an error and leaves the shell
+unsourced; a removal with one goes on without its phases; a removal
+with none runs the VDB's ebuild copy; a package with none runs the
+ebuild it ships, not the tree's.
+
+Live, sandbox `em-binpkg-stage`: a baselayout package built before the
+printer fix is refused with "does not read back" and the root is left
+empty; baselayout and ca-certificates built now install from their
+packages into a root identical to the source-built one, 520 entries,
+link targets included.
