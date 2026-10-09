@@ -854,6 +854,56 @@ impl EbuildShell {
         self.phase_sourced_ebuild = session.phase_sourced_ebuild;
     }
 
+    /// `EPREFIX` as a package's phases see it when it merges into `root_str`
+    /// (which ends in `/`)
+    fn effective_eprefix(&self, host_codegen: bool, root_str: &str) -> String {
+        let eprefix = self
+            .build_eprefix
+            .as_deref()
+            .map(|p| p.as_str().trim_end_matches('/').to_string())
+            .unwrap_or_default();
+        // A `cross-<tuple>/*` host toolchain tool (binutils/gcc/gdb/
+        // clang-crossdev-wrappers, `host_codegen`) needs an EPREFIX-style
+        // offset regardless of `--local`. See [the EPREFIX-flip
+        // rationale](../../../docs/design/em-prefix-experiment.md) for why
+        // this isn't cosmetic and why SYSROOT/ESYSROOT stay untouched.
+        //
+        // NOTE for future refactoring: this function derives `ROOT`,
+        // `EPREFIX`, `ED`, `EROOT`, `SYSROOT`, `ESYSROOT` through a chain of
+        // local variables computed in sequence, all keyed off the same
+        // `build_class` signal. If a further package-class special-case
+        // shows up, extract this into a `RootVars { root, eprefix, ed,
+        // eroot, sysroot, esysroot }` value type built by one function, so
+        // the invariants connecting them are enforced in one place instead
+        // of by convention across a 100-line function.
+        if host_codegen && eprefix.is_empty() && root_str != "/" {
+            root_str.trim_end_matches('/').to_string()
+        } else {
+            eprefix
+        }
+    }
+
+    /// `ED`: the prefix subtree of the image `d`, or `d` when `eprefix` is empty
+    fn ed_under(d: &Path, eprefix: &str) -> PathBuf {
+        if eprefix.is_empty() {
+            d.to_path_buf()
+        } else {
+            d.join(eprefix.trim_start_matches('/'))
+        }
+    }
+
+    /// The part of `ebuild`'s image that a merge into `root` installs: what
+    /// its phases get as `ED`
+    ///
+    /// Known without running a phase, so a merge can inspect the image first.
+    pub fn image_ed(&self, ebuild: &Ebuild, work_root: &Path, root: &Path) -> PathBuf {
+        let host_codegen = Self::is_cross_host_codegen(ebuild.category(), ebuild.name());
+        let root = root.to_string_lossy();
+        let root_str = format!("{}/", root.trim_end_matches('/'));
+        let eprefix = self.effective_eprefix(host_codegen, &root_str);
+        Self::ed_under(&work_root.join("image"), &eprefix)
+    }
+
     /// Whether `ebuild` is the one already sourced into the live shell for the
     /// current package's phase run (see `phase_sourced_ebuild`). Lets callers
     /// (e.g. the `fetch` phase) read ebuild variables like `SRC_URI` from the
@@ -1680,31 +1730,7 @@ impl EbuildShell {
         // stage under `ED = D + EPREFIX`. Without an eprefix this is a no-op
         // (ROOT = EROOT = root, EPREFIX = "", ED = D) — host/`--prefix` paths
         // are unchanged.
-        let eprefix = self
-            .build_eprefix
-            .as_deref()
-            .map(|p| p.as_str().trim_end_matches('/').to_string())
-            .unwrap_or_default();
-
-        // A `cross-<tuple>/*` host toolchain tool (binutils/gcc/gdb/
-        // clang-crossdev-wrappers, `host_codegen`) needs an EPREFIX-style
-        // offset regardless of `--local`. See [the EPREFIX-flip
-        // rationale](../../../docs/design/em-prefix-experiment.md) for why
-        // this isn't cosmetic and why SYSROOT/ESYSROOT stay untouched.
-        //
-        // NOTE for future refactoring: this function derives `ROOT`,
-        // `EPREFIX`, `ED`, `EROOT`, `SYSROOT`, `ESYSROOT` through a chain of
-        // local variables computed in sequence, all keyed off the same
-        // `build_class` signal. If a further package-class special-case
-        // shows up, extract this into a `RootVars { root, eprefix, ed,
-        // eroot, sysroot, esysroot }` value type built by one function, so
-        // the invariants connecting them are enforced in one place instead
-        // of by convention across a 100-line function.
-        let eprefix = if host_codegen && eprefix.is_empty() && root_str != "/" {
-            root_str.trim_end_matches('/').to_string()
-        } else {
-            eprefix
-        };
+        let eprefix = self.effective_eprefix(host_codegen, &root_str);
 
         // A build-time tool the package compiles and re-executes may need
         // its own just-built or host-shared libs. See todo/for-sonnet.md
@@ -1740,11 +1766,7 @@ impl EbuildShell {
         self.set_var("EPREFIX", &eprefix);
         // ED = D + EPREFIX (the prefix subtree within the image); == D when
         // EPREFIX is empty.
-        let ed = if eprefix.is_empty() {
-            format!("{}/", d.display())
-        } else {
-            format!("{}/{}/", d.display(), eprefix.trim_start_matches('/'))
-        };
+        let ed = format!("{}/", Self::ed_under(&d, &eprefix).display());
         self.set_var("ED", &ed);
         // EROOT = ROOT + EPREFIX, i.e. the merge root.
         self.set_var("EROOT", &root_str);

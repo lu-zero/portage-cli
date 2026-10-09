@@ -2193,24 +2193,16 @@ async fn run_merge(
         .find_slot_occupant(&ebuild.cpv().cpn, &slot_main)
         .context("slot conflict query failed")?;
 
-    shell
-        .run_phase(
-            ebuild,
-            "preinst",
-            work_root.as_std_path(),
-            root.as_std_path(),
-        )
-        .await
-        .context("pkg_preinst failed")?;
-
     // The prefix subtree of the image (`ED = image/${EPREFIX}`) goes into the
     // merge root (`EROOT`); identity when EPREFIX is empty.
-    let image_dir = ed_image_dir(shell, work_root);
+    let image_dir = shell.image_ed(ebuild, work_root.as_std_path(), root.as_std_path());
+    let image_dir = Utf8PathBuf::try_from(image_dir).context("image path is not UTF-8")?;
     let cp = ConfigProtect::from_shell(shell);
     let rewrite_d = rewrite_d_symlinks(&env);
 
-    // Collisions are judged before a single file is written: an abort must
-    // leave the other package's files alone.
+    // Collisions are judged before pkg_preinst runs and before a single file
+    // is written: an abort must leave the root as it was. As in Portage, what
+    // pkg_preinst adds to the image afterwards is not checked.
     let planned = walk_image(
         &image_dir,
         &work_root.join("image"),
@@ -2232,6 +2224,16 @@ async fn run_merge(
         ownership_index.as_ref(),
         exclude_cpv.as_ref(),
     )?;
+
+    shell
+        .run_phase(
+            ebuild,
+            "preinst",
+            work_root.as_std_path(),
+            root.as_std_path(),
+        )
+        .await
+        .context("pkg_preinst failed")?;
 
     let WalkResult {
         contents,
@@ -3869,12 +3871,17 @@ mod tests {
     async fn a_collision_aborts_the_merge_with_the_other_owner_intact() {
         let probe = Probe::new();
         let owner = probe.ebuild("owner", "1", INSTALLS_A_FILE);
-        let intruder = probe.ebuild("intruder", "7", INSTALLS_A_FILE);
+        let intruder = probe.ebuild(
+            "intruder",
+            "7",
+            &format!("{INSTALLS_A_FILE}pkg_preinst() {{ note preinst; }}\n"),
+        );
         probe.run(&owner, BUILD_AND_MERGE).await.unwrap();
 
         let refused = probe.run(&intruder, BUILD_AND_MERGE).await;
 
         assert!(refused.is_err());
+        assert_eq!(probe.log(), "install install");
         let file = fs::read_to_string(probe.path("root/usr/share/probe/file")).unwrap();
         assert_eq!(file.trim(), "1");
         assert!(!probe.path("root/var/db/pkg/app-misc/intruder-7").exists());
