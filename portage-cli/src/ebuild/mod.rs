@@ -4258,6 +4258,36 @@ mod tests {
         assert_eq!(probe.log(), "install packaged");
     }
 
+    // The ebuild is not sourced at a binary install, so what it exports at
+    // global scope has to come back from the package: binutils' pkg_postinst
+    // calls `binutils-config ${CTARGET}-${PV}`.
+    #[tokio::test]
+    async fn a_binary_install_sees_what_the_ebuild_exported_at_global_scope() {
+        if pkgdir_is_redirected() {
+            return;
+        }
+        let probe = Probe::new();
+        let ebuild = probe.ebuild(
+            "probe",
+            "1",
+            &format!(
+                "export CTARGET=probe-target\n{INSTALLS_A_FILE}\
+                 pkg_postinst() {{ note \"${{CTARGET-lost}}\"; }}\n"
+            ),
+        );
+        probe
+            .run_group(&ebuild, PhaseGroup::BuildOnly, "root", None)
+            .await
+            .unwrap();
+        let package = probe.package("root").unwrap();
+        fs::create_dir_all(probe.path("root2")).unwrap();
+        probe
+            .run_group(&ebuild, PhaseGroup::BinpkgMerge, "root2", Some(&package))
+            .await
+            .unwrap();
+        assert_eq!(probe.log(), "install probe-target");
+    }
+
     #[tokio::test]
     async fn an_uninstall_runs_the_functions_the_package_was_installed_with() {
         let probe = Probe::new();
