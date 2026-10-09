@@ -1482,7 +1482,9 @@ impl PackageSetup {
                 // binrepos.conf verify-signature=yes.
                 let require_signature =
                     features.contains("binpkg-request-signature") || force_verify_signature;
-                extract_binpkg(&shell, bp, wd, config_root, require_signature)?
+                // Where src_install would have put it: the package holds `ED`.
+                let image = shell.image_ed(&ebuild, wd.as_std_path(), root.as_std_path());
+                extract_binpkg(&shell, bp, &image, config_root, require_signature)?
             }
             _ => None,
         };
@@ -1629,20 +1631,19 @@ impl PackageSetup {
     }
 }
 
-/// Extract a binary package's image into the work tree and return its saved
+/// Extract a binary package's image into `image_dir` and return its saved
 /// environment, still compressed
 ///
-/// Runs after the stale-tree clean, which wipes `image`.
+/// Runs after the stale-tree clean, which wipes the image.
 fn extract_binpkg(
     shell: &portage_repo::EbuildShell,
     bp: &Utf8Path,
-    wd: &Utf8Path,
+    image_dir: &std::path::Path,
     config_root: Option<&Utf8Path>,
     require_signature: bool,
 ) -> Result<Option<Vec<u8>>> {
-    let image_dir = wd.join("image");
-    std::fs::create_dir_all(image_dir.as_std_path())
-        .with_context(|| format!("creating {image_dir}"))?;
+    std::fs::create_dir_all(image_dir)
+        .with_context(|| format!("creating {}", image_dir.display()))?;
 
     // BINPKG_GPG_VERIFY_GPG_HOME names the keyring. The default is under the
     // config root, never the host's path for another --root/--target/--prefix.
@@ -1665,7 +1666,7 @@ fn extract_binpkg(
         require_signature,
         keyring: keyring.as_ref(),
     };
-    portage_binpkg::extract_image(bp.as_std_path(), image_dir.as_std_path(), policy)
+    portage_binpkg::extract_image(bp.as_std_path(), image_dir, policy)
         .with_context(|| format!("extracting image from {bp}"))?;
     portage_binpkg::read_environment(bp.as_std_path())
         .with_context(|| format!("reading the saved environment of {bp}"))
@@ -3669,12 +3670,15 @@ mod tests {
     /// phases and merges
     struct Probe {
         dir: tempfile::TempDir,
+        /// Whole-group runs treat their root as an in-place prefix (`--local`)
+        prefixed: bool,
     }
 
     impl Probe {
         fn new() -> Self {
             let probe = Self {
                 dir: tempfile::tempdir().unwrap(),
+                prefixed: false,
             };
             let repo = probe.path("repo");
             fs::create_dir_all(repo.join("metadata")).unwrap();
@@ -3744,10 +3748,13 @@ mod tests {
             binpkg: Option<&Utf8Path>,
         ) -> Result<()> {
             let repo = self.repo();
-            let shell = repo.shell().await.unwrap();
+            let mut shell = repo.shell().await.unwrap();
             let pf = format!("{}-{}", ebuild.name(), ebuild.version());
             let work = self.path("work").join(root).join(pf);
             let root = self.path(root);
+            if self.prefixed {
+                shell.set_build_roots(None, None, Some(&root), None, None);
+            }
             let setup = PackageSetup {
                 ebuild: ebuild.clone(),
                 repo,
@@ -3899,7 +3906,14 @@ mod tests {
         if pkgdir_is_redirected() {
             return;
         }
-        let probe = Probe::new();
+        for prefixed in [false, true] {
+            let mut probe = Probe::new();
+            probe.prefixed = prefixed;
+            built_then_installed_from_the_package(&probe).await;
+        }
+    }
+
+    async fn built_then_installed_from_the_package(probe: &Probe) {
         let ebuild = probe.ebuild("probe", "1", NOTES_ITS_PHASES);
         probe
             .run_group(&ebuild, PhaseGroup::Full, "root", None)
@@ -3925,6 +3939,7 @@ mod tests {
                 .join("var/db/pkg/app-misc/probe-1/CONTENTS");
             fs::read_to_string(path).unwrap()
         };
+        assert!(contents("root").contains("/usr/share/probe"));
         assert_eq!(contents("root"), contents("root2"));
     }
 
