@@ -1464,122 +1464,33 @@ impl PackageSetup {
             _ => portage_repo::MergeType::Source,
         });
 
-        // PMS 11.1: REPLACING_VERSIONS — the installed versions this merge
-        // replaces (same slot), visible to pkg_pretend/setup/preinst/postinst.
-        // Computed up front from the target root's VDB and the ebuild's SLOT.
         // Also for a debug `em ebuild … qmerge`, which merges without a plan.
         if group.is_merge()
             || matches!(group, PhaseGroup::Debug(p) if p.contains(&RunPhase::Qmerge))
         {
-            let slot = repo
-                .cache_entry(ebuild.cpv())
-                .ok()
-                .flatten()
-                .map(|c| c.metadata.slot.slot.as_str().to_string())
-                .unwrap_or_else(|| "0".to_string());
-            let replacing = open_or_create_vdb(&vdb_root_for(root))
-                .ok()
-                .and_then(|vdb| vdb.find_slot_occupant(&ebuild.cpv().cpn, &slot).ok())
-                .flatten()
-                .map(|old| old.cpv().version.to_string())
-                .unwrap_or_default();
-            shell.preset_var("REPLACING_VERSIONS", &replacing);
+            preset_replacing_versions(&mut shell, &repo, &ebuild, root);
         }
-
         let merge_mode = group.is_merge();
 
-        // Clean the build tree before starting a merge, mirroring portage's `clean`
-        // phase that precedes `setup`. `run_phase` creates work/image/temp/homedir
-        // with `create_dir_all` (additive), so without this a re-emerge after a
-        // failed build would carry the previous attempt's stale ${WORKDIR} and,
-        // worse, a stale ${D} image whose leftover files would then be merged.
-        // Standalone `em ebuild` (merge_mode=false) is left untouched — re-running
-        // a single phase against the existing tree is a debug use case, and
-        // portage's `ebuild` command doesn't auto-clean either.
-        //
-        // FEATURES (make.conf(5)):
-        // - `keepwork` — skip pre-clean (and post-clean) so WORKDIR can be reused
-        // - `keeptemp` — keep `${T}` (`temp/`) through cleans that would wipe it
-        // - `noclean` — post-merge only (does not disable this pre-clean)
-        // `build.log` and the `.em-helpers` shim dir are left: the log is truncated
-        // by the phase-log tee, and the shims are idempotent.
         if let (Some(wd), Some(subs)) = (work_dir, group.clean_subs()) {
-            for sub in filter_clean_subs(subs, &features, CleanWhen::Pre) {
-                let _ = std::fs::remove_dir_all(wd.join(sub));
-            }
-            // The elog handoff sits at the work dir's top level, out of reach of
-            // the clean above (like `build.log`). A run killed between the worker
-            // writing it and the parent collecting it would otherwise have its
-            // messages replayed against this merge.
-            crate::elog::discard_stale_pending(wd);
+            clean_stale_tree(wd, subs, &features);
         }
 
-        // `-k`/`--usepkg`: extract the binpkg image *after* the clean above (which
-        // wipes work_dir/image to defeat stale-${D} leakage on re-emerge). The image
-        // is the authoritative payload here — there is no src_compile to repopulate
-        // it — so it must land between the clean and the qmerge walk.
-        let mut package_environment = None;
-        if let (Some(wd), Some(bp)) = (work_dir, binpkg) {
-            let image_dir = wd.join("image");
-            std::fs::create_dir_all(image_dir.as_std_path())
-                .with_context(|| format!("creating {image_dir}"))?;
-
-            // GPG verify policy: FEATURES=binpkg-request-signature (or this
-            // binpkg's own binrepos.conf verify-signature=yes, relayed as
-            // `force_verify_signature`) requires a signature to be present;
-            // BINPKG_GPG_VERIFY_GPG_HOME supplies the keyring when configured.
-            // Root-aware default (config_root/etc/portage/gnupg) — never the
-            // real host path for a non-host --root/--target/--prefix, same
-            // class of bug this project already fixed once for PKGDIR.
-            let require_signature =
-                features.contains("binpkg-request-signature") || force_verify_signature;
-            let verify_home = shell
-                .get_var("BINPKG_GPG_VERIFY_GPG_HOME")
-                .map(Utf8PathBuf::from)
-                .unwrap_or_else(|| {
-                    config_root
-                        .unwrap_or(Utf8Path::new("/"))
-                        .join("etc/portage/gnupg")
-                });
-            let keyring = portage_binpkg::gpg::load_keyring_dir(verify_home.as_std_path())
-                .with_context(|| format!("loading GPG verify keyring at {verify_home}"))?;
-            if require_signature && keyring.is_none() {
-                bail!(
-                    "FEATURES=binpkg-request-signature (or this binpkg's binrepos.conf verify-signature=yes) requires a GPG verify keyring at {verify_home} — run `em maint binpkg gpg-import <keyfile>` first"
-                );
+        let mut package_environment = match (work_dir, binpkg) {
+            (Some(wd), Some(bp)) => {
+                // FEATURES=binpkg-request-signature, or the origin's own
+                // binrepos.conf verify-signature=yes.
+                let require_signature =
+                    features.contains("binpkg-request-signature") || force_verify_signature;
+                extract_binpkg(&shell, bp, wd, config_root, require_signature)?
             }
-            let policy = portage_binpkg::VerifyPolicy {
-                require_signature,
-                keyring: keyring.as_ref(),
-            };
-            portage_binpkg::extract_image(bp.as_std_path(), image_dir.as_std_path(), policy)
-                .with_context(|| format!("extracting image from {bp}"))?;
-            package_environment = portage_binpkg::read_environment(bp.as_std_path())
-                .with_context(|| format!("reading the saved environment of {bp}"))?;
-        }
+            _ => None,
+        };
 
-        // Install worker: restore the compile parent's captured env so cross-phase
-        // shell state (BUILD_DIR, a custom S, configure-time vars) survives the
-        // process boundary. Source the ebuild first (defines the phase functions
-        // and eclass state), overlay the captured env, then mark the shell
-        // phase-sourced so the phase loop treats install as a later phase of the
-        // same package — re-sourcing would re-assert the default S over the
-        // restored one.
         if group.should_restore_env()
             && let Some(wd) = work_dir
         {
-            let env_path = wd.join("worker-env");
-            if env_path.exists() {
-                shell
-                    .source_ebuild(&ebuild)
-                    .await
-                    .context("sourcing ebuild for env restore")?;
-                shell
-                    .source_env_file(env_path.as_std_path())
-                    .await
-                    .with_context(|| format!("restoring environment {env_path}"))?;
-                shell.mark_phase_sourced(&ebuild);
-            }
+            restore_worker_env(&mut shell, &ebuild, wd).await?;
         }
 
         let fetch_all_uri = matches!(group, PhaseGroup::FetchOnly { all_uri: true });
@@ -1708,25 +1619,139 @@ impl PackageSetup {
         }
         chain_result?;
 
-        // Successful merge chain: drop the build tree, keeping build.log.
-        // FEATURES: keepwork keeps everything; noclean keeps source+temp
-        // (work/temp); keeptemp keeps only temp. image/homedir still go unless
-        // keepwork (stale ${D} must not linger). worker-env is droppable once
-        // install has finished unless keepwork.
         if group.should_tree_drop()
             && let Some(wd) = work_dir
         {
-            let post_subs = ["work", "image", "temp", "homedir"];
-            let keep = filter_clean_subs(&post_subs, &features, CleanWhen::Post);
-            for sub in keep {
-                let _ = std::fs::remove_dir_all(wd.join(sub));
-            }
-            if !features.contains("keepwork") {
-                let _ = std::fs::remove_file(wd.join("worker-env").as_std_path());
-            }
+            drop_build_tree(wd, &features);
         }
 
         Ok(())
+    }
+}
+
+/// Extract a binary package's image into the work tree and return its saved
+/// environment, still compressed
+///
+/// Runs after the stale-tree clean, which wipes `image`.
+fn extract_binpkg(
+    shell: &portage_repo::EbuildShell,
+    bp: &Utf8Path,
+    wd: &Utf8Path,
+    config_root: Option<&Utf8Path>,
+    require_signature: bool,
+) -> Result<Option<Vec<u8>>> {
+    let image_dir = wd.join("image");
+    std::fs::create_dir_all(image_dir.as_std_path())
+        .with_context(|| format!("creating {image_dir}"))?;
+
+    // BINPKG_GPG_VERIFY_GPG_HOME names the keyring. The default is under the
+    // config root, never the host's path for another --root/--target/--prefix.
+    let verify_home = shell
+        .get_var("BINPKG_GPG_VERIFY_GPG_HOME")
+        .map(Utf8PathBuf::from)
+        .unwrap_or_else(|| {
+            config_root
+                .unwrap_or(Utf8Path::new("/"))
+                .join("etc/portage/gnupg")
+        });
+    let keyring = portage_binpkg::gpg::load_keyring_dir(verify_home.as_std_path())
+        .with_context(|| format!("loading GPG verify keyring at {verify_home}"))?;
+    if require_signature && keyring.is_none() {
+        bail!(
+            "FEATURES=binpkg-request-signature (or this binpkg's binrepos.conf verify-signature=yes) requires a GPG verify keyring at {verify_home} — run `em maint binpkg gpg-import <keyfile>` first"
+        );
+    }
+    let policy = portage_binpkg::VerifyPolicy {
+        require_signature,
+        keyring: keyring.as_ref(),
+    };
+    portage_binpkg::extract_image(bp.as_std_path(), image_dir.as_std_path(), policy)
+        .with_context(|| format!("extracting image from {bp}"))?;
+    portage_binpkg::read_environment(bp.as_std_path())
+        .with_context(|| format!("reading the saved environment of {bp}"))
+}
+
+/// Install worker: take over the compile parent's shell state from `worker-env`
+///
+/// The ebuild is sourced for its functions, the captured variables go on top,
+/// and the shell is marked sourced so that `src_install` does not re-source
+/// and put the default `S` back over the restored one.
+async fn restore_worker_env(
+    shell: &mut portage_repo::EbuildShell,
+    ebuild: &Ebuild,
+    wd: &Utf8Path,
+) -> Result<()> {
+    let env_path = wd.join("worker-env");
+    if env_path.exists() {
+        shell
+            .source_ebuild(ebuild)
+            .await
+            .context("sourcing ebuild for env restore")?;
+        shell
+            .source_env_file(env_path.as_std_path())
+            .await
+            .with_context(|| format!("restoring environment {env_path}"))?;
+        shell.mark_phase_sourced(ebuild);
+    }
+    Ok(())
+}
+
+/// Preset `REPLACING_VERSIONS`: the installed version this merge replaces (same slot)
+///
+/// PMS 11.1. Read from the target root's VDB and the ebuild's SLOT.
+fn preset_replacing_versions(
+    shell: &mut portage_repo::EbuildShell,
+    repo: &Repository,
+    ebuild: &Ebuild,
+    root: &Utf8Path,
+) {
+    let slot = repo
+        .cache_entry(ebuild.cpv())
+        .ok()
+        .flatten()
+        .map(|c| c.metadata.slot.slot.as_str().to_string())
+        .unwrap_or_else(|| "0".to_string());
+    let replacing = open_or_create_vdb(&vdb_root_for(root))
+        .ok()
+        .and_then(|vdb| vdb.find_slot_occupant(&ebuild.cpv().cpn, &slot).ok())
+        .flatten()
+        .map(|old| old.cpv().version.to_string())
+        .unwrap_or_default();
+    shell.preset_var("REPLACING_VERSIONS", &replacing);
+}
+
+/// Wipe what an earlier attempt left in the build tree before a merge starts
+///
+/// `run_phase` only adds to `work`, `image`, `temp` and `homedir`, so a stale
+/// `${D}` would otherwise be merged. `FEATURES=keepwork` and `keeptemp` are
+/// honoured; `build.log` and the helper shims stay.
+fn clean_stale_tree(
+    wd: &Utf8Path,
+    subs: &[&'static str],
+    features: &std::collections::HashSet<String>,
+) {
+    for sub in filter_clean_subs(subs, features, CleanWhen::Pre) {
+        let _ = std::fs::remove_dir_all(wd.join(sub));
+    }
+    // The elog handoff sits at the work dir's top level, out of reach of
+    // the clean above (like `build.log`). A run killed between the worker
+    // writing it and the parent collecting it would otherwise have its
+    // messages replayed against this merge.
+    crate::elog::discard_stale_pending(wd);
+}
+
+/// Drop the build tree after a successful merge chain, keeping `build.log`
+///
+/// `FEATURES`: `keepwork` keeps everything, `noclean` keeps `work` and `temp`,
+/// `keeptemp` keeps `temp`. `image` and `homedir` go unless `keepwork`.
+fn drop_build_tree(wd: &Utf8Path, features: &std::collections::HashSet<String>) {
+    let post_subs = ["work", "image", "temp", "homedir"];
+    let keep = filter_clean_subs(&post_subs, features, CleanWhen::Post);
+    for sub in keep {
+        let _ = std::fs::remove_dir_all(wd.join(sub));
+    }
+    if !features.contains("keepwork") {
+        let _ = std::fs::remove_file(wd.join("worker-env").as_std_path());
     }
 }
 
