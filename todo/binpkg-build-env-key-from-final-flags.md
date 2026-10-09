@@ -1,7 +1,9 @@
 # The binary package build-env key is derived from flags the ebuild changed
 
-Status: 🔴 found 2026-10-09 in the stage test of
-[[phase-order-and-binpkg]], not fixed: a design question.
+Status: ✅ fixed 2026-10-09 with the first option below (Luca: fix it):
+the key of the configured flags is recorded in the package as
+`BUILD_ENV_KEY`. Found in the stage test of [[phase-order-and-binpkg]];
+see [[binpkg-stage-test-defects]].
 
 ## Symptom
 

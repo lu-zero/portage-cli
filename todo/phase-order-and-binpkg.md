@@ -266,7 +266,9 @@ Found by it:
   hidden until binary installs worked at all. Fixed and checked with
   newly built packages: baselayout and ca-certificates, 297 links
   identical between a source and a binary install.
-- **Not fixed: glibc's packages are never reused on arm64.** See
+- **glibc's packages were never reused on arm64.** Fixed, see
   [[binpkg-build-env-key-from-final-flags]].
+
+All four are tabulated in [[binpkg-stage-test-defects]].
 
 The packages in that sandbox's `/root/pk` predate the symlink fix.
