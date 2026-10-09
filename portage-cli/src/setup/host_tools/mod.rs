@@ -251,6 +251,14 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, format!("#!/bin/sh\necho '{banner}'\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A process another test forks meanwhile holds this file open for
+        // writing until it execs, and running it then fails with ETXTBSY.
+        while std::process::Command::new(&path)
+            .output()
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::ExecutableFileBusy)
+        {
+            std::thread::yield_now();
+        }
     }
 
     const SED: &Hard = &HARD[0];
