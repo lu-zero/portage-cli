@@ -49,7 +49,7 @@ enum PhaseGroup {
     ///
     /// Does NOT wipe `work/` (the compile artifacts live there); only `image/temp/homedir`.
     Install,
-    /// Merge a pre-built GPKG (`-k`/`-g`): clean → extract image and saved variables →
+    /// Merge a pre-built GPKG (`-k`/`-g`): clean → extract image and saved environment →
     /// `pretend,setup,qmerge` → tree-drop
     ///
     /// PMS has a binary install skip the `src_*` phases only; the extracted image is the
@@ -808,10 +808,11 @@ pub struct MergeBinpkg<'a> {
 }
 
 /// Merge a pre-built binary package (`-k`/`--usepkg`): extract the GPKG's image
-/// and saved variables into the work tree, then run `pkg_setup` and the merge
-/// from `work_root/image`. The ebuild in the repository supplies the phase
-/// functions. The caller has already validated the binpkg is reusable
-/// (version + USE + slot match) via [`portage_binpkg::BinpkgIndex`].
+/// and saved environment into the work tree, then run `pkg_pretend`,
+/// `pkg_setup` and the merge from `work_root/image`. The phase functions are
+/// the package's own, from its saved environment. The caller has already
+/// validated the binpkg is reusable (version + USE + slot match) via
+/// [`portage_binpkg::BinpkgIndex`].
 pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
     let MergeBinpkg {
         binpkg_path,
@@ -1526,22 +1527,26 @@ impl PackageSetup {
             clean_stale_tree(wd, subs, &features);
         }
 
-        let mut package_environment = match (work_dir, binpkg) {
-            (Some(wd), Some(bp)) => {
-                // FEATURES=binpkg-request-signature, or the origin's own
-                // binrepos.conf verify-signature=yes.
-                let require_signature =
-                    features.contains("binpkg-request-signature") || force_verify_signature;
-                // Where src_install would have put it: the package holds `ED`.
-                let image = shell.image_ed(&ebuild, wd.as_std_path(), root.as_std_path());
+        if let (Some(wd), Some(bp)) = (work_dir, binpkg) {
+            // FEATURES=binpkg-request-signature, or the origin's own
+            // binrepos.conf verify-signature=yes.
+            let require_signature =
+                features.contains("binpkg-request-signature") || force_verify_signature;
+            // Where src_install would have put it: the package holds `ED`.
+            let image = shell.image_ed(&ebuild, wd.as_std_path(), root.as_std_path());
+            let saved = extract_binpkg(&shell, bp, &image, config_root, require_signature)?;
+            if let Some(saved) = saved {
                 // What the installing system configured stays its own. Listed
                 // now, while the shell holds nothing of the package yet.
                 let configured = variable_names(&mut shell, &work_root).await?;
-                extract_binpkg(&shell, bp, &image, config_root, require_signature)?
-                    .map(|saved| (saved, configured))
+                let shield = Shield {
+                    plain: configured.clone(),
+                    exported: configured,
+                };
+                restore_package_environment(&mut shell, &ebuild, &work_root, &saved, &shield)
+                    .await?;
             }
-            _ => None,
-        };
+        }
 
         if group.should_restore_env()
             && let Some(wd) = work_dir
@@ -1562,19 +1567,6 @@ impl PackageSetup {
                 // (an explicit `em ebuild … test` always runs it).
                 if merge_mode && *phase == RunPhase::TEST && !features.contains("test") {
                     continue;
-                }
-
-                // Ahead of pkg_setup and not earlier: pkg_pretend takes no
-                // part in environment saving.
-                if *phase == RunPhase::SETUP
-                    && let Some((saved, configured)) = package_environment.take()
-                {
-                    let shield = Shield {
-                        plain: configured.clone(),
-                        exported: configured,
-                    };
-                    restore_package_variables(&mut shell, &ebuild, &work_root, &saved, &shield)
-                        .await?;
                 }
 
                 // Serialise the merge critical section under `--jobs`: builds (compile
@@ -2494,7 +2486,7 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
                         plain: HashSet::new(),
                         exported: variable_names(shell, old_work_root).await?,
                     };
-                    restore_package_variables(shell, e, old_work_root, &saved, &shield).await
+                    restore_package_environment(shell, e, old_work_root, &saved, &shield).await
                 };
                 if let Err(e) = restored.await {
                     crate::style::warn_line!("could not restore the saved environment: {e:#}");
@@ -3354,13 +3346,35 @@ async fn variable_names(
         .collect())
 }
 
-/// Give the shell what the package's earlier phases left in their variables
+/// The function definitions of a saved environment: everything from the
+/// first one on. Empty when the dump holds none.
+fn package_functions(dump: &str) -> &str {
+    let mut offset = 0;
+    let mut lines = dump.split_inclusive('\n').peekable();
+    while let Some(line) = lines.next() {
+        let is_function = !line.starts_with(char::is_whitespace)
+            && line.trim_end().ends_with(" ()")
+            && lines.peek().is_some_and(|next| next.trim_end() == "{");
+        if is_function {
+            return &dump[offset..];
+        }
+        offset += line.len();
+    }
+    ""
+}
+
+/// Give the shell the package as its earlier phases left it: its functions and
+/// its variables
 ///
 /// PMS keeps a variable's value from one phase function to the next, a later
 /// uninstall included; for a binary package the earlier ones ran where it was
-/// built. As for the install worker, the ebuild is sourced for its functions
-/// and the variables go on top, except those `shield` keeps.
-async fn restore_package_variables(
+/// built. As in Portage the saved environment is the package's code too, so
+/// neither the ebuild nor its eclasses have to be what they were then. The
+/// variables `shield` names stay the shell's.
+///
+/// A saved environment without functions, or one that does not read back, is
+/// replaced by the ebuild for the functions, with the variables on top.
+async fn restore_package_environment(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
     work_root: &Utf8Path,
@@ -3370,10 +3384,30 @@ async fn restore_package_variables(
     let temp = work_root.join("temp");
     std::fs::create_dir_all(temp.as_std_path()).with_context(|| format!("creating {temp}"))?;
     let dump = decompress_bzip2(saved_bz2).map_err(|e| anyhow!("saved environment: {e}"))?;
-    let variables = package_variables(&String::from_utf8_lossy(&dump), shield);
+    let dump = String::from_utf8_lossy(&dump);
+    let variables = package_variables(&dump, shield);
+    let functions = package_functions(&dump);
     let path = temp.join("environment.binpkg");
-    std::fs::write(path.as_std_path(), variables).with_context(|| format!("writing {path}"))?;
+    let write = |text: &str| {
+        std::fs::write(path.as_std_path(), text).with_context(|| format!("writing {path}"))
+    };
 
+    if !functions.is_empty() {
+        // A file that does not parse is reported by the shell and not run, and
+        // the call still succeeds: the last line tells whether it was read.
+        const READ: &str = "__em_saved_environment_read";
+        write(&format!("{variables}{functions}\n{READ}=1\n"))?;
+        let sourced = shell.source_env_file(path.as_std_path()).await;
+        let read = shell.get_var(READ).is_some();
+        let _ = shell.run_string(&format!("unset {READ}")).await;
+        if sourced.is_ok() && read {
+            shell.mark_phase_sourced(ebuild);
+            return Ok(());
+        }
+        tracing::debug!("saved environment of {} does not read back", ebuild.cpv());
+    }
+
+    write(&variables)?;
     // Sourcing twice would skip the eclasses, whose include guards are set,
     // and leave the ebuild's own globals without their contributions.
     if !shell.is_phase_sourced(ebuild) {
@@ -4152,6 +4186,87 @@ mod tests {
         };
         assert!(contents("root").contains("/usr/share/probe"));
         assert_eq!(contents("root"), contents("root2"));
+    }
+
+    // A package carries the code it was built with: what the tree or the VDB's
+    // ebuild copy says by the time it is installed or removed does not count.
+    #[tokio::test]
+    async fn a_binary_install_runs_the_functions_the_package_was_built_with() {
+        if pkgdir_is_redirected() {
+            return;
+        }
+        let probe = Probe::new();
+        let says = |word: &str| format!("{INSTALLS_A_FILE}pkg_postinst() {{ note {word}; }}\n");
+        let built = probe.ebuild("probe", "1", &says("packaged"));
+        probe
+            .run_group(&built, PhaseGroup::BuildOnly, "root", None)
+            .await
+            .unwrap();
+        let package = probe.package("root").unwrap();
+
+        let changed = probe.ebuild("probe", "1", &says("from-the-tree"));
+        fs::create_dir_all(probe.path("root2")).unwrap();
+        probe
+            .run_group(&changed, PhaseGroup::BinpkgMerge, "root2", Some(&package))
+            .await
+            .unwrap();
+        assert_eq!(probe.log(), "install packaged");
+    }
+
+    #[tokio::test]
+    async fn an_uninstall_runs_the_functions_the_package_was_installed_with() {
+        let probe = Probe::new();
+        let says = |word: &str| format!("{INSTALLS_A_FILE}pkg_prerm() {{ note {word}; }}\n");
+        let old = probe.ebuild("probe", "1", &says("installed"));
+        probe.run(&old, BUILD_AND_MERGE).await.unwrap();
+
+        let copy = probe.path("root/var/db/pkg/app-misc/probe-1/probe-1.ebuild");
+        let text = fs::read_to_string(&copy).unwrap();
+        fs::write(&copy, text.replace("note installed", "note from-the-copy")).unwrap();
+
+        let new = probe.ebuild("probe", "2", INSTALLS_A_FILE);
+        probe.run(&new, BUILD_AND_MERGE).await.unwrap();
+        assert_eq!(probe.log(), "install install installed");
+    }
+
+    #[tokio::test]
+    async fn a_saved_environment_that_does_not_parse_falls_back_to_the_ebuild() {
+        use std::io::Write;
+
+        let probe = Probe::new();
+        let ebuild = probe.ebuild("probe", "1", "pkg_setup() { note \"ebuild:${STATE}\"; }\n");
+        let dump = concat!(
+            "declare -- STATE=\"saved\"\n",
+            "pkg_setup () \n{ \n    note package\n}\n",
+            "broken () \n{ \n    cat <<EOF\nbody\nEOF\n     |tr a-z A-Z\n}\n",
+        );
+        let mut saved = BzEncoder::new(Vec::new(), Compression::fast());
+        saved.write_all(dump.as_bytes()).unwrap();
+        let saved = saved.finish().unwrap();
+
+        let repo = probe.repo();
+        let mut shell = repo.shell().await.unwrap();
+        let work = probe.path("work/probe-1");
+        restore_package_environment(&mut shell, &ebuild, &work, &saved, &Shield::default())
+            .await
+            .unwrap();
+        let context = PhaseContext {
+            fetch_all_uri: false,
+            merge_state: None,
+        };
+        let root = probe.path("root");
+        run_one_phase(
+            &mut shell,
+            &ebuild,
+            &repo,
+            RunPhase::SETUP,
+            &work,
+            &root,
+            context,
+        )
+        .await
+        .unwrap();
+        assert_eq!(probe.log(), "ebuild:saved");
     }
 
     #[tokio::test]

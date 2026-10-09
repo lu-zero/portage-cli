@@ -1,9 +1,9 @@
 # Phases should run from the saved environment, functions included
 
-Status: 🟡 printer fixed in the brush fork 2026-10-09 (`e80dfeaf` on
-`for-portage-repo`, pushed) and `em` moved to it; step 2 done, step 3 a decision. A parser
-defect found on the way is open: [[brush-heredoc-line-continuation]]. Follows from item 3 of
-[[phase-order-and-binpkg]].
+Status: ✅ done 2026-10-09: the printer is fixed in the brush fork and a
+binary install and an uninstall run the package's saved functions, as
+Portage does. The ebuild remains the fallback and is still read for
+the EAPI.
 
 ## What Portage does
 
@@ -97,3 +97,37 @@ package whose functions hold here-documents before a pipe and before
 `||`, sources its saved environment in a fresh shell and runs them.
 Step 3, whether binary installs and uninstalls switch to the saved
 functions, is a decision and not taken.
+
+## Step 3 done (2026-10-09, Luca: Portage's behaviour is the right one)
+
+`restore_package_environment` sources the saved environment's functions
+together with its shielded variables and does not source the ebuild.
+For a binary install this happens when the package is unpacked, before
+`pkg_pretend`: that phase's changes are still thrown away, but it sees
+the package's environment, as in Portage. An earlier step here applied
+the variables only before `pkg_setup`; that over-read "takes no part in
+environment saving".
+
+- `em`'s own shell helpers (`default`, `insinto`, `edo`, …) are in the
+  saved environment too. `run_phase` defines them again on every phase,
+  so the running `em`'s versions are the ones used.
+- **Fallback.** A saved environment with no functions, or one the shell
+  does not read back, gives way to the ebuild for the functions, with
+  the saved variables on top. The shell reports a syntax error in a
+  sourced file and still returns success, so the file ends with a marker
+  assignment and its absence means "not read".
+- **Still needs the ebuild file**: `run_phase` reads the EAPI from it and
+  sets `EBUILD` and `FILESDIR`. Its eclasses are no longer needed.
+
+Tests: a binary install runs the function the package was built with
+after the tree's ebuild changed; an uninstall runs the function the
+package was installed with after the VDB's ebuild copy changed; a saved
+environment that does not parse falls back to the ebuild and keeps its
+variables.
+
+Live, sandbox `em-binpkg-stage`: the second root installed from the
+packages built before the printer fix. 157 binary installs, both steps
+exit 0, 141 packages with CONTENTS identical to the source-built root.
+Three of those installs (baselayout's) hit the unparseable environment
+and took the fallback; the first attempt, without the marker, skipped
+baselayout's `pkg_preinst` and left a split-usr layout.

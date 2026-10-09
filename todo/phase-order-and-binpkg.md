@@ -185,11 +185,8 @@ nothing); workspace 2264 tests, clippy, fmt, rustdoc clean.
   binary install.
   What is restored: variables that are not exported, not read-only, and
   not already set by the installing system's configuration. Limits:
-  - **Functions still come from the repository's ebuild.** The saved
-    function bodies are not used because a printed body containing a
-    heredoc does not parse back (same reason the worker handoff carries
-    variables only). A package whose ebuild has left the tree, or
-    changed, is therefore still not installed from its own code.
+  - **Functions: from the package since 2026-10-09**, see
+    [[saved-environment-functions]]. The ebuild is the fallback.
   - **Exported variables: restored since the second pass** (same day).
     Once the saved environment stopped holding the build process's own
     environment they could be told apart. One is restored unless the
