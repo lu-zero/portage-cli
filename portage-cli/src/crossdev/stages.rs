@@ -170,9 +170,8 @@ pub fn toolchain_plan(
     self_contained: bool,
     prefix_guest: bool,
 ) -> StagePlan {
-    let atom = |real_cat: &str, pkg: &str| kind.atom(real_cat, pkg);
-    let libc = spec.libc.atom.cpn;
-    let libc_atom = || kind.atom(libc.category.as_str(), libc.package.as_str());
+    let dep_atom = |dep: &Dep| kind.atom(dep.cpn.category.as_str(), dep.cpn.package.as_str());
+    let libc_atom = || dep_atom(&spec.libc.atom);
     let owned = |toks: &[&str]| toks.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let mut steps = Vec::new();
 
@@ -260,6 +259,13 @@ pub fn toolchain_plan(
 
     // Self-contained still gates other empty-ROOT specials (debuginfod drop,
     // os-headers for EPREFIX) below — baselayout is no longer one of them.
+    // Every spec has a toolchain: the built-in ones do, and a loaded one is
+    // checked for it.
+    let gcc = spec
+        .toolchain
+        .gcc
+        .as_ref()
+        .expect("a spec without a clang-only toolchain has a gcc one");
     let is_self_contained_bootstrap = matches!(kind, BootstrapKind::Native) || self_contained;
 
     // A real python merge, not a `package.provided` claim: python.eclass's
@@ -307,7 +313,7 @@ pub fn toolchain_plan(
     };
     steps.push(StageStep {
         label: "binutils".into(),
-        atoms: vec![atom("sys-devel", "binutils")],
+        atoms: vec![dep_atom(&gcc.binutils)],
         use_override: binutils_use,
         nodeps: false,
         into_sysroot: false,
@@ -338,7 +344,7 @@ pub fn toolchain_plan(
         }
         steps.push(StageStep {
             label: "gcc".into(),
-            atoms: vec![atom("sys-devel", "gcc")],
+            atoms: vec![dep_atom(&gcc.compiler)],
             use_override: owned(GCC_DISABLE),
             nodeps: false,
             into_sysroot: false,
@@ -359,7 +365,7 @@ pub fn toolchain_plan(
     stage1.extend(owned(GCC_DISABLE_STAGE1));
     steps.push(StageStep {
         label: "gcc-stage1".into(),
-        atoms: vec![atom("sys-devel", "gcc")],
+        atoms: vec![dep_atom(&gcc.compiler)],
         use_override: stage1,
         nodeps: false,
         into_sysroot: false,
@@ -400,7 +406,7 @@ pub fn toolchain_plan(
     stage2.extend(owned(GCC_DISABLE_STAGE2));
     steps.push(StageStep {
         label: "gcc-stage2".into(),
-        atoms: vec![atom("sys-devel", "gcc")],
+        atoms: vec![dep_atom(&gcc.compiler)],
         use_override: stage2,
         nodeps: false,
         into_sysroot: false,
