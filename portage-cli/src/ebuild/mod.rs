@@ -3971,6 +3971,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_upgrade_is_told_the_version_it_replaces() {
+        if pkgdir_is_redirected() {
+            return;
+        }
+        let probe = Probe::new();
+        let told = "pkg_setup() { note \"replacing=${REPLACING_VERSIONS}\"; }\n";
+        let old = probe.ebuild("probe", "1", &format!("{told}{INSTALLS_A_FILE}"));
+        let new = probe.ebuild("probe", "2", &format!("{told}{INSTALLS_A_FILE}"));
+        for ebuild in [&old, &new] {
+            probe
+                .run_group(ebuild, PhaseGroup::Full, "root", None)
+                .await
+                .unwrap();
+        }
+        assert_eq!(probe.log(), "replacing= install replacing=1 install");
+    }
+
+    #[tokio::test]
     async fn a_build_only_run_packages_and_installs_nothing() {
         if pkgdir_is_redirected() {
             return;
