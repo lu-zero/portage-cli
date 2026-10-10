@@ -289,7 +289,7 @@ pub(super) fn assemble(
     //  - blockers (`!foo` / `!!foo`) and `::repo` constraints, which the solver
     //    does not model;
     //  - REQUIRED_USE, evaluated per-package against its effective USE.
-    let (hard_conflict, unmerges, required_use_unsatisfied) = {
+    let (hard_conflict, unmerges, required_use_unsatisfied, masked_installed) = {
         // `dep_conflicts` was computed per-round above (settled by the
         // `--complete-graph` repair loop, or from the single round when the
         // gate is off) — reporting it here, once, is the only place this
@@ -331,6 +331,7 @@ pub(super) fn assemble(
 
         let masked = super::masked_installed_kept(
             &solution,
+            &order,
             &masked_root_targets,
             &provider,
             &data,
@@ -430,8 +431,11 @@ pub(super) fn assemble(
         if !unsatisfiable.is_empty() {
             output::report_unsatisfiable_targets(&unsatisfiable, &data, set.is_multi());
         }
-        (hard_conflict, unmerges, required_use_unsatisfied)
+        (hard_conflict, unmerges, required_use_unsatisfied, masked)
     };
+    // Retained on the outcome for tests. The report above is the user-facing copy.
+    #[cfg(not(test))]
+    let _ = masked_installed;
 
     // `Total:`/`Size of downloads:` print *after* the advisories above (not
     // right after the merge list, as it used to): the caller's `--eta`
@@ -609,5 +613,7 @@ pub(super) fn assemble(
         broot_snapshot: Some(broot_snapshot),
         vdb_snapshots: Some(vdb_snapshots),
         unmerges,
+        #[cfg(test)]
+        masked_installed,
     })
 }

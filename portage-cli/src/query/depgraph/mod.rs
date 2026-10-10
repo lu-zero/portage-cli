@@ -164,6 +164,10 @@ pub struct DepgraphOutcome {
     /// Installed packages the merge will unmerge to satisfy blockers (PMS 8.3.2).
     /// Strong `!!` entries run before the merge loop; weak `!` after.
     pub unmerges: Vec<portage_resolve::conflicts::PlannedUnmerge>,
+    /// Installed packages the plan leaves in place although policy masks them,
+    /// in the order they were reported. The same list is printed before `Total:`.
+    #[cfg(test)]
+    pub masked_installed: Vec<(Cpv, String)>,
 }
 
 /// Whether pending autounmask changes (keyword/mask/license/…) may be
@@ -644,40 +648,67 @@ fn apply_order_filters(
 }
 
 /// Installed versions the solution keeps although policy filters them out,
-/// each with the reason, sorted by package
+/// each with the reason, sorted by package.
 ///
-/// A kept version whose ebuild is simply gone is not listed: nothing masks it.
+/// A version the plan still merges (same slot and merge root, any version)
+/// is not listed. A kept version whose ebuild is gone, or whose slot has no
+/// filtered ebuild, is not listed either.
 fn masked_installed_kept(
     solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
-    dropped_roots: &[(Cpv, String)],
+    order: &[(PortagePackage, Version)],
+    dropped_roots: &[(Cpv, Option<Interned<DefaultInterner>>, String)],
     provider: &PortageDependencyProvider,
     data: &repo::RepoData,
     final_policy: &repo::ResolvePolicy,
 ) -> Vec<(Cpv, String)> {
-    let selected = solution
+    let planned: HashSet<(Cpn, Option<Interned<DefaultInterner>>, MergeRoot)> = order
+        .iter()
+        .map(|(pkg, _)| (*pkg.cpn(), pkg.slot(), pkg.merge_root()))
+        .collect();
+    let mut pairs: Vec<(PortagePackage, Version)> = solution
         .iter()
         .filter(|(pkg, ver)| !pkg.is_virtual() && provider.selection_is_installed_only(pkg, ver))
-        .map(|(pkg, ver)| (*pkg.cpn(), ver.clone()));
+        .filter(|(pkg, _)| !planned.contains(&(*pkg.cpn(), pkg.slot(), pkg.merge_root())))
+        .map(|(pkg, ver)| (pkg.clone(), ver.clone()))
+        .collect();
     // With no visible version at all the package never enters the solve: a
     // dependency on it is dropped, a root target is left out (`dropped_roots`),
-    // and the installed version satisfies either silently.
-    let dropped = provider.dropped_deps_of(solution).flat_map(|d| {
-        provider
-            .installed_versions(&d.package)
-            .filter(|ver| d.version_set.contains(ver))
-            .map(|ver| (*d.package.cpn(), ver.clone()))
-    });
-    let mut kept: Vec<(Cpv, String)> = selected
-        .chain(dropped)
-        .filter_map(|(cpn, ver)| {
+    // and the installed version satisfies either silently. Collect the dropped
+    // deps first: `installed_versions` borrows the provider those deps borrow.
+    let dropped: Vec<_> = provider.dropped_deps_of(solution).cloned().collect();
+    for dep in &dropped {
+        if planned.contains(&(
+            *dep.package.cpn(),
+            dep.package.slot(),
+            dep.package.merge_root(),
+        )) {
+            continue;
+        }
+        for ver in provider.installed_versions(&dep.package) {
+            if dep.version_set.contains(ver) {
+                pairs.push((dep.package.clone(), ver.clone()));
+            }
+        }
+    }
+    let mut kept: Vec<(Cpv, String)> = pairs
+        .into_iter()
+        .filter_map(|(pkg, ver)| {
             let only = PortageVersionSet::from_operator(Operator::Equal, false, ver.clone());
-            let filtered = repo::filter_reasons_for(data, &cpn, &only, final_policy)
+            let filtered = repo::filter_reasons_for(data, pkg.cpn(), &only, final_policy)
                 .into_iter()
-                .find(|c| c.cpv.version == ver)?;
+                .find(|c| {
+                    c.cpv.version == ver && pkg.slot().is_none_or(|slot| c.slot == Some(slot))
+                })?;
             let why = repo::filter_reason_text(&filtered.reasons);
             Some((filtered.cpv, why))
         })
-        .chain(dropped_roots.iter().cloned())
+        .chain(dropped_roots.iter().filter_map(|(cpv, slot, why)| {
+            if planned.contains(&(cpv.cpn, *slot, MergeRoot::Target)) {
+                None
+            } else {
+                Some((cpv.clone(), why.clone()))
+            }
+        }))
         .collect();
     kept.sort_by_key(|(cpv, _)| cpv.to_string());
     kept.dedup();
@@ -789,8 +820,8 @@ struct RootTargets {
     /// Atoms dropped with a warning, reported after the plan
     unsatisfiable: Vec<output::UnsatisfiableTarget>,
     /// Installed versions that satisfied a silently dropped atom, with why
-    /// policy filters them
-    masked_kept: Vec<(Cpv, String)>,
+    /// policy filters them. The slot is the filtered ebuild's slot.
+    masked_kept: Vec<(Cpv, Option<Interned<DefaultInterner>>, String)>,
 }
 
 /// Classify each requested atom into a solver root dep, a reported
@@ -810,7 +841,7 @@ fn classify_root_targets(
     // reported after the plan (world-family provenance only — anything else is
     // fatal below).
     let mut unsatisfiable: Vec<output::UnsatisfiableTarget> = Vec::new();
-    let mut masked_kept: Vec<(Cpv, String)> = Vec::new();
+    let mut masked_kept: Vec<(Cpv, Option<Interned<DefaultInterner>>, String)> = Vec::new();
     for target in atoms {
         let atom = &target.atom;
         let dep = Dep::parse(atom).map_err(|e| anyhow::anyhow!("bad atom '{atom}': {e}"))?;
@@ -849,18 +880,16 @@ fn classify_root_targets(
                     continue;
                 }
                 targets::RootTargetDecision::DropSilently => {
-                    let is_installed = |cpv: &Cpv| {
-                        installed
-                            .get(&cpv.cpn)
-                            .is_some_and(|slots| slots.values().any(|v| *v == cpv.version))
-                    };
-                    masked_kept.extend(
-                        unsat
-                            .reasons
-                            .iter()
-                            .filter(|c| is_installed(&c.cpv))
-                            .map(|c| (c.cpv.clone(), repo::filter_reason_text(&c.reasons))),
-                    );
+                    // The installed slot must be this ebuild's slot. Another
+                    // slot of the same version is a different package.
+                    masked_kept.extend(unsat.reasons.iter().filter_map(|c| {
+                        let slot = c.slot?;
+                        let installed_here = installed.get(&c.cpv.cpn).is_some_and(|slots| {
+                            slots.get(&slot).is_some_and(|v| *v == c.cpv.version)
+                        });
+                        installed_here
+                            .then(|| (c.cpv.clone(), c.slot, repo::filter_reason_text(&c.reasons)))
+                    }));
                     continue;
                 }
                 targets::RootTargetDecision::Fatal => {

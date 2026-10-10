@@ -73,7 +73,7 @@ pub(super) struct Prepared<'a> {
     pub(super) root_deps: Vec<(PortagePackage, PortageVersionSet)>,
     pub(super) root_cpns: std::collections::HashSet<Cpn>,
     pub(super) unsatisfiable: Vec<super::output::UnsatisfiableTarget>,
-    pub(super) masked_root_targets: Vec<(Cpv, String)>,
+    pub(super) masked_root_targets: Vec<(Cpv, Option<Interned<DefaultInterner>>, String)>,
     pub(super) slot_map: SlotMap,
     pub(super) widened_slot_map: Option<SlotMap>,
     pub(super) sysroot_installed: Vec<(PortagePackage, Version)>,

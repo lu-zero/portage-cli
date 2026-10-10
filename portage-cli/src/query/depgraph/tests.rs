@@ -19,6 +19,8 @@ struct Pkg {
     cpv: &'static str,
     keywords: &'static str,
     depend: &'static str,
+    iuse: &'static str,
+    slot: &'static str,
 }
 
 struct Fix {
@@ -59,14 +61,35 @@ impl<'a> Solve<'a> {
 }
 
 fn cache_text(pkg: &Pkg) -> String {
-    format!(
-        "EAPI=8\nDESCRIPTION=t\nSLOT=0\nKEYWORDS={}\nDEPEND={}\n",
-        pkg.keywords, pkg.depend
-    )
+    let mut text = format!(
+        "EAPI=8\nDESCRIPTION=t\nSLOT={}\nKEYWORDS={}\nDEPEND={}\n",
+        pkg.slot, pkg.keywords, pkg.depend
+    );
+    if !pkg.iuse.is_empty() {
+        text.push_str(&format!("IUSE={}\n", pkg.iuse));
+    }
+    text
 }
 
 fn plant_vdb(root: &Utf8PathBuf, cpv: &str) {
     plant_vdb_rdepend(root, cpv, None);
+}
+
+fn plant_installed(root: &Utf8PathBuf, cpv: &str, slot: &str, use_flags: &str, iuse: &str) {
+    let cpv = Cpv::parse(cpv).unwrap();
+    let dir = root
+        .join("var/db/pkg")
+        .join(cpv.cpn.category.as_str())
+        .join(format!("{}-{}", cpv.cpn.package, cpv.version));
+    std::fs::create_dir_all(dir.as_std_path()).unwrap();
+    std::fs::write(dir.join("SLOT").as_std_path(), format!("{slot}\n")).unwrap();
+    std::fs::write(dir.join("EAPI").as_std_path(), "8\n").unwrap();
+    if !use_flags.is_empty() {
+        std::fs::write(dir.join("USE").as_std_path(), format!("{use_flags}\n")).unwrap();
+    }
+    if !iuse.is_empty() {
+        std::fs::write(dir.join("IUSE").as_std_path(), format!("{iuse}\n")).unwrap();
+    }
 }
 
 fn plant_vdb_rdepend(root: &Utf8PathBuf, cpv: &str, rdepend: Option<&str>) {
@@ -196,11 +219,15 @@ fn pair() -> Vec<Pkg> {
             cpv: "app-misc/foo-1",
             keywords: "amd64",
             depend: "app-misc/bar",
+            iuse: "",
+            slot: "0",
         },
         Pkg {
             cpv: "app-misc/bar-1",
             keywords: "amd64",
             depend: "",
+            iuse: "",
+            slot: "0",
         },
     ]
 }
@@ -214,21 +241,29 @@ fn pinned_consumer() -> Vec<Pkg> {
             cpv: "app-misc/bar-1",
             keywords: "amd64",
             depend: "",
+            iuse: "",
+            slot: "0",
         },
         Pkg {
             cpv: "app-misc/bar-2",
             keywords: "amd64",
             depend: "",
+            iuse: "",
+            slot: "0",
         },
         Pkg {
             cpv: "app-misc/consumer-1",
             keywords: "amd64",
             depend: "<app-misc/bar-2",
+            iuse: "",
+            slot: "0",
         },
         Pkg {
             cpv: "app-misc/consumer-2",
             keywords: "amd64",
             depend: ">=app-misc/bar-2",
+            iuse: "",
+            slot: "0",
         },
     ]
 }
@@ -239,11 +274,15 @@ fn masked_dep() -> Vec<Pkg> {
             cpv: "app-misc/qux-1",
             keywords: "amd64",
             depend: "app-misc/masked",
+            iuse: "",
+            slot: "0",
         },
         Pkg {
             cpv: "app-misc/masked-1",
             keywords: "~amd64",
             depend: "",
+            iuse: "",
+            slot: "0",
         },
     ]
 }
@@ -495,4 +534,115 @@ fn apply_order_filters_counts_exclude_and_resume_and_drops_host_rows() {
     let (kept, excluded, resumed) = apply_order_filters(order, &[], &exclude, &resume, true);
     assert!(kept.is_empty());
     assert_eq!((excluded, resumed), (1, 1));
+}
+
+fn masked_names(outcome: &super::DepgraphOutcome) -> Vec<String> {
+    outcome
+        .masked_installed
+        .iter()
+        .map(|(cpv, _)| cpv.to_string())
+        .collect()
+}
+
+#[test]
+fn a_masked_installed_package_is_reported_when_nothing_replaces_it() {
+    let pkgs = vec![
+        Pkg {
+            cpv: "app-misc/consumer-1",
+            keywords: "amd64",
+            depend: "app-misc/bar",
+            iuse: "",
+            slot: "0",
+        },
+        Pkg {
+            cpv: "app-misc/bar-1",
+            keywords: "~amd64",
+            depend: "",
+            iuse: "",
+            slot: "0",
+        },
+    ];
+    let fix = fixture(&pkgs, &[]);
+    plant_installed(&fix.root, "app-misc/bar-1", "0", "", "");
+    let atoms = [TargetAtom::explicit("app-misc/consumer")];
+    let outcome = solve(&fix, Solve::new(&atoms));
+    assert_eq!(names(&outcome), ["app-misc/consumer-1"]);
+    assert_eq!(masked_names(&outcome), ["app-misc/bar-1"]);
+    // The kept package is still a dropped keyword dep, so autounmask fails
+    // the plan. The warning itself is not what sets the exit code.
+    assert_eq!(outcome.exit_code, 1);
+}
+
+#[test]
+fn a_masked_installed_package_is_not_reported_when_its_slot_is_upgraded() {
+    let pkgs = vec![
+        Pkg {
+            cpv: "app-misc/other-1",
+            keywords: "amd64",
+            depend: ">=app-misc/bar-2",
+            iuse: "",
+            slot: "0",
+        },
+        Pkg {
+            cpv: "app-misc/bar-1",
+            keywords: "~amd64",
+            depend: "",
+            iuse: "",
+            slot: "0",
+        },
+        Pkg {
+            cpv: "app-misc/bar-2",
+            keywords: "amd64",
+            depend: "",
+            iuse: "",
+            slot: "0",
+        },
+    ];
+    let fix = fixture(&pkgs, &[]);
+    plant_installed(&fix.root, "app-misc/bar-1", "0", "", "");
+    // The first atom matches only the masked installed version and is dropped.
+    let atoms = [
+        TargetAtom::explicit("<app-misc/bar-2"),
+        TargetAtom::explicit("app-misc/other"),
+    ];
+    let mut opts = Solve::new(&atoms);
+    opts.noreplace = true;
+    let outcome = solve(&fix, opts);
+    assert_eq!(names(&outcome), ["app-misc/bar-2", "app-misc/other-1"]);
+    assert!(
+        masked_names(&outcome).is_empty(),
+        "masked was {:?}",
+        masked_names(&outcome)
+    );
+}
+
+#[test]
+fn a_masked_installed_package_in_another_slot_is_not_reported() {
+    let pkgs = vec![
+        Pkg {
+            cpv: "app-misc/consumer-1",
+            keywords: "amd64",
+            depend: "app-misc/bar:0",
+            iuse: "",
+            slot: "0",
+        },
+        Pkg {
+            cpv: "app-misc/bar-1",
+            keywords: "~amd64",
+            depend: "",
+            iuse: "",
+            slot: "1",
+        },
+    ];
+    let fix = fixture(&pkgs, &[]);
+    plant_installed(&fix.root, "app-misc/bar-1", "0", "", "");
+    let atoms = [TargetAtom::explicit("app-misc/consumer")];
+    let outcome = solve(&fix, Solve::new(&atoms));
+    assert_eq!(names(&outcome), ["app-misc/consumer-1"]);
+    assert!(
+        masked_names(&outcome).is_empty(),
+        "masked was {:?}",
+        masked_names(&outcome)
+    );
+    assert_eq!(outcome.exit_code, 0);
 }
