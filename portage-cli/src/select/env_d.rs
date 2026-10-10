@@ -370,6 +370,32 @@ pub(super) fn symlink_force(content: &Utf8Path, link: &Utf8Path) -> Result<()> {
         .with_context(|| format!("linking {link} -> {content}"))
 }
 
+/// Replace `link` with a symlink to `target`, written relative to the link
+///
+/// Both are paths in the same tree. A relative target resolves inside
+/// whatever the tree is at the time: a root used from outside, the same root
+/// entered as `/` or unpacked elsewhere, a prefix used in place. An absolute
+/// one names the tree's present location and dangles anywhere else.
+///
+/// The directories between the two must not be symlinks themselves: the
+/// relative path is computed from the names.
+pub(super) fn symlink_relative(target: &Utf8Path, link: &Utf8Path) -> Result<()> {
+    let from = link.parent().unwrap_or(Utf8Path::new(""));
+    let shared = from
+        .components()
+        .zip(target.components())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut relative = Utf8PathBuf::new();
+    for _ in from.components().skip(shared) {
+        relative.push("..");
+    }
+    for part in target.components().skip(shared) {
+        relative.push(part);
+    }
+    symlink_force(&relative, link)
+}
+
 /// Run a list action
 ///
 /// Use `outer_roots()`, not `roots()` — same `--target` collision as

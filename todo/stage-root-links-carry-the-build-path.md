@@ -1,7 +1,8 @@
 # Toolchain links in a `--root` stage point into the path it was built at
 
-Status: 🔴 found 2026-10-09 by comparing the stage roots of
-[[binpkg-stage-test-defects]]; not fixed. Predates that work: the first
+Status: 🟡 the 34 links `em` writes are fixed 2026-10-10; the other 37
+come from a different cause, [[root-variables-trailing-slash]]. Found
+2026-10-09 by comparing the stage roots of [[binpkg-stage-test-defects]]. Predates that work: the first
 sandbox's source-built root has the same 71 links.
 
 ## What is there
@@ -41,3 +42,31 @@ Check the cross layout too (`usr/<CBUILD>/<T>/binutils-bin`, links via
 `usr/libexec/gcc/<T>`), and what `gcc-config` versus
 `select/compiler.rs` writes: the gcc links are correct, by which of the
 two is not established.
+
+## Fixed (2026-10-10): the links `em` writes
+
+`select/env_d.rs::symlink_relative` writes a target relative to its
+link; `install_binutils_wrappers` and `install_gcc_wrappers` use it.
+`usr/<T>/bin/ld -> ../binutils-bin/2.47/ld`,
+`usr/bin/<T>-ld -> ../<T>/bin/ld`. Not `binutils-config`'s absolute
+`EPREFIX` path, on purpose: `em` runs these tools through the links from
+outside a `--root` while it builds it, and an absolute target without
+the root would then be looked up on the host.
+
+Tests: the cross layout's exact targets; a native root renamed after
+the links are written still reaches `ld` through both.
+
+Live, sandbox `em-stage-final`: the root reinstalled from packages has
+37 links naming its path, down from 71, and `usr/bin/ld` resolves to an
+executable inside the root from outside it.
+
+## The other 37 are perl's, and the cause is not in `select`
+
+`usr/bin/{ptar,cpan,json_pp,…}` and their man pages point at
+`/root/s2//usr/bin/ptar-3.120.0-perl-5.44.0` and the like. perl's
+`pkg_postinst` makes them through `alternatives.eclass`, which writes a
+relative link when the alternative is in the link's directory and an
+absolute, `ROOT`-prefixed one otherwise. Here it takes the second
+branch although they are in the same directory. Traced to two
+deviations that only bite together, see
+[[root-variables-trailing-slash]].

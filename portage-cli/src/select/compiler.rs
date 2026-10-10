@@ -130,7 +130,8 @@ fn write_clang_gcc_install_cfg(eprefix: &Utf8Path, lib_path: &str) -> Result<()>
 /// (the gcc-bin binaries are already `<T>-`prefixed), plus the `<T>-cc` alias.
 /// `gcc_path` is the env.d `GCC_PATH` (`/usr/<CBUILD>/<T>/gcc-bin/<ver>`); it is
 /// always resolved under `eprefix` so a `--local`/`--prefix` install links its own
-/// binaries, not a same-pathed host copy. No-op until the compiler is merged.
+/// binaries, not a same-pathed host copy, and linked relatively so a `--root`
+/// stage keeps working when it is moved or entered. No-op until the compiler is merged.
 fn install_gcc_wrappers(eprefix: &Utf8Path, target: &str, gcc_path: &str) -> Result<()> {
     // GCC_PATH may or may not already carry the EPREFIX; strip it then re-root so
     // the symlink content stays inside the prefix either way.
@@ -149,7 +150,7 @@ fn install_gcc_wrappers(eprefix: &Utf8Path, target: &str, gcc_path: &str) -> Res
         if name.is_empty() {
             continue;
         }
-        env_d::symlink_force(&bindir.join(name), &usr_bin.join(name))?;
+        env_d::symlink_relative(&bindir.join(name), &usr_bin.join(name))?;
         have_gcc |= name == format!("{target}-gcc");
     }
     if have_gcc {
@@ -286,8 +287,11 @@ mod tests {
         let bin_gcc = eprefix.join("usr/bin").join(format!("{target}-gcc"));
         assert_eq!(
             std::fs::read_link(&bin_gcc).unwrap(),
-            bindir.join(format!("{target}-gcc")).as_std_path()
+            std::path::Path::new("..")
+                .join(gcc_path.trim_start_matches("/usr/"))
+                .join(format!("{target}-gcc"))
         );
+        assert!(std::fs::read(&bin_gcc).is_ok());
         // <T>-cc aliases <T>-gcc (relative content).
         let bin_cc = eprefix.join("usr/bin").join(format!("{target}-cc"));
         assert_eq!(

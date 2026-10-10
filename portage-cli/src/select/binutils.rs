@@ -48,6 +48,10 @@ impl env_d::EnvDProfile for BinutilsProfileType {
 /// `usr/libexec/gcc/<T>/<tool>` → the `binutils-bin` binary, and
 /// `usr/bin/<T>-<tool>` → that libexec link. No-op if the binaries aren't merged
 /// yet (env.d state was still written by the caller).
+///
+/// `binutils-config` writes absolute targets that carry `EPREFIX` and never
+/// `ROOT`. `eprefix` here is either, so the targets are relative instead: the
+/// tools are run through these links from outside a `--root` while it is built.
 fn install_binutils_wrappers(eprefix: &Utf8Path, target: &str, ver: &str) -> Result<()> {
     let Some((binpath, links_dir)) = locate_binutils_bin(eprefix, target, ver) else {
         return Ok(());
@@ -62,8 +66,8 @@ fn install_binutils_wrappers(eprefix: &Utf8Path, target: &str, ver: &str) -> Res
             continue;
         }
         let libexec_link = links_dir.join(tool);
-        env_d::symlink_force(&binpath.join(tool), &libexec_link)?;
-        env_d::symlink_force(&libexec_link, &usr_bin.join(format!("{target}-{tool}")))?;
+        env_d::symlink_relative(&binpath.join(tool), &libexec_link)?;
+        env_d::symlink_relative(&libexec_link, &usr_bin.join(format!("{target}-{tool}")))?;
     }
     Ok(())
 }
@@ -154,13 +158,44 @@ mod tests {
         let libexec_as = eprefix.join("usr/libexec/gcc").join(target).join("as");
         assert_eq!(
             std::fs::read_link(&libexec_as).unwrap(),
-            binpath.join("as").as_std_path()
+            std::path::Path::new("../../..")
+                .join(cbuild)
+                .join(target)
+                .join("binutils-bin")
+                .join(ver)
+                .join("as")
         );
         let bin_as = eprefix.join("usr/bin").join(format!("{target}-as"));
         assert_eq!(
             std::fs::read_link(&bin_as).unwrap(),
-            libexec_as.as_std_path()
+            std::path::Path::new("../libexec/gcc")
+                .join(target)
+                .join("as")
         );
+    }
+
+    // A stage is built at one path and used at another, or as `/`: the links
+    // must still reach the tools.
+    #[test]
+    fn native_wrappers_survive_moving_the_root() {
+        let td = tempfile::TempDir::new().unwrap();
+        let base = Utf8Path::from_path(td.path()).unwrap();
+        let built = base.join("built");
+        let target = "aarch64-unknown-linux-gnu";
+        let binpath = built.join("usr").join(target).join("binutils-bin/2.47");
+        std::fs::create_dir_all(&binpath).unwrap();
+        std::fs::write(binpath.join("ld"), b"linker\n").unwrap();
+
+        install_binutils_wrappers(&built, target, "2.47").unwrap();
+        let moved = base.join("moved");
+        std::fs::rename(&built, &moved).unwrap();
+
+        for link in [
+            moved.join("usr").join(target).join("bin/ld"),
+            moved.join("usr/bin").join(format!("{target}-ld")),
+        ] {
+            assert_eq!(std::fs::read(&link).unwrap(), b"linker\n", "{link}");
+        }
     }
 
     #[test]
