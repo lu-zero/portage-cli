@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
 use super::{Cli, env_d};
@@ -141,6 +141,7 @@ fn install_gcc_wrappers(eprefix: &Utf8Path, target: &str, gcc_path: &str) -> Res
         return Ok(());
     }
     let usr_bin = eprefix.join("usr/bin");
+    prune_stale_wrappers(eprefix, &usr_bin, &bindir)?;
     let mut have_gcc = false;
     for entry in std::fs::read_dir(&bindir)? {
         let Ok(path) = Utf8PathBuf::from_path_buf(entry?.path()) else {
@@ -158,6 +159,52 @@ fn install_gcc_wrappers(eprefix: &Utf8Path, target: &str, gcc_path: &str) -> Res
             Utf8Path::new(&format!("{target}-gcc")),
             &usr_bin.join(format!("{target}-cc")),
         )?;
+    }
+    Ok(())
+}
+
+/// Remove the `usr/bin` links into `bindir` whose tool is no longer there
+///
+/// A gcc rebuilt at the same version with fewer languages keeps its `gcc-bin`
+/// directory and loses, say, `gfortran`. `gcc-config` finds what to remove by
+/// comparing the old profile's directory with the new one's, which here are
+/// the same directory after the merge, so it removes nothing.
+fn prune_stale_wrappers(eprefix: &Utf8Path, usr_bin: &Utf8Path, bindir: &Utf8Path) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(usr_bin) else {
+        return Ok(());
+    };
+    for entry in entries {
+        let Ok(link) = Utf8PathBuf::from_path_buf(entry?.path()) else {
+            continue;
+        };
+        let Ok(target) = std::fs::read_link(&link) else {
+            continue;
+        };
+        let Some(target) = Utf8Path::from_path(&target) else {
+            continue;
+        };
+        // Written by this module relative to the link, by `gcc-config` as an
+        // absolute path inside the root, or with the root's own path in front.
+        let resolved = if target.is_relative() {
+            usr_bin.join(target)
+        } else if target.starts_with(eprefix) {
+            target.to_owned()
+        } else {
+            eprefix.join(target.as_str().trim_start_matches('/'))
+        };
+        let mut lexical = Utf8PathBuf::new();
+        for part in resolved.components() {
+            match part {
+                camino::Utf8Component::ParentDir => {
+                    lexical.pop();
+                }
+                camino::Utf8Component::CurDir => {}
+                other => lexical.push(other),
+            }
+        }
+        if lexical.parent() == Some(bindir) && !lexical.exists() {
+            std::fs::remove_file(&link).with_context(|| format!("removing stale {link}"))?;
+        }
     }
     Ok(())
 }
@@ -298,6 +345,38 @@ mod tests {
             std::fs::read_link(&bin_cc).unwrap(),
             std::path::Path::new(&format!("{target}-gcc"))
         );
+    }
+
+    // Stage1 rebuilds the toolchain step's gcc without fortran: the links the
+    // first activation made for it must not outlive the tool.
+    #[test]
+    fn wrappers_of_tools_a_rebuild_dropped_are_removed() {
+        let td = tempfile::TempDir::new().unwrap();
+        let eprefix = Utf8Path::from_path(td.path()).unwrap().to_path_buf();
+        let target = "aarch64-unknown-linux-gnu";
+        let gcc_path = format!("/usr/{target}/gcc-bin/16");
+        let bindir = eprefix.join(gcc_path.trim_start_matches('/'));
+        let usr_bin = eprefix.join("usr/bin");
+        std::fs::create_dir_all(&bindir).unwrap();
+        std::fs::create_dir_all(&usr_bin).unwrap();
+        std::fs::write(bindir.join("gcc"), b"compiler\n").unwrap();
+        std::fs::write(bindir.join(format!("{target}-gcc")), b"compiler\n").unwrap();
+
+        let link = |content: &str, name: &str| {
+            std::os::unix::fs::symlink(content, usr_bin.join(name)).unwrap();
+        };
+        link(&format!("../{target}/gcc-bin/16/gfortran"), "gfortran");
+        link(&format!("{gcc_path}/{target}-gfortran"), "tuple-gfortran");
+        link(&format!("{bindir}/gdc"), "gdc");
+        link("/nowhere/else", "unrelated");
+        link(&format!("{gcc_path}/gcc"), "gcc");
+
+        install_gcc_wrappers(&eprefix, target, &gcc_path).unwrap();
+
+        let present = |name: &str| std::fs::symlink_metadata(usr_bin.join(name)).is_ok();
+        assert!(!present("gfortran") && !present("tuple-gfortran") && !present("gdc"));
+        assert!(present("unrelated"));
+        assert_eq!(std::fs::read(usr_bin.join("gcc")).unwrap(), b"compiler\n");
     }
 
     // `gcc-config`'s clang hand-off: rewrite an existing

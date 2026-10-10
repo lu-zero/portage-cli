@@ -747,6 +747,16 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     )
     .await?;
     if !globals.pretend() {
+        // stage1 rebuilds the toolchain step's gcc with fewer languages; its
+        // wrappers have to follow. A `--target` stage's compiler is not this
+        // host's to activate.
+        if globals.target().is_none() {
+            let tuple = crate::select::get_chost(globals);
+            let roots = globals
+                .outer_roots()
+                .with_own_config_root_if_self_contained();
+            crate::select::activate_compiler(&roots, &tuple)?;
+        }
         writeln!(out, "\n>>> stage1 ready in {merge_root}").ok();
     }
     Ok(())

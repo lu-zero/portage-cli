@@ -82,7 +82,5 @@ source with `-b`, then both with `-K`):
   which were `/usr/lib/python-exec/python-exec2` and are now
   `../lib/python-exec/python-exec2`, as on a real Gentoo system.
 
-Seen, older, not fixed: `usr/bin/gfortran` and `usr/bin/<CHOST>-gfortran`
-dangle in the stage. The toolchain step builds gcc with fortran and
-`em`'s activation links what is in `gcc-bin`; stage1 rebuilds gcc
-without it and the two links stay.
+Seen there and fixed since: the dangling `gfortran` links, see
+[[gcc-wrappers-outlive-a-reduced-rebuild]].
