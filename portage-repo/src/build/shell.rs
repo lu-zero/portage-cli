@@ -293,6 +293,9 @@ pub struct EbuildShell {
     /// previous ebuild defined leaks into the next (`Shell` is a deep
     /// `Clone`). Configuration mutators reset it to `None` for re-capture.
     baseline: Option<Box<Shell>>,
+    /// Configured shell from before any package was sourced. A removal on
+    /// this shell restores it so the previous package's functions are gone.
+    profile_shell: Option<Box<Shell>>,
     /// Path of the ebuild already sourced into the live (carried-forward)
     /// shell for the current package's phase run: the ebuild + eclass
     /// global scope runs once, later phases reuse it (portage's saved-env
@@ -760,6 +763,7 @@ impl EbuildShell {
             base_path: None,
             bashrc_files: Vec::new(),
             baseline: None,
+            profile_shell: None,
             phase_sourced_ebuild: None,
             repo_path: repo.path().to_path_buf(),
             eclass_dirs,
@@ -953,6 +957,24 @@ impl EbuildShell {
         self.shell = session.shell;
         self.baseline = session.baseline;
         self.phase_sourced_ebuild = session.phase_sourced_ebuild;
+    }
+
+    /// Remember the configured shell so a later removal can drop a package
+    /// that was sourced into this same shell.
+    pub fn save_profile_session(&mut self) {
+        self.profile_shell = Some(Box::new(self.shell.clone()));
+    }
+
+    /// Put back the shell [`Self::save_profile_session`] stored.
+    ///
+    /// The next phase captures that shell. An older baseline would undo it.
+    pub fn restore_profile_session(&mut self) {
+        let Some(shell) = &self.profile_shell else {
+            return;
+        };
+        self.shell = (**shell).clone();
+        self.baseline = None;
+        self.phase_sourced_ebuild = None;
     }
 
     /// `EPREFIX` as a package's phases see it when it merges into `root_str`
@@ -1196,6 +1218,34 @@ impl EbuildShell {
         let root_str = format!("{}/", root.trim_end_matches('/'));
         let eprefix = self.effective_eprefix(host_codegen, &root_str);
         Self::ed_under(&work_root.join("image"), &eprefix)
+    }
+
+    /// Set `ROOT` and `EROOT` for a removal into `root`, from the live `EAPI`.
+    ///
+    /// A missing or invalid `EAPI` is EAPI 0. `D` and `ED` are left alone.
+    pub fn assign_root_vars(&mut self, root: &Path) {
+        let eapi = self
+            .get_var("EAPI")
+            .and_then(|s| s.parse::<Eapi>().ok())
+            .unwrap_or(Eapi::Zero);
+        let raw = root.to_string_lossy();
+        let root_str = if raw.ends_with('/') {
+            raw.into_owned()
+        } else {
+            format!("{raw}/")
+        };
+        let category = self.get_var("CATEGORY").unwrap_or_default();
+        let pn = self.get_var("PN").unwrap_or_default();
+        let host_codegen = Self::is_cross_host_codegen(&category, &pn);
+        let cross_triple = Self::cross_category_triple(&category).map(str::to_owned);
+        let roots = self.root_vars(
+            host_codegen,
+            cross_triple.as_deref(),
+            &root_str,
+            Path::new("."),
+        );
+        self.set_var("ROOT", &slashed_for(eapi, &roots.root));
+        self.set_var("EROOT", &slashed_for(eapi, &roots.eroot));
     }
 
     /// Whether `ebuild` is the one already sourced into the live shell for the
@@ -1950,10 +2000,10 @@ impl EbuildShell {
             ))
         })?;
         self.set_var("WORKDIR", &workdir.to_string_lossy());
-        // S defaults to ${WORKDIR}/${P}; the ebuild may override it at global
-        // scope while sourcing. Only (re)assert the default when about to source,
-        // so later phases keep the value carried from the first phase.
-        if need_source {
+        // S defaults to ${WORKDIR}/${P}. Assert it before a source, and when a
+        // restored environment carried none. A non-empty carried value stays.
+        let s_unset = self.get_var("S").is_none_or(|s| s.is_empty());
+        if need_source || s_unset {
             self.set_var("S", &workdir.join(&p).to_string_lossy());
         }
         self.set_var("T", &t.to_string_lossy());

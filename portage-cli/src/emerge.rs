@@ -1279,6 +1279,8 @@ async fn execute_unmerge_batch(
             gerund.to_lowercase()
         );
     }
+    // Each removal restores this, so one package's functions do not run for the next.
+    shell.save_profile_session();
 
     // One shared graph + registry for the whole batch, not rebuilt per
     // package — see `preserve_libs::build_link_graph`'s doc.

@@ -1509,6 +1509,9 @@ impl PackageSetup {
             activity,
         } = opts;
         let config_root = roots.config_root;
+        // Before this package's merge type and replacing versions, so a
+        // removal on this shell does not see them.
+        shell.save_profile_session();
         shell.set_merge_type(match group {
             PhaseGroup::BinpkgMerge => portage_repo::MergeType::Binary,
             PhaseGroup::BuildOnly => portage_repo::MergeType::BuildOnly,
@@ -2404,14 +2407,11 @@ async fn run_merge(
     result
 }
 
-/// Run `pkg_prerm`, delete `old_pkg`'s CONTENTS files that aren't also owned
-/// by `new_contents` (an empty slice for a full removal, as opposed to an
-/// in-place replace), unregister from the VDB, then run `pkg_postrm` — all
-/// within `old_work_root` (a scratch dir the caller owns and cleans up).
+/// Inputs for removing an installed package, in place or with `-C`
 ///
-/// Shared by [`unmerge_slot_occupant`] (an in-place replace during a normal
-/// merge, which also presets `REPLACED_BY_VERSION` before calling this) and
-/// Shared inputs for removing an installed package (in-place replace or `-C`).
+/// `new_contents` is empty for a full removal. `old_work_root` is a scratch
+/// directory the caller owns. `replaced_by` is applied after the saved
+/// environment is restored, so a value saved with it cannot overwrite it.
 struct UnmergePackage<'a> {
     shell: &'a mut portage_repo::EbuildShell,
     old_pkg: &'a InstalledPackage,
@@ -2419,12 +2419,13 @@ struct UnmergePackage<'a> {
     root: &'a Utf8Path,
     vdb: &'a Vdb,
     new_contents: &'a [ContentsEntry],
+    replaced_by: Option<&'a portage_atom::Version>,
     graph: &'a preserve_libs::LinkGraph,
     registry: &'a mut preserve_libs::PreservedLibsRegistry,
 }
 
-/// [`unmerge_standalone`] (the standalone `-C`/`--unmerge` command — no
-/// replacement, so no `REPLACED_BY_VERSION`).
+/// Remove `old_pkg`: `pkg_prerm`, delete its unique files, unregister, then
+/// `pkg_postrm`. A slot replace passes `replaced_by`; `-C` passes none.
 async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
     let UnmergePackage {
         shell,
@@ -2433,9 +2434,13 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
         root,
         vdb,
         new_contents,
+        replaced_by,
         graph,
         registry,
     } = u;
+    // The shield below is the names still in the shell. Start from the
+    // configured shell so the previous package's functions are not among them.
+    shell.restore_profile_session();
     let old_pn = old_pkg.cpv().cpn.package.as_ref();
     let old_pvr = old_pkg.cpv().version.to_string();
     let old_pf = format!("{old_pn}-{old_pvr}");
@@ -2508,6 +2513,9 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
             };
             match restored {
                 Ok(()) => {
+                    if let Some(version) = replaced_by {
+                        shell.preset_var("REPLACED_BY_VERSION", &version.to_string());
+                    }
                     shell
                         .run_phase(e, "prerm", old_work_root.as_std_path(), root.as_std_path())
                         .await
@@ -2531,7 +2539,15 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
         }
         None => match &staged_env {
             Some(env_file) => {
-                try_run_phase_from_env_file(shell, "prerm", old_work_root, root, env_file).await
+                try_run_phase_from_env_file(
+                    shell,
+                    "prerm",
+                    old_work_root,
+                    root,
+                    env_file,
+                    replaced_by,
+                )
+                .await
             }
             None => false,
         },
@@ -2593,9 +2609,15 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
             }
             None => {
                 if let Some(env_file) = &staged_env {
-                    let _ =
-                        try_run_phase_from_env_file(shell, "postrm", old_work_root, root, env_file)
-                            .await;
+                    let _ = try_run_phase_from_env_file(
+                        shell,
+                        "postrm",
+                        old_work_root,
+                        root,
+                        env_file,
+                        replaced_by,
+                    )
+                    .await;
                 }
             }
         }
@@ -2634,9 +2656,6 @@ async fn unmerge_slot_occupant(u: UnmergeSlotOccupant<'_>) -> Result<()> {
         graph,
         registry,
     } = u;
-    // PMS 11.1: the old package's pkg_prerm/pkg_postrm see the version
-    // replacing it.
-    shell.preset_var("REPLACED_BY_VERSION", &new_version.to_string());
     let old_pn = old_pkg.cpv().cpn.package.as_ref();
     let old_pvr = old_pkg.cpv().version.to_string();
     let old_pf = format!("{old_pn}-{old_pvr}");
@@ -2652,6 +2671,7 @@ async fn unmerge_slot_occupant(u: UnmergeSlotOccupant<'_>) -> Result<()> {
         root,
         vdb,
         new_contents,
+        replaced_by: Some(new_version),
         graph,
         registry,
     })
@@ -2693,6 +2713,7 @@ pub async fn unmerge_standalone(
         root,
         vdb,
         new_contents: &[],
+        replaced_by: None,
         graph,
         registry,
     })
@@ -2742,11 +2763,19 @@ async fn try_run_phase_from_env_file(
     _work_root: &Utf8Path,
     root: &Utf8Path,
     env_file: &Utf8Path,
+    replaced_by: Option<&portage_atom::Version>,
 ) -> bool {
     let source_cmd = format!(". '{}'", env_file.as_str().replace('\'', "'\\''"));
     if shell.run_string(&source_cmd).await.is_err() {
         crate::style::warn_line!("could not source saved environment");
         return false;
+    }
+
+    // The saved file just sourced may name a different EAPI and a different
+    // REPLACED_BY_VERSION. PMS trailing-slash and the replacement version win.
+    shell.assign_root_vars(root.as_std_path());
+    if let Some(version) = replaced_by {
+        shell.preset_var("REPLACED_BY_VERSION", &version.to_string());
     }
 
     let func = match phase {
@@ -2755,22 +2784,16 @@ async fn try_run_phase_from_env_file(
         other => other,
     };
 
-    let root_str = {
-        let s = root.as_str();
-        if s.ends_with('/') {
-            s.to_owned()
-        } else {
-            format!("{s}/")
-        }
-    };
     // The phase function is entirely optional (PMS: an ebuild need not
     // define pkg_prerm/pkg_postrm at all) — guard the call so a package
     // that simply never defined it doesn't produce a spurious "command
-    // not found" for a hook nothing was ever supposed to run.
+    // not found" for a hook nothing was ever supposed to run. This path
+    // does not go through `run_phase`, so the call exports the roots itself.
     if let Err(e) = shell
         .run_string(&format!(
             "if declare -F '{func}' >/dev/null 2>&1; then \
-             ROOT='{root_str}' EROOT='{root_str}' EBUILD_PHASE_FUNC='{func}' {func}; \
+             export ROOT EROOT REPLACED_BY_VERSION; \
+             EBUILD_PHASE_FUNC='{func}' {func}; \
              fi"
         ))
         .await
@@ -3985,6 +4008,8 @@ mod tests {
         async fn run(&self, ebuild: &Ebuild, phases: &[RunPhase]) -> Result<()> {
             let repo = self.repo();
             let mut shell = repo.shell().await.unwrap();
+            // A removal on this shell starts from here, as `run_group` does.
+            shell.save_profile_session();
             let pf = format!("{}-{}", ebuild.name(), ebuild.version());
             let work = self.path("work").join(pf);
             for phase in phases {
@@ -5015,5 +5040,83 @@ mod tests {
         assert!(!root.join("usr/bin/old-only").exists());
         assert!(root.join("usr/bin/shared").exists());
         assert!(root.join("usr/bin").exists());
+    }
+
+    #[tokio::test]
+    async fn a_replacement_does_not_run_the_new_packages_shell_in_the_old_prerm() {
+        let probe = Probe::new();
+        let old = probe.ebuild(
+            "probe",
+            "1",
+            &format!(
+                "{INSTALLS_A_FILE}\
+                 pkg_prerm() {{ \
+                   if declare -F leaked_func >/dev/null 2>&1; then note func:leaked; \
+                   else note clean-func; fi; \
+                   note \"var:${{LEAKED-clean}}\"; \
+                   note \"by=${{REPLACED_BY_VERSION}}\"; \
+                 }}\n"
+            ),
+        );
+        let new = probe.ebuild(
+            "probe",
+            "2",
+            &format!("export LEAKED=from-the-new\nleaked_func() {{ :; }}\n{INSTALLS_A_FILE}"),
+        );
+        probe.run(&old, BUILD_AND_MERGE).await.unwrap();
+        probe.run(&new, BUILD_AND_MERGE).await.unwrap();
+        let log = probe.log();
+        assert!(log.contains("clean-func"), "{log}");
+        assert!(log.contains("var:clean"), "{log}");
+        assert!(log.contains("by=2"), "{log}");
+        assert!(!log.contains("func:leaked"), "{log}");
+        assert!(!log.contains("from-the-new"), "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_later_removal_does_not_keep_the_previous_shell() {
+        let probe = Probe::new();
+        let ebuild = probe.ebuild(
+            "probe",
+            "1",
+            &format!(
+                "{INSTALLS_A_FILE}\
+                 pkg_prerm() {{ \
+                   if declare -F leaked_func >/dev/null 2>&1; then note func:leaked; \
+                   else note clean-func; fi; \
+                   note \"var:${{LEAKED-clean}}\"; \
+                 }}\n"
+            ),
+        );
+        probe.run(&ebuild, BUILD_AND_MERGE).await.unwrap();
+
+        let root = probe.path("root");
+        let vdb = Vdb::open(root.join("var/db/pkg")).unwrap();
+        let pkg = vdb.packages().into_iter().next().unwrap();
+        let repo = probe.repo();
+        let mut shell = repo.shell().await.unwrap();
+        shell.save_profile_session();
+        shell
+            .run_string("leaked_func() { :; }; export LEAKED=from-the-previous")
+            .await
+            .unwrap();
+        let mut registry = preserve_libs::PreservedLibsRegistry::load(&root);
+        let graph = preserve_libs::build_link_graph(&vdb, &HashSet::new(), &registry, &root);
+        unmerge_standalone(
+            &mut shell,
+            &pkg,
+            &probe.path("work"),
+            &root,
+            &vdb,
+            &graph,
+            &mut registry,
+        )
+        .await
+        .unwrap();
+        let log = probe.log();
+        assert!(log.contains("clean-func"), "{log}");
+        assert!(log.contains("var:clean"), "{log}");
+        assert!(!log.contains("func:leaked"), "{log}");
+        assert!(!log.contains("from-the-previous"), "{log}");
     }
 }

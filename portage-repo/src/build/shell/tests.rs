@@ -2458,3 +2458,82 @@ async fn phase_output_quiet_reflects_the_set_phase_log_flag() {
     shell.set_phase_log(Some((log_path.clone(), false)));
     assert!(!shell.phase_output_quiet());
 }
+
+#[tokio::test]
+async fn assign_root_vars_follows_eapi_and_leaves_the_image_alone() {
+    let dir = tempdir().unwrap();
+    let mut shell = minimal_shell(dir.path()).await;
+    shell.set_var("D", "/image/");
+    shell.set_var("ED", "/image/");
+
+    shell.set_var("EAPI", "7");
+    shell.assign_root_vars(std::path::Path::new("/"));
+    assert_eq!(shell.get_var("ROOT").as_deref(), Some(""));
+    assert_eq!(shell.get_var("EROOT").as_deref(), Some(""));
+
+    shell.set_var("EAPI", "6");
+    shell.assign_root_vars(std::path::Path::new("/"));
+    assert_eq!(shell.get_var("ROOT").as_deref(), Some("/"));
+    assert_eq!(shell.get_var("EROOT").as_deref(), Some("/"));
+
+    shell.run_string("unset EAPI").await.unwrap();
+    shell.assign_root_vars(std::path::Path::new("/"));
+    assert_eq!(shell.get_var("ROOT").as_deref(), Some("/"));
+    assert_eq!(shell.get_var("EROOT").as_deref(), Some("/"));
+
+    let prefix = dir.path().join("prefix");
+    let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix.clone()).unwrap();
+    shell.set_build_roots(None, None, Some(&prefix_utf8), None, None);
+    shell.set_var("EAPI", "7");
+    shell.assign_root_vars(&prefix);
+    let bare = prefix.to_str().unwrap().trim_end_matches('/');
+    assert_eq!(shell.get_var("ROOT").as_deref(), Some(""));
+    assert_eq!(shell.get_var("EROOT").as_deref(), Some(bare));
+
+    shell.set_var("EAPI", "6");
+    shell.assign_root_vars(&prefix);
+    let eroot = format!("{bare}/");
+    assert_eq!(shell.get_var("ROOT").as_deref(), Some("/"));
+    assert_eq!(shell.get_var("EROOT").as_deref(), Some(eroot.as_str()));
+
+    assert_eq!(shell.get_var("D").as_deref(), Some("/image/"));
+    assert_eq!(shell.get_var("ED").as_deref(), Some("/image/"));
+    assert!(shell.get_var("SYSROOT").is_none());
+    assert!(shell.get_var("BROOT").is_none());
+}
+
+#[tokio::test]
+async fn a_restored_phase_keeps_s_and_fills_it_when_unset() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "sys-libs", "zlib");
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    shell.mark_phase_sourced(&ebuild);
+    let custom = dir.path().join("custom-s");
+    shell.set_var("S", custom.to_str().unwrap());
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+    assert_eq!(
+        shell.get_var("S").as_deref(),
+        Some(custom.to_str().unwrap())
+    );
+
+    shell.set_var("S", "");
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+    let expected = work.join("work").join("zlib-1");
+    assert_eq!(
+        shell.get_var("S").as_deref(),
+        Some(expected.to_str().unwrap())
+    );
+}
