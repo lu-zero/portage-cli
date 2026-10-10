@@ -1,9 +1,8 @@
 # Toolchain links in a `--root` stage point into the path it was built at
 
-Status: 🟡 the 34 links `em` writes are fixed 2026-10-10; the other 37
-come from a different cause, [[root-variables-trailing-slash]]. Found
-2026-10-09 by comparing the stage roots of [[binpkg-stage-test-defects]]. Predates that work: the first
-sandbox's source-built root has the same 71 links.
+Status: ✅ fixed 2026-10-10: no link in a stage root names the root's
+path. The 34 that `em` wrote are relative now; the other 37 went with
+[[root-variables-trailing-slash]].
 
 ## What is there
 

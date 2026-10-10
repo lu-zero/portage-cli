@@ -1,8 +1,8 @@
 # `ROOT`, `EROOT`, `D`, `ED` end in a slash for EAPI 7 and later
 
-Status: 🔴 found 2026-10-10 while tracing
-[[stage-root-links-carry-the-build-path]]; not fixed. Touches the
-environment of every phase.
+Status: ✅ fixed 2026-10-10, both halves: `em` follows PMS and the brush
+fork keeps the pattern's separators (`8d77c6d7`). Found while tracing
+[[stage-root-links-carry-the-build-path]].
 
 ## What PMS says
 
@@ -55,3 +55,34 @@ So two things, either of which hides the other:
 - `ed_image_dir` and anything else that trims or expects the slash.
 - The 55 shell tests pin several of these values; they need the EAPI
   taken into account, not just updating.
+
+## Fixed (2026-10-10)
+
+- **`em`.** `slashed_for(eapi, path)` in `portage-repo/src/build/shell.rs`
+  is applied where `ROOT`, `EROOT`, `D` and `ED` are set, in the phase
+  runner and in the metadata sourcing: a slash up to EAPI 6, none from
+  EAPI 7, the empty string for the system root. `SYSROOT`, `ESYSROOT`
+  and `BROOT` never end in one. `em`'s own helpers that read these
+  already trimmed or accepted both forms; none changed. Test: the rule
+  for EAPI 6 and 8 against an offset root and `/`.
+- **brush.** Pathname expansion spells its results as the pattern does:
+  a doubled separator is kept in the literal directories before the
+  first glob component and written once after it, as bash does. 25
+  patterns compared with bash; a compat case.
+
+Full stage run, sandbox `em-stage-slash` (toolchain and stage1 from
+source with `-b`, then both with `-K`):
+
+- four steps exit 0; 159 binary installs, no source build;
+- the two roots are identical outright, 141 packages each;
+- **no link in either root names the root's path** (71 before);
+- against the previous run's source-built root: same packages, same
+  CONTENTS path lists, same tree paths. Link targets differ in 85
+  places, all for the better: the 71, and `usr/bin/{emerge,ebuild,…}`,
+  which were `/usr/lib/python-exec/python-exec2` and are now
+  `../lib/python-exec/python-exec2`, as on a real Gentoo system.
+
+Seen, older, not fixed: `usr/bin/gfortran` and `usr/bin/<CHOST>-gfortran`
+dangle in the stage. The toolchain step builds gcc with fortran and
+`em`'s activation links what is in `gcc-bin`; stage1 rebuilds gcc
+without it and the two links stay.

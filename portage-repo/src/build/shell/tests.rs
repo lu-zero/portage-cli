@@ -1593,7 +1593,65 @@ async fn ordinary_package_under_prefix_keeps_host_esysroot() {
         .await
         .unwrap();
 
-    assert_eq!(shell.get_var("ESYSROOT").unwrap_or_default(), "/");
+    // The system root, which EAPI 7 and later spell as the empty string.
+    assert_eq!(shell.get_var("ESYSROOT").as_deref(), Some(""));
+}
+
+// PMS, "Path variables and trailing slash": ROOT, EROOT, D and ED end in a
+// slash up to EAPI 6 and never from EAPI 7 on, where the system root is empty.
+#[tokio::test]
+async fn root_variables_follow_the_trailing_slash_rule_of_their_eapi() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let new_path = write_minimal_ebuild(&repo_path, "app-misc", "new");
+    let old_path = write_minimal_ebuild(&repo_path, "app-misc", "old");
+    let old_text = std::fs::read_to_string(&old_path).unwrap();
+    std::fs::write(&old_path, old_text.replace("EAPI=8", "EAPI=6")).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let offset = dir.path().join("offset");
+    std::fs::create_dir_all(&offset).unwrap();
+    let offset_str = offset.to_str().unwrap();
+
+    let values = |shell: &EbuildShell| -> Vec<String> {
+        ["ROOT", "EROOT", "D", "ED"]
+            .map(|name| shell.get_var(name).unwrap_or_default())
+            .to_vec()
+    };
+    for (path, root, slash) in [
+        (&new_path, offset.as_path(), false),
+        (&new_path, std::path::Path::new("/"), false),
+        (&old_path, offset.as_path(), true),
+        (&old_path, std::path::Path::new("/"), true),
+    ] {
+        let mut shell = repo.shell().await.unwrap();
+        let ebuild = Ebuild::from_path(path).unwrap();
+        let work = dir.path().join("work");
+        shell
+            .run_phase(&ebuild, "setup", &work, root)
+            .await
+            .unwrap();
+
+        let [root_var, eroot, d, ed] = values(&shell).try_into().unwrap();
+        let image = work.join("image");
+        let image = image.to_str().unwrap();
+        let system = root == std::path::Path::new("/");
+        let (want_root, want_image) = match (slash, system) {
+            (true, true) => ("/".to_owned(), format!("{image}/")),
+            (true, false) => (format!("{offset_str}/"), format!("{image}/")),
+            (false, true) => (String::new(), image.to_owned()),
+            (false, false) => (offset_str.to_owned(), image.to_owned()),
+        };
+        assert_eq!(root_var, want_root, "ROOT, slash={slash} system={system}");
+        assert_eq!(eroot, want_root, "EROOT, slash={slash} system={system}");
+        assert_eq!(d, want_image, "D, slash={slash}");
+        assert_eq!(ed, want_image, "ED, slash={slash}");
+        if !slash {
+            assert_eq!(shell.get_var("BROOT").as_deref(), Some(""));
+        }
+    }
 }
 
 // Ordinary target packages: ESYSROOT is the substituted sysroot alone,

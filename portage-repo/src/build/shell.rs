@@ -380,7 +380,22 @@ const PM_EXPORTED_VARS: &[&str] = &[
     "TERM",
 ];
 
+/// A path as `ROOT`, `EROOT`, `D` and `ED` hold it: ending in a slash up to
+/// EAPI 6 and never from EAPI 7 on, where the system root is the empty string
+/// (PMS, "Path variables and trailing slash").
+fn slashed_for(eapi: Eapi, path: &str) -> String {
+    let bare = path.trim_end_matches('/');
+    if eapi >= Eapi::Seven {
+        bare.to_owned()
+    } else {
+        format!("{bare}/")
+    }
+}
+
 /// The root-model variables of one phase, see [`EbuildShell::root_vars`]
+///
+/// As [`EbuildShell::root_vars`] derives them; the trailing slash PMS asks
+/// for or forbids is applied where they are set.
 struct RootVars {
     root: String,
     eprefix: String,
@@ -1330,7 +1345,8 @@ impl EbuildShell {
         self.set_var("T", &format!("{base}/temp"));
         self.set_var("TMPDIR", &format!("{base}/temp"));
         self.set_var("HOME", &format!("{base}/homedir"));
-        self.set_var("D", &format!("{base}/image/"));
+        let image = format!("{base}/image");
+        self.set_var("D", &slashed_for(eapi, &image));
         let (distdir, ro) = self.effective_distdir();
         self.set_var("DISTDIR", &distdir);
         self.set_var("PORTAGE_RO_DISTDIRS", &ro.join(" "));
@@ -1338,21 +1354,22 @@ impl EbuildShell {
         // Phase/merge variables (PMS 11.1)
         self.set_var("EBUILD_PHASE", "depend");
         self.set_var("EBUILD_PHASE_FUNC", "");
-        self.set_var("ROOT", "/");
+        self.set_var("ROOT", &slashed_for(eapi, "/"));
         self.set_var("MERGE_TYPE", "source");
 
         // EAPI 3+ prefix variables (PMS 11.1)
         if eapi >= Eapi::Three {
             self.set_var("EPREFIX", "");
-            self.set_var("ED", &format!("{base}/image/"));
-            self.set_var("EROOT", "/");
+            self.set_var("ED", &slashed_for(eapi, &image));
+            self.set_var("EROOT", &slashed_for(eapi, "/"));
         }
 
-        // EAPI 7+ sysroot variables (PMS 11.1)
+        // EAPI 7+ sysroot variables (PMS 11.1): no trailing slash, so the
+        // system root is the empty string.
         if eapi >= Eapi::Seven {
-            self.set_var("SYSROOT", "/");
-            self.set_var("ESYSROOT", "/");
-            self.set_var("BROOT", "/");
+            self.set_var("SYSROOT", "");
+            self.set_var("ESYSROOT", "");
+            self.set_var("BROOT", "");
         }
 
         // PMS 10.2 accumulating variables (EAPI-dependent).
@@ -1942,7 +1959,7 @@ impl EbuildShell {
         self.set_var("T", &t.to_string_lossy());
         self.set_var("TMPDIR", &t.to_string_lossy());
         self.set_var("HOME", &homedir.to_string_lossy());
-        self.set_var("D", &format!("{}/", d.display()));
+        self.set_var("D", &slashed_for(eapi, &d.to_string_lossy()));
         // DISTDIR is already set by init_build_env() from env or ~/.cache/distfiles;
         // do not override it here.
 
@@ -2004,7 +2021,7 @@ impl EbuildShell {
             self.set_var("LD_LIBRARY_PATH", &combined);
         }
 
-        self.set_var("ROOT", &roots.root);
+        self.set_var("ROOT", &slashed_for(eapi, &roots.root));
         self.set_var("MERGE_TYPE", self.merge_type.as_str());
         // PORTAGE_CONFIGROOT: where profile/make.conf live (host unless offset).
         let configroot = self
@@ -2018,8 +2035,8 @@ impl EbuildShell {
         // `${ED}` unconditionally, so always set them (ED == D when EPREFIX is
         // empty, matching portage's EAPI 0-2 behaviour).
         self.set_var("EPREFIX", &roots.eprefix);
-        self.set_var("ED", &roots.ed);
-        self.set_var("EROOT", &roots.eroot);
+        self.set_var("ED", &slashed_for(eapi, &roots.ed));
+        self.set_var("EROOT", &slashed_for(eapi, &roots.eroot));
         // Autoconf's own config.site discovery checks `${--prefix}/share/
         // config.site`, but a board-destined package under `--target`
         // correctly gets an empty EPREFIX, so it can never reach crossdev's
@@ -2031,8 +2048,8 @@ impl EbuildShell {
         }
         if eapi >= Eapi::Seven {
             self.set_var("SYSROOT", &roots.sysroot);
-            self.set_var("ESYSROOT", &roots.esysroot);
-            self.set_var("BROOT", "/");
+            self.set_var("ESYSROOT", roots.esysroot.trim_end_matches('/'));
+            self.set_var("BROOT", "");
 
             // Host cross tools under a prefix compiler: BDEPENDs like elfutils
             // may only exist on the host. `-idirafter /usr/include` finds host
