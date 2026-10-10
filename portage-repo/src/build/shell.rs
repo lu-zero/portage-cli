@@ -977,6 +977,11 @@ impl EbuildShell {
         self.phase_sourced_ebuild = None;
     }
 
+    /// Whether the live shell defines `name`.
+    pub fn defines_function(&self, name: &str) -> bool {
+        self.shell.funcs().get(name).is_some()
+    }
+
     /// `EPREFIX` as a package's phases see it when it merges into `root_str`
     /// (which ends in `/`)
     fn effective_eprefix(&self, host_codegen: bool, root_str: &str) -> String {

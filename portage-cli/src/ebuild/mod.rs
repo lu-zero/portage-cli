@@ -1538,6 +1538,17 @@ impl PackageSetup {
             // Where src_install would have put it: the package holds `ED`.
             let image = shell.image_ed(&ebuild, wd.as_std_path(), root.as_std_path());
             let saved = extract_binpkg(&shell, bp, &image, config_root, require_signature)?;
+            if let Some(shipped) = portage_binpkg::read_ebuild(bp.as_std_path())
+                .with_context(|| format!("reading the ebuild of {bp}"))?
+            {
+                // The shipped ebuild is used even when a saved environment
+                // supplies the phases, because EAPI, FILESDIR, and the VDB
+                // copy follow that text.
+                let copy = wd.join(format!("{}-{}.ebuild", ebuild.name(), ebuild.version()));
+                std::fs::write(copy.as_std_path(), shipped)
+                    .with_context(|| format!("writing {copy}"))?;
+                ebuild = Ebuild::with_cpv(ebuild.cpv().clone(), &copy);
+            }
             if let Some(saved) = saved {
                 // What the installing system configured stays its own. Listed
                 // now, while the shell holds nothing of the package yet.
@@ -1549,15 +1560,6 @@ impl PackageSetup {
                 restore_package_environment(&mut shell, &ebuild, &work_root, &saved, &shield)
                     .await
                     .with_context(|| format!("{bp} cannot be installed"))?;
-            } else if let Some(shipped) = portage_binpkg::read_ebuild(bp.as_std_path())
-                .with_context(|| format!("reading the ebuild of {bp}"))?
-            {
-                // No saved environment: the phases come from the ebuild the
-                // package was built from, not from what the tree holds now.
-                let copy = wd.join(format!("{}-{}.ebuild", ebuild.name(), ebuild.version()));
-                std::fs::write(copy.as_std_path(), shipped)
-                    .with_context(|| format!("writing {copy}"))?;
-                ebuild = Ebuild::with_cpv(ebuild.cpv().clone(), &copy);
             }
         }
 
@@ -1937,13 +1939,16 @@ async fn run_one_phase(
         RunPhase::Ebuild(p) => {
             // PMS: pkg_pretend takes no part in environment saving, so nothing
             // it sets may reach pkg_setup. An ebuild known not to define it
-            // keeps the shell, and with it the sourcing, as it is.
-            let defines_pretend = || {
-                let entry = repo.cache_entry(ebuild.cpv()).ok().flatten();
-                entry.is_none_or(|e| e.metadata.defined_phases.contains(&p))
-            };
-            let session =
-                (phase == RunPhase::PRETEND && defines_pretend()).then(|| shell.save_session());
+            // keeps the shell, and with it the sourcing, as it is. A restored
+            // binary package may define the function when the tree cache does not.
+            let defines_pretend = phase == RunPhase::PRETEND
+                && (shell.defines_function("pkg_pretend")
+                    || repo
+                        .cache_entry(ebuild.cpv())
+                        .ok()
+                        .flatten()
+                        .is_none_or(|e| e.metadata.defined_phases.contains(&p)));
+            let session = defines_pretend.then(|| shell.save_session());
             let result = shell
                 .run_phase(
                     ebuild,
@@ -5118,5 +5123,57 @@ mod tests {
         assert!(log.contains("var:clean"), "{log}");
         assert!(!log.contains("func:leaked"), "{log}");
         assert!(!log.contains("from-the-previous"), "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_binary_install_uses_the_ebuild_the_package_ships() {
+        if pkgdir_is_redirected() {
+            return;
+        }
+        let probe = Probe::new();
+        let ebuild = probe.ebuild(
+            "probe",
+            "1",
+            &format!(
+                "pkg_pretend() {{ FROM_PRETEND=1; }}\n\
+                 pkg_setup() {{ note \"eapi=${{EAPI}} pretend=${{FROM_PRETEND-unset}} \
+                 files=${{FILESDIR}}\"; }}\n\
+                 {INSTALLS_A_FILE}"
+            ),
+        );
+        probe
+            .run_group(&ebuild, PhaseGroup::BuildOnly, "root", None)
+            .await
+            .unwrap();
+        let package = probe.package("root").unwrap();
+
+        let text = fs::read_to_string(ebuild.path()).unwrap();
+        fs::write(
+            ebuild.path(),
+            text.replace("EAPI=8", "EAPI=5")
+                .replace("pkg_pretend() { FROM_PRETEND=1; }\n", ""),
+        )
+        .unwrap();
+        let cache = probe.path("repo/metadata/md5-cache/app-misc/probe-1");
+        let cache_text = fs::read_to_string(&cache).unwrap();
+        fs::write(&cache, cache_text.replace("pretend ", "")).unwrap();
+
+        fs::create_dir_all(probe.path("root2")).unwrap();
+        probe
+            .run_group(&ebuild, PhaseGroup::BinpkgMerge, "root2", Some(&package))
+            .await
+            .unwrap();
+
+        let log = probe.log();
+        assert!(log.contains("eapi=8"), "{log}");
+        assert!(!log.contains("eapi=5"), "{log}");
+        assert!(!log.contains("pretend=1"), "{log}");
+        assert!(log.contains("work/root2/probe-1/files"), "{log}");
+
+        let shipped =
+            fs::read_to_string(probe.path("root2/var/db/pkg/app-misc/probe-1/probe-1.ebuild"))
+                .unwrap();
+        assert!(shipped.contains("EAPI=8"), "{shipped}");
+        assert!(shipped.contains("pkg_pretend"), "{shipped}");
     }
 }
