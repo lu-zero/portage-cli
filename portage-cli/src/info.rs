@@ -641,7 +641,7 @@ async fn toolchain_versions(
 ///   via `ebuild::elog_setting`.
 ///
 /// - Everything else: plain `shell.get_var`.
-fn resolve_info_var(shell: &portage_repo::EbuildShell, name: &str) -> Option<String> {
+pub(crate) fn resolve_info_var(shell: &portage_repo::EbuildShell, name: &str) -> Option<String> {
     match name {
         "LANG" => std::env::var("LANG").ok().filter(|v| !v.is_empty()),
         "DISTDIR" | "PKGDIR" | "PORTAGE_TMPDIR" | "GENTOO_MIRRORS" => {

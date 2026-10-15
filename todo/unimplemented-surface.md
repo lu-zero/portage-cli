@@ -112,6 +112,14 @@ that covers and what's still missing (settings/`envvar`, repos,
 metadata/contents/owners, `best_visible`, and the protect/eclass/license
 tail).
 
+**Update 2026-10-15 — settings/`envvar`, settings one-liners and repos
+groups landed** (`envvar`, `vdb_path`, `pkgdir`, `distdir`,
+`gentoo_mirrors`, `config_protect*`, `portdir*`, `get_repos`,
+`get_repo_path`, all byte-exact with exit codes in `comparison.rs`).
+Still missing: `NAME*` prefix matches, `metadata`/`contents`/`owners`,
+`best_visible`, `is_protected`/`filter_protected`, eclass/license paths,
+`repos_config`.
+
 ## Not a gap
 
 `info.rs:540`'s `return "not implemented".to_string()` is a *label*, not a
