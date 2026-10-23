@@ -150,7 +150,7 @@ impl RunAsync<&cli::Cli> for MaintArgs {
 impl RunAsync<&cli::Cli> for PortageqArgs {
     type Output = Result<()>;
 
-    async fn run_async(self, _cli: &cli::Cli) -> Self::Output {
+    async fn run_async(self, cli: &cli::Cli) -> Self::Output {
         let status = match &self.command {
             PortageqCommand::HasVersion { eroot, atom } => {
                 crate::portageq::has_version(eroot, atom)
@@ -161,6 +161,51 @@ impl RunAsync<&cli::Cli> for PortageqArgs {
             PortageqCommand::Match { eroot, atom } => crate::portageq::run_match(eroot, atom),
             PortageqCommand::MassBestVersion { eroot, atoms } => {
                 crate::portageq::mass_best_version(eroot, atoms)
+            }
+            PortageqCommand::Envvar { verbose, names } => {
+                let mut out = std::io::stdout();
+                crate::portageq::run_envvar(cli, names, *verbose, &mut out).await
+            }
+            PortageqCommand::GetRepos { eroot } => {
+                let mut out = std::io::stdout();
+                let mut err = std::io::stderr();
+                crate::portageq::get_repos(eroot, &mut out, &mut err)
+            }
+            PortageqCommand::GetRepoPath { eroot, repos } => {
+                let mut out = std::io::stdout();
+                let mut err = std::io::stderr();
+                crate::portageq::get_repo_path(eroot, repos, &mut out, &mut err)
+            }
+            PortageqCommand::VdbPath => crate::portageq::vdb_path(cli, &mut std::io::stdout()),
+            PortageqCommand::Pkgdir => {
+                let mut out = std::io::stdout();
+                crate::portageq::run_settings_var(cli, "PKGDIR", &mut out).await
+            }
+            PortageqCommand::Distdir => {
+                let mut out = std::io::stdout();
+                crate::portageq::run_settings_var(cli, "DISTDIR", &mut out).await
+            }
+            PortageqCommand::GentooMirrors => {
+                let mut out = std::io::stdout();
+                crate::portageq::run_settings_var(cli, "GENTOO_MIRRORS", &mut out).await
+            }
+            PortageqCommand::ConfigProtect => {
+                let mut out = std::io::stdout();
+                crate::portageq::run_settings_var(cli, "CONFIG_PROTECT", &mut out).await
+            }
+            PortageqCommand::ConfigProtectMask => {
+                let mut out = std::io::stdout();
+                crate::portageq::run_settings_var(cli, "CONFIG_PROTECT_MASK", &mut out).await
+            }
+            PortageqCommand::Portdir => {
+                let mut out = std::io::stdout();
+                let mut err = std::io::stderr();
+                crate::portageq::portdir(cli, &mut out, &mut err)
+            }
+            PortageqCommand::PortdirOverlay => {
+                let mut out = std::io::stdout();
+                let mut err = std::io::stderr();
+                crate::portageq::portdir_overlay(cli, &mut out, &mut err)
             }
         }?;
         if status != 0 {

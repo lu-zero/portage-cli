@@ -107,6 +107,11 @@ impl ConfigProtect {
         &self.protect
     }
 
+    /// The mask directories, for callers that print the whole list.
+    pub(crate) fn masked_dirs(&self) -> &[String] {
+        &self.mask
+    }
+
     /// Length of the longest entry in `list` that prefix-matches `obj` on
     /// whole components (`obj == p` or `obj` under `p/`); 0 if none.
     fn longest_match(list: &[String], obj: &str) -> usize {

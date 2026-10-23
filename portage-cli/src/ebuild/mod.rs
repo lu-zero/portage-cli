@@ -19,7 +19,7 @@ use crate::preserve_libs;
 
 mod binpkg;
 mod flock;
-mod protect;
+pub(crate) mod protect;
 
 use binpkg::{build_binpkg_standalone, ed_image_dir};
 use flock::{CleanWhen, acquire_flock, filter_clean_subs, lock_builddir, lock_merge_flock};

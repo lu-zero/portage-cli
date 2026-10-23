@@ -179,3 +179,136 @@ fn grep_eclass_matches_qgrep() {
     q_lines.sort_unstable();
     assert_eq!(em_lines, q_lines);
 }
+
+/// Raw `em portageq` run: no `--root` (this applet carries no topology)
+/// and no success assertion, since miss cases exit 1 by design.
+fn em_pq(args: &[&str]) -> (i32, String, String) {
+    em_pq_env(args, &[])
+}
+
+/// [`em_pq`] with extra variables in the child's environment only.
+fn em_pq_env(args: &[&str], vars: &[(&str, &str)]) -> (i32, String, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_em"))
+        .args(["portageq"])
+        .args(args)
+        .envs(vars.iter().copied())
+        .output()
+        .expect("failed to run em");
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    )
+}
+
+/// Raw real `portageq` run with the same no-success-assertion shape.
+fn real_pq(args: &[&str]) -> (i32, String, String) {
+    real_pq_env(args, &[])
+}
+
+/// [`real_pq`] with extra variables in the child's environment only.
+fn real_pq_env(args: &[&str], vars: &[(&str, &str)]) -> (i32, String, String) {
+    let output = Command::new("/usr/bin/portageq")
+        .args(args)
+        .envs(vars.iter().copied())
+        .output()
+        .expect("failed to run comparison tool");
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    )
+}
+
+fn have_portageq() -> bool {
+    std::path::Path::new("/usr/bin/portageq").exists()
+}
+
+/// Cases below assume host state: `app-shells/bash` installed, a `gentoo`
+/// repo configured, `CFLAGS` set. A failure here means the host differs.
+fn check_pq_parity(cases: &[&[&str]]) {
+    if !have_portageq() {
+        eprintln!("skipping: /usr/bin/portageq not present");
+        return;
+    }
+    for args in cases {
+        assert_eq!(em_pq(args), real_pq(args), "mismatch for {args:?}");
+    }
+}
+
+#[test]
+#[ignore]
+fn portageq_vdb_group_matches_real() {
+    check_pq_parity(&[
+        &["has_version", "/", "app-shells/bash"],
+        &["has_version", "/", "app-shells/no-such-pkg-xyz"],
+        &["best_version", "/", "app-shells/bash"],
+        &["best_version", "/", "app-shells/no-such-pkg-xyz"],
+        &["match", "/", "app-shells/bash"],
+        &[
+            "mass_best_version",
+            "/",
+            "app-shells/bash",
+            "app-shells/no-such-pkg-xyz",
+        ],
+    ]);
+}
+
+#[test]
+#[ignore]
+fn portageq_envvar_matches_real() {
+    check_pq_parity(&[
+        &["envvar", "CFLAGS"],
+        &["envvar", "-v", "CFLAGS"],
+        &["envvar", "CFLAGS", "EM_NO_SUCH_VAR_XYZ"],
+        &["envvar"],
+    ]);
+}
+
+#[test]
+#[ignore]
+fn portageq_settings_match_real() {
+    check_pq_parity(&[
+        &["vdb_path"],
+        &["pkgdir"],
+        &["distdir"],
+        &["gentoo_mirrors"],
+        &["config_protect"],
+        &["config_protect_mask"],
+        &["portdir"],
+        &["portdir_overlay"],
+    ]);
+}
+
+#[test]
+#[ignore]
+fn portageq_repos_match_real() {
+    check_pq_parity(&[
+        &["get_repos", "/"],
+        &["get_repos", "/no/such/eroot"],
+        &["get_repo_path", "/", "gentoo"],
+        &["get_repo_path", "/", "no-such-repo-xyz"],
+        &["get_repo_path", "/", "bad/name"],
+        &["get_repo_path", "/"],
+    ]);
+}
+
+#[test]
+#[ignore]
+fn portageq_env_from_process_environment_matches_real() {
+    if !have_portageq() {
+        eprintln!("skipping: /usr/bin/portageq not present");
+        return;
+    }
+    let vars = [("EM_PQ_QUOTED_XYZ", "a'b"), ("EM_PQ_EMPTY_XYZ", "")];
+    for args in [
+        &["envvar", "-v", "EM_PQ_QUOTED_XYZ"][..],
+        &["envvar", "EM_PQ_EMPTY_XYZ"][..],
+    ] {
+        assert_eq!(
+            em_pq_env(args, &vars),
+            real_pq_env(args, &vars),
+            "mismatch for {args:?}"
+        );
+    }
+}

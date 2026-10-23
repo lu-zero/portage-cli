@@ -1,6 +1,6 @@
 # `em portageq` — implementation plan
 
-STATUS: **partially implemented 2026-09-17** — the VDB group (step 2 of the
+STATUS: **partially implemented 2026-10-15** — the VDB group (step 2 of the
 implementation order below) is done: `has_version`, `best_version`, `match`,
 `mass_best_version`, in `portage-cli/src/portageq.rs`, wired as a real
 `#[usage(subcommand)]` enum on `PortageqArgs` (`cli.rs`). Unit-tested
@@ -9,14 +9,18 @@ the real installed `portageq` (portage 3.0.82.2) for every documented case —
 hit, miss, invalid atom, missing `<EROOT>` — all byte-exact, including the
 `"Not a directory: '<x>'" / "Run portageq with --help for info"` error text.
 
-**Not yet done:** steps 3–7 below (settings/`envvar` group, repos group,
-metadata/contents/owners, `best_visible`, protect/eclass/license/
-`repos_config` tail) — still bare, not stubbed. `match`'s glob-style extended
+Steps 3–4 done 2026-10-15: `envvar` (exact names, `-v`, ambient environment
+wins) and the settings one-liners plus repos group (`vdb_path`, `pkgdir`,
+`distdir`, `gentoo_mirrors`, `config_protect*`, `portdir*`, `get_repos`,
+`get_repo_path`), all byte-exact with exit codes in
+`portage-cli/tests/comparison.rs`.
+
+**Not yet done:** steps 5–7 below (metadata/contents/owners, `best_visible`,
+protect/eclass/license/`repos_config` tail) and `NAME*` prefix matches —
+still bare, not stubbed. `match`'s glob-style extended
 syntax (`cat/*`, `*/*`) is also not yet supported (falls through to
 "invalid atom" today); only plain dependency atoms and the empty-atom
-"match everything" case work so far. Comparison-test parity (§5's
-`#[ignore]` live-parity tests) has not been added yet either — only the
-manual live checks above.
+"match everything" case work so far.
 
 Original plan below, produced by reading real portage's `portageq` source
 (host portage 3.0.82.2) and verifying every format live, not from memory —
