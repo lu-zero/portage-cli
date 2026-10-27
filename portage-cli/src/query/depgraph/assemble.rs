@@ -181,6 +181,11 @@ pub(super) fn assemble(
             &pristine_package_use,
             &profile_package_use,
             &conf,
+            &|cpv| {
+                data.cache_entry(&cpv.cpn, &cpv.version)
+                    .map(effective_use::iuse_defaults)
+                    .unwrap_or_default()
+            },
         );
         if autounmask_write && !entries.is_empty() {
             package_use::write(&entries, &portage_dir.join("package.use"))?;

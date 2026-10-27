@@ -5,9 +5,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use camino::Utf8Path;
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
-    DepEdge, UseFlagRequirement, UseFlagState, UseLayer, UseOverride, resolve_effective_use,
+    DepEdge, IUseDefault, UseFlagRequirement, UseFlagState, UseLayer, UseOverride,
+    resolve_effective_use,
 };
 
 /// Entries to write into `/etc/portage/package.use`
@@ -46,6 +48,7 @@ pub fn build_entries(
     package_use: &[(Dep, Vec<UseOverride>)],
     profile_package_use: &[portage_atom_pubgrub::ProfileUseNode],
     conf: &UseLayer,
+    iuse_defaults_of: &dyn Fn(&Cpv) -> HashMap<Interned<DefaultInterner>, IUseDefault>,
 ) -> Vec<PackageUseEntry> {
     // Pre-compute once for all requirements.
     let adj = build_adjacency(edges);
@@ -71,13 +74,12 @@ pub fn build_entries(
             .unwrap_or_default();
         let atom = format!(">={}-{}{}", cpn, ver_str(ver), slot_suffix);
 
-        // A flag belongs in package.use only if the global config does not
-        // already set it the way the requirement needs.  A flag already enabled
-        // (e.g. a PYTHON_TARGETS member in the profile) just triggers a rebuild,
-        // shown via the `*` USE marker — it is not an autounmask change.
+        // A flag already set by the pristine config, including an IUSE
+        // `+flag` default, is not a package.use change.
         let cpv = Cpv::new(cpn, ver.clone());
+        let iuse_defaults = iuse_defaults_of(&cpv);
         let eff = resolve_effective_use(
-            &HashMap::new(),
+            &iuse_defaults,
             defaults,
             &cpv,
             req.package.slot(),
@@ -548,6 +550,32 @@ mod tests {
             required_disabled: Vec::new(),
             required_by: required_by.iter().map(|r| r.to_string()).collect(),
         }
+    }
+
+    /// `dev-lang/rust` requires `net-misc/curl[http2]`; curl's IUSE carries
+    /// `+http2`, so no package.use change is needed (emerge prints none).
+    #[test]
+    fn a_flag_enabled_by_an_iuse_default_needs_no_package_use_line() {
+        let mut req = requirement("net-misc/curl", &["dev-lang/rust"]);
+        req.required_enabled = vec![Interned::intern("http2")];
+        let empty = UseLayer::empty();
+        let build = |defaults: HashMap<Interned<DefaultInterner>, IUseDefault>| {
+            build_entries(
+                std::slice::from_ref(&req),
+                &[],
+                &[],
+                &[],
+                &empty,
+                &empty,
+                &[],
+                &[],
+                &empty,
+                &move |_| defaults.clone(),
+            )
+        };
+        assert_eq!(build(HashMap::new()).len(), 1, "no default: change needed");
+        let plus_http2 = HashMap::from([(Interned::intern("http2"), IUseDefault::Enabled)]);
+        assert!(build(plus_http2).is_empty(), "+http2 default satisfies it");
     }
 
     #[test]
