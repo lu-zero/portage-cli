@@ -417,13 +417,11 @@ impl Version {
             .map_err(|e| Error::InvalidVersion(format!("{}: {}", input, e)))
     }
 
-    /// Check whether this version matches a glob pattern (PMS 8.3.1 `=V*`)
+    /// Whether this version matches a glob pattern (PMS 8.3.1 `=V*`).
     ///
-    /// Truncates this version to the number of numeric components in
-    /// `pattern` and requires PMS component equality on that prefix. A
-    /// candidate with *fewer* components than the pattern does **not** match
-    /// (no zero-padding). If `pattern` specifies a letter, the candidate must
-    /// match it exactly. Candidate suffixes and revision are ignored.
+    /// Compares only the numeric components the pattern has, as components, so
+    /// `1.010.5` matches `1.01*`. A shorter candidate does not. A pattern letter,
+    /// suffix prefix, or non-zero revision must match; further components still do.
     pub fn glob_matches(&self, pattern: &Version) -> bool {
         let n = pattern.numbers.len().max(pattern.digits.len());
         let cand_n = self.numbers.len().max(self.digits.len());
@@ -446,7 +444,35 @@ impl Version {
         {
             return false;
         }
-        true
+        if pattern.suffixes.len() > self.suffixes.len() {
+            return false;
+        }
+        for (cand, pat) in self.suffixes.iter().zip(&pattern.suffixes) {
+            if cand != pat {
+                return false;
+            }
+        }
+        pattern.revision.0 == 0 || self.revision == pattern.revision
+    }
+
+    /// Half-open bounds of `=V*`. Lower adds one `_alpha` (a further suffix under
+    /// it sorts lower). Upper bumps the last suffix number, or the last numeric
+    /// component when there is none, then adds `_alpha`. Written digits stay, so
+    /// `26.04*` ends before `26.05_alpha`.
+    ///
+    /// `None` means that bump does not fit in `u64`. A suffix pattern stops at
+    /// the next suffix number, so `262.1_rc1` is outside `=262_rc1*`.
+    pub fn glob_bounds(&self) -> (Version, Option<Version>) {
+        let mut lower = self.clone();
+        clear_endpoint(&mut lower);
+        lower.suffixes.push(alpha_suffix());
+
+        let upper = if self.suffixes.is_empty() {
+            bumped_numeric(self)
+        } else {
+            bumped_suffix(self).or_else(|| bumped_numeric(self))
+        };
+        (lower, upper)
     }
 
     /// Whether this is a live (VCS/snapshot-tracking) version per Gentoo's
@@ -546,7 +572,8 @@ impl Version {
     /// Version with suffixes and revision removed.
     ///
     /// Numeric components and the letter stay. `=V*` matching is
-    /// [`Self::glob_matches`], which keeps only the pattern's numeric prefix.
+    /// [`Self::glob_matches`], including a pattern suffix prefix and a non-zero
+    /// revision.
     pub fn without_suffix(&self) -> Self {
         Version {
             numbers: self.numbers.clone(),
@@ -590,6 +617,76 @@ impl Version {
 impl fmt::Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.fmt_version(f)
+    }
+}
+
+fn alpha_suffix() -> Suffix {
+    Suffix {
+        kind: SuffixKind::Alpha,
+        version: None,
+    }
+}
+
+fn clear_endpoint(v: &mut Version) {
+    v.raw = None;
+    v.revision = Revision::default();
+}
+
+fn bumped_numeric(v: &Version) -> Option<Version> {
+    let mut upper = v.clone();
+    clear_endpoint(&mut upper);
+    upper.letter = None;
+    upper.suffixes.clear();
+    if !bump_last_numeric(&mut upper) {
+        return None;
+    }
+    upper.suffixes.push(alpha_suffix());
+    Some(upper)
+}
+
+fn bumped_suffix(v: &Version) -> Option<Version> {
+    let mut upper = v.clone();
+    clear_endpoint(&mut upper);
+    let last = upper.suffixes.last_mut()?;
+    let next = last.version.unwrap_or(0).checked_add(1)?;
+    last.version = Some(next);
+    upper.suffixes.push(alpha_suffix());
+    Some(upper)
+}
+
+// Width-preserving successor. Overflow drops the component: `2.0_alpha` still
+// sorts above `2_alpha`, so the carry must not leave a trailing zero.
+fn bump_last_numeric(v: &mut Version) -> bool {
+    if v.digits.len() < v.numbers.len() {
+        for n in &v.numbers[v.digits.len()..] {
+            v.digits.push(SmolStr::new(n.to_string()));
+        }
+    }
+    debug_assert_eq!(v.digits.len(), v.numbers.len());
+    while let Some(&current) = v.numbers.last() {
+        match current.checked_add(1) {
+            Some(next) => {
+                let i = v.numbers.len() - 1;
+                let written = widened_digits(v.digits[i].as_str(), next);
+                v.numbers[i] = next;
+                v.digits[i] = SmolStr::new(written);
+                return true;
+            }
+            None => {
+                v.numbers.pop();
+                v.digits.pop();
+            }
+        }
+    }
+    false
+}
+
+fn widened_digits(digits: &str, next: u64) -> String {
+    let text = next.to_string();
+    if digits.len() > 1 && digits.starts_with('0') && text.len() < digits.len() {
+        format!("{text:0>width$}", width = digits.len())
+    } else {
+        text
     }
 }
 
@@ -1118,6 +1215,78 @@ mod tests {
                 .unwrap()
                 .glob_matches(&Version::parse("1.01").unwrap())
         );
+    }
+
+    #[test]
+    fn test_glob_matches_suffix_and_revision() {
+        let rc1 = Version::parse("262_rc1").unwrap();
+        assert!(Version::parse("262_rc1").unwrap().glob_matches(&rc1));
+        assert!(Version::parse("262_rc1-r3").unwrap().glob_matches(&rc1));
+        assert!(Version::parse("262_rc1_p2").unwrap().glob_matches(&rc1));
+        assert!(Version::parse("262.1_rc1").unwrap().glob_matches(&rc1));
+        assert!(!Version::parse("262").unwrap().glob_matches(&rc1));
+        assert!(!Version::parse("262_rc2").unwrap().glob_matches(&rc1));
+        // Absent suffix number is 0, so `_rc` is `_rc0`, not a prefix of `_rc1`.
+        assert!(!Version::parse("262_rc").unwrap().glob_matches(&rc1));
+
+        let rc = Version::parse("1.0_rc").unwrap();
+        assert!(Version::parse("1.0_rc").unwrap().glob_matches(&rc));
+        assert!(Version::parse("1.0_rc0").unwrap().glob_matches(&rc));
+        assert!(!Version::parse("1.0_rc3").unwrap().glob_matches(&rc));
+
+        let rev = Version::parse("1.0-r1").unwrap();
+        assert!(Version::parse("1.0-r1").unwrap().glob_matches(&rev));
+        assert!(Version::parse("1.0.1-r1").unwrap().glob_matches(&rev));
+        assert!(!Version::parse("1.0-r2").unwrap().glob_matches(&rev));
+        assert!(!Version::parse("1.0").unwrap().glob_matches(&rev));
+        // `041` sits between `04` and `05`.
+        assert!(
+            !Version::parse("26.041")
+                .unwrap()
+                .glob_matches(&Version::parse("26.04").unwrap())
+        );
+    }
+
+    #[test]
+    fn test_glob_bounds_keep_written_digits() {
+        let (lower, upper) = Version::parse("26.04.3").unwrap().glob_bounds();
+        assert_eq!(lower.to_string(), "26.04.3_alpha");
+        assert_eq!(upper.unwrap().to_string(), "26.04.4_alpha");
+
+        let (lower, upper) = Version::parse("26.04").unwrap().glob_bounds();
+        assert_eq!(lower.to_string(), "26.04_alpha");
+        assert_eq!(upper.unwrap().to_string(), "26.05_alpha");
+
+        let (lower, upper) = Version::parse("1.09").unwrap().glob_bounds();
+        assert_eq!(upper.unwrap().to_string(), "1.10_alpha");
+        assert_eq!(lower.to_string(), "1.09_alpha");
+
+        let (lower, upper) = Version::parse("1.0a").unwrap().glob_bounds();
+        assert_eq!(lower.to_string(), "1.0a_alpha");
+        assert_eq!(upper.unwrap().to_string(), "1.1_alpha");
+
+        let (lower, upper) = Version::parse("262_rc1").unwrap().glob_bounds();
+        assert_eq!(lower.to_string(), "262_rc1_alpha");
+        assert_eq!(upper.unwrap().to_string(), "262_rc2_alpha");
+
+        let (lower, upper) = Version::parse("1.0_rc").unwrap().glob_bounds();
+        assert_eq!(lower.to_string(), "1.0_rc_alpha");
+        assert_eq!(upper.unwrap().to_string(), "1.0_rc1_alpha");
+
+        let (lower, upper) = Version::parse("1.0-r1").unwrap().glob_bounds();
+        assert_eq!(lower.to_string(), "1.0_alpha");
+        assert_eq!(upper.unwrap().to_string(), "1.1_alpha");
+
+        let max = u64::MAX.to_string();
+        let (lower, upper) = Version::parse(&max).unwrap().glob_bounds();
+        assert_eq!(lower.to_string(), format!("{max}_alpha"));
+        assert!(upper.is_none());
+
+        let (_, upper) = Version::parse(&format!("1.{max}")).unwrap().glob_bounds();
+        assert_eq!(upper.unwrap().to_string(), "2_alpha");
+
+        let (_, upper) = Version::parse(&format!("1_rc{max}")).unwrap().glob_bounds();
+        assert_eq!(upper.unwrap().to_string(), "2_alpha");
     }
 
     #[test]

@@ -45,8 +45,11 @@ impl PortageVersionSet {
             Operator::LessOrEqual => Self(Ranges::lower_than(v)),
             Operator::Less => Self(Ranges::strictly_lower_than(v)),
             Operator::Equal if glob => {
-                let next = next_after_glob(&v);
-                Self(Ranges::between(v, next))
+                let (lower, upper) = v.glob_bounds();
+                match upper {
+                    Some(upper) => Self(Ranges::between(lower, upper)),
+                    None => Self(Ranges::higher_than(lower)),
+                }
             }
             Operator::Equal => Self(Ranges::singleton(v)),
             Operator::Approximate => {
@@ -134,23 +137,6 @@ fn approximate_bounds(v: &Version) -> (Version, Version) {
     (base, upper)
 }
 
-/// Compute the first version NOT matched by a glob pattern
-///
-/// PMS 8.3.1: "=V*" compares only the version components present before `*`.
-/// The exclusive upper bound is computed by bumping the last specified numeric
-/// component.
-fn next_after_glob(v: &Version) -> Version {
-    let n = v.numbers.len();
-    let mut next_numbers = v.numbers.clone();
-
-    if n > 0 {
-        next_numbers[n - 1] += 1;
-    }
-
-    // Rebuild digits from the bumped integers so PMS compare stays consistent.
-    Version::new(&next_numbers)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,8 +175,72 @@ mod tests {
         assert!(vs.contains(&Version::parse("1.2.0").unwrap()));
         assert!(vs.contains(&Version::parse("1.2.3").unwrap()));
         assert!(vs.contains(&Version::parse("1.2.3-r1").unwrap()));
+        assert!(vs.contains(&Version::parse("1.2_alpha").unwrap()));
+        assert!(vs.contains(&Version::parse("1.2_rc1").unwrap()));
         assert!(!vs.contains(&Version::parse("1.3.0").unwrap()));
+        assert!(!vs.contains(&Version::parse("1.3_alpha").unwrap()));
         assert!(!vs.contains(&Version::parse("1.1.9").unwrap()));
+        // A second suffix under the padding `_alpha` sorts below the bound.
+        assert!(!vs.contains(&Version::parse("1.2_alpha_alpha").unwrap()));
+    }
+
+    #[test]
+    fn glob_keeps_written_digits() {
+        let vs = PortageVersionSet::from_operator(
+            Operator::Equal,
+            true,
+            Version::parse("26.04.3").unwrap(),
+        );
+        assert!(vs.contains(&Version::parse("26.04.3").unwrap()));
+        assert!(vs.contains(&Version::parse("26.04.3-r1").unwrap()));
+        assert!(vs.contains(&Version::parse("26.04.3_alpha").unwrap()));
+        assert!(vs.contains(&Version::parse("26.04.3.1").unwrap()));
+        assert!(!vs.contains(&Version::parse("26.08.2").unwrap()));
+        assert!(!vs.contains(&Version::parse("26.04.4").unwrap()));
+        assert!(!vs.contains(&Version::parse("26.04.4_alpha").unwrap()));
+        assert!(!vs.contains(&Version::parse("26.04.2").unwrap()));
+
+        let wide = PortageVersionSet::from_operator(
+            Operator::Equal,
+            true,
+            Version::parse("26.04").unwrap(),
+        );
+        assert!(wide.contains(&Version::parse("26.04.3").unwrap()));
+        assert!(wide.contains(&Version::parse("26.04_alpha").unwrap()));
+        assert!(!wide.contains(&Version::parse("26.05").unwrap()));
+        assert!(!wide.contains(&Version::parse("26.05_alpha").unwrap()));
+        assert!(!wide.contains(&Version::parse("26.08.2").unwrap()));
+        // `041` sorts between `04` and `05`; there is no least successor.
+        assert!(wide.contains(&Version::parse("26.041").unwrap()));
+    }
+
+    #[test]
+    fn glob_suffix_is_a_suffix_band() {
+        let vs = PortageVersionSet::from_operator(
+            Operator::Equal,
+            true,
+            Version::parse("262_rc1").unwrap(),
+        );
+        assert!(vs.contains(&Version::parse("262_rc1").unwrap()));
+        assert!(vs.contains(&Version::parse("262_rc1_p2").unwrap()));
+        assert!(vs.contains(&Version::parse("262_rc1-r3").unwrap()));
+        assert!(!vs.contains(&Version::parse("262").unwrap()));
+        assert!(!vs.contains(&Version::parse("262_rc2").unwrap()));
+        assert!(!vs.contains(&Version::parse("262_rc").unwrap()));
+        // `262.1_rc1` matches the glob and sorts above `262`, outside this band.
+        assert!(!vs.contains(&Version::parse("262.1_rc1").unwrap()));
+    }
+
+    #[test]
+    fn glob_unbounded_when_first_component_overflows() {
+        let max = u64::MAX.to_string();
+        let vs =
+            PortageVersionSet::from_operator(Operator::Equal, true, Version::parse(&max).unwrap());
+        assert!(vs.contains(&Version::parse(&max).unwrap()));
+        assert!(vs.contains(&Version::parse(&format!("{max}.1")).unwrap()));
+        assert!(vs.contains(&Version::parse(&format!("{max}_alpha")).unwrap()));
+        let prev = (u64::MAX - 1).to_string();
+        assert!(!vs.contains(&Version::parse(&prev).unwrap()));
     }
 
     #[test]

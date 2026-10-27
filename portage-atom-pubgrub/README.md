@@ -77,7 +77,7 @@ examples (`InMemoryRepository::set_use_config` shows how `desired_use` is fed).
 | `<=V` | `Ranges::lower_than(V)` |
 | `<V` | `Ranges::strictly_lower_than(V)` |
 | `=V` | `Ranges::singleton(V)` |
-| `=V*` (glob) | `Ranges::between(V, next_after_glob(V))` |
+| `=V*` (glob) | half-open range from `Version::glob_bounds` |
 | `~V` (approximate) | `Ranges::between(V_norev, V_rev_bumped)` |
 
 ## Post-Solve Validation
