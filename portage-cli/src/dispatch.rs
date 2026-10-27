@@ -1,6 +1,7 @@
 //! CLI dispatch: applet routing and shared helpers
 //!
-//! Named applets go through generated [`winnow_args::run::RunAsync`] on [`Applet`].
+//! Named applets go through generated [`winnow_args::run::RunAsync`] on [`Applet`],
+//! and `portageq` through the same on [`crate::cli::PortageqCommand`].
 //! The root `Option` is decided here: generated dispatch cannot.
 
 use std::io::Write;
@@ -13,9 +14,9 @@ use winnow_args::run::RunAsync;
 use crate::cli::{
     self, ActiveArgs, Applet, AtomArgs, CleanArgs, CompletionArgs, CrossdevArgs, DepcleanArgs,
     EbuildArgs, EmergeArgs, EnvArgs, EtcArgs, GrepArgs, HelperArgs, LogArgs, LogCommand, MaintArgs,
-    MaintCommand, MirrorDistArgs, PkgArgs, PortageqArgs, PortageqCommand, QueryArgs, QueryCommand,
-    QuickpkgArgs, ReadArgs, RegenArgs, RevdepArgs, SearchArgs, SelectArgs, SetupArgs, StagesArgs,
-    SyncArgs, ToolchainArgs, UseArgs, WorkerArgs,
+    MaintCommand, MirrorDistArgs, PkgArgs, PortageqArgs, QueryArgs, QueryCommand, QuickpkgArgs,
+    ReadArgs, RegenArgs, RevdepArgs, SearchArgs, SelectArgs, SetupArgs, StagesArgs, SyncArgs,
+    ToolchainArgs, UseArgs, WorkerArgs,
 };
 use crate::crossdev;
 use crate::ebuild;
@@ -151,45 +152,7 @@ impl RunAsync<&cli::Cli> for PortageqArgs {
     type Output = Result<()>;
 
     async fn run_async(self, cli: &cli::Cli) -> Self::Output {
-        let mut out = std::io::stdout();
-        let mut err = std::io::stderr();
-        let status = match &self.command {
-            PortageqCommand::Envvar { verbose, names } => {
-                crate::portageq::envvar(cli, *verbose, names).await
-            }
-            PortageqCommand::VdbPath => crate::portageq::vdb_path(cli, &mut out),
-            PortageqCommand::Pkgdir => crate::portageq::settings_var(cli, "PKGDIR", &mut out).await,
-            PortageqCommand::Distdir => {
-                crate::portageq::settings_var(cli, "DISTDIR", &mut out).await
-            }
-            PortageqCommand::GentooMirrors => {
-                crate::portageq::settings_var(cli, "GENTOO_MIRRORS", &mut out).await
-            }
-            PortageqCommand::ConfigProtect => {
-                crate::portageq::settings_var(cli, "CONFIG_PROTECT", &mut out).await
-            }
-            PortageqCommand::ConfigProtectMask => {
-                crate::portageq::settings_var(cli, "CONFIG_PROTECT_MASK", &mut out).await
-            }
-            PortageqCommand::Portdir => crate::portageq::portdir(cli, &mut out, &mut err).await,
-            PortageqCommand::PortdirOverlay => {
-                crate::portageq::portdir_overlay(cli, &mut out, &mut err).await
-            }
-            PortageqCommand::GetRepos { eroot } => crate::portageq::get_repos(eroot, &mut out),
-            PortageqCommand::GetRepoPath { eroot, repos } => {
-                crate::portageq::get_repo_path(eroot, repos, &mut out, &mut err)
-            }
-            PortageqCommand::HasVersion { eroot, atom } => {
-                crate::portageq::has_version(eroot, atom)
-            }
-            PortageqCommand::BestVersion { eroot, atom } => {
-                crate::portageq::best_version(eroot, atom)
-            }
-            PortageqCommand::Match { eroot, atom } => crate::portageq::run_match(eroot, atom),
-            PortageqCommand::MassBestVersion { eroot, atoms } => {
-                crate::portageq::mass_best_version(eroot, atoms)
-            }
-        }?;
+        let status = self.command.run_async(cli).await?;
         if status != 0 {
             std::io::Write::flush(&mut std::io::stdout()).ok();
             std::process::exit(status as i32);

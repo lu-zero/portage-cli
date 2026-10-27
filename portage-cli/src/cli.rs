@@ -2416,88 +2416,149 @@ pub struct PortageqArgs {
 }
 
 #[derive(winnow_args::Subcommand, Debug, Clone)]
+#[arg(run_async)]
 pub enum PortageqCommand {
     #[arg(
         name = "has_version",
         help = "Exit 0 if ATOM is installed under EROOT, 1 otherwise"
     )]
-    HasVersion {
-        #[arg(positional, value_name = "EROOT")]
-        eroot: String,
-        #[arg(positional, value_name = "ATOM")]
-        atom: String,
-    },
+    HasVersion(HasVersionArgs),
     #[arg(
         name = "best_version",
         help = "Print the highest installed version matching ATOM under EROOT"
     )]
-    BestVersion {
-        #[arg(positional, value_name = "EROOT")]
-        eroot: String,
-        #[arg(positional, value_name = "ATOM")]
-        atom: String,
-    },
+    BestVersion(BestVersionArgs),
     #[arg(
         name = "match",
         help = "List every installed CPV matching ATOM under EROOT, one per line"
     )]
-    Match {
-        #[arg(positional, value_name = "EROOT")]
-        eroot: String,
-        /// Empty string matches every installed package
-        #[arg(positional, value_name = "ATOM")]
-        atom: String,
-    },
+    Match(MatchArgs),
     #[arg(
         name = "envvar",
         help = "Print configuration variables as a build would see them"
     )]
-    Envvar {
-        /// Print `NAME=value` lines, quoted for the shell
-        #[arg(short = 'v')]
-        verbose: bool,
-        /// A trailing `*` matches every variable with that prefix
-        #[arg(positional, required, value_name = "NAME")]
-        names: Vec<String>,
-    },
+    Envvar(EnvvarArgs),
     #[arg(name = "vdb_path", help = "Print the installed-package database path")]
-    VdbPath,
+    VdbPath(VdbPathArgs),
     #[arg(name = "pkgdir", help = "Print the binary-package directory")]
-    Pkgdir,
+    Pkgdir(PkgdirArgs),
     #[arg(name = "distdir", help = "Print the distfiles directory")]
-    Distdir,
+    Distdir(DistdirArgs),
     #[arg(name = "gentoo_mirrors", help = "Print GENTOO_MIRRORS")]
-    GentooMirrors,
+    GentooMirrors(GentooMirrorsArgs),
     #[arg(name = "config_protect", help = "Print CONFIG_PROTECT")]
-    ConfigProtect,
+    ConfigProtect(ConfigProtectArgs),
     #[arg(name = "config_protect_mask", help = "Print CONFIG_PROTECT_MASK")]
-    ConfigProtectMask,
+    ConfigProtectMask(ConfigProtectMaskArgs),
     #[arg(name = "portdir", help = "Print the main repository path (deprecated)")]
-    Portdir,
+    Portdir(PortdirArgs),
     #[arg(name = "portdir_overlay", help = "Print overlay paths (deprecated)")]
-    PortdirOverlay,
+    PortdirOverlay(PortdirOverlayArgs),
     #[arg(name = "get_repos", help = "List repository names, overlays first")]
-    GetRepos {
-        #[arg(positional, value_name = "EROOT")]
-        eroot: String,
-    },
+    GetRepos(GetReposArgs),
     #[arg(name = "get_repo_path", help = "Print each repository's location")]
-    GetRepoPath {
-        #[arg(positional, value_name = "EROOT")]
-        eroot: String,
-        #[arg(positional, value_name = "REPO")]
-        repos: Vec<String>,
-    },
+    GetRepoPath(GetRepoPathArgs),
     #[arg(
         name = "mass_best_version",
         help = "Print `atom:cpv` for each of several atoms' best installed version"
     )]
-    MassBestVersion {
-        #[arg(positional, value_name = "EROOT")]
-        eroot: String,
-        #[arg(positional, value_name = "ATOM")]
-        atoms: Vec<String>,
-    },
+    MassBestVersion(MassBestVersionArgs),
+}
+
+/// Exit 0 if ATOM is installed under EROOT, 1 otherwise
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct HasVersionArgs {
+    #[arg(positional, value_name = "EROOT")]
+    pub eroot: String,
+    #[arg(positional, value_name = "ATOM")]
+    pub atom: String,
+}
+
+/// Print the highest installed version matching ATOM under EROOT
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct BestVersionArgs {
+    #[arg(positional, value_name = "EROOT")]
+    pub eroot: String,
+    #[arg(positional, value_name = "ATOM")]
+    pub atom: String,
+}
+
+/// List every installed CPV matching ATOM under EROOT, one per line
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct MatchArgs {
+    #[arg(positional, value_name = "EROOT")]
+    pub eroot: String,
+    /// Empty string matches every installed package
+    #[arg(positional, value_name = "ATOM")]
+    pub atom: String,
+}
+
+/// Print configuration variables as a build would see them
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct EnvvarArgs {
+    /// Print `NAME=value` lines, quoted for the shell
+    #[arg(short = 'v')]
+    pub verbose: bool,
+    /// A trailing `*` matches every variable with that prefix
+    #[arg(positional, required, value_name = "NAME")]
+    pub names: Vec<String>,
+}
+
+/// Print the installed-package database path
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct VdbPathArgs;
+
+/// Print the binary-package directory
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct PkgdirArgs;
+
+/// Print the distfiles directory
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct DistdirArgs;
+
+/// Print GENTOO_MIRRORS
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct GentooMirrorsArgs;
+
+/// Print CONFIG_PROTECT
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct ConfigProtectArgs;
+
+/// Print CONFIG_PROTECT_MASK
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct ConfigProtectMaskArgs;
+
+/// Print the main repository path (deprecated)
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct PortdirArgs;
+
+/// Print overlay paths (deprecated)
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct PortdirOverlayArgs;
+
+/// List repository names, overlays first
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct GetReposArgs {
+    #[arg(positional, value_name = "EROOT")]
+    pub eroot: String,
+}
+
+/// Print each repository's location
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct GetRepoPathArgs {
+    #[arg(positional, value_name = "EROOT")]
+    pub eroot: String,
+    #[arg(positional, value_name = "REPO")]
+    pub repos: Vec<String>,
+}
+
+/// Print `atom:cpv` for each of several atoms' best installed version
+#[derive(winnow_args::Args, Debug, Clone)]
+pub struct MassBestVersionArgs {
+    #[arg(positional, value_name = "EROOT")]
+    pub eroot: String,
+    #[arg(positional, value_name = "ATOM")]
+    pub atoms: Vec<String>,
 }
 
 /// `em sync` — sync repositories (git, rsync)

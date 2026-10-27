@@ -21,7 +21,13 @@ use portage_repo::ReposConf;
 use portage_resolve::Roots;
 use portage_vdb::{InstalledPackage, Vdb};
 
-use crate::cli::Cli;
+use winnow_args::run::RunAsync;
+
+use crate::cli::{
+    BestVersionArgs, Cli, ConfigProtectArgs, ConfigProtectMaskArgs, DistdirArgs, EnvvarArgs,
+    GentooMirrorsArgs, GetRepoPathArgs, GetReposArgs, HasVersionArgs, MassBestVersionArgs,
+    MatchArgs, PkgdirArgs, PortdirArgs, PortdirOverlayArgs, VdbPathArgs,
+};
 
 /// Real portageq's exit code when `<EROOT>` doesn't exist as a directory.
 const EROOT_NOT_A_DIRECTORY: u8 = 64;
@@ -374,6 +380,109 @@ fn write_repo_paths(
         }
     }
     Ok(0)
+}
+
+impl RunAsync<&Cli> for HasVersionArgs {
+    type Output = Result<u8>;
+
+    async fn run_async(self, _cli: &Cli) -> Self::Output {
+        has_version(&self.eroot, &self.atom)
+    }
+}
+
+impl RunAsync<&Cli> for BestVersionArgs {
+    type Output = Result<u8>;
+
+    async fn run_async(self, _cli: &Cli) -> Self::Output {
+        best_version(&self.eroot, &self.atom)
+    }
+}
+
+impl RunAsync<&Cli> for MatchArgs {
+    type Output = Result<u8>;
+
+    async fn run_async(self, _cli: &Cli) -> Self::Output {
+        run_match(&self.eroot, &self.atom)
+    }
+}
+
+impl RunAsync<&Cli> for EnvvarArgs {
+    type Output = Result<u8>;
+
+    async fn run_async(self, cli: &Cli) -> Self::Output {
+        envvar(cli, self.verbose, &self.names).await
+    }
+}
+
+impl RunAsync<&Cli> for VdbPathArgs {
+    type Output = Result<u8>;
+
+    async fn run_async(self, cli: &Cli) -> Self::Output {
+        vdb_path(cli, &mut std::io::stdout())
+    }
+}
+
+macro_rules! setting_command {
+    ($ty:ty, $name:literal) => {
+        impl RunAsync<&Cli> for $ty {
+            type Output = Result<u8>;
+
+            async fn run_async(self, cli: &Cli) -> Self::Output {
+                settings_var(cli, $name, &mut std::io::stdout()).await
+            }
+        }
+    };
+}
+
+setting_command!(PkgdirArgs, "PKGDIR");
+setting_command!(DistdirArgs, "DISTDIR");
+setting_command!(GentooMirrorsArgs, "GENTOO_MIRRORS");
+setting_command!(ConfigProtectArgs, "CONFIG_PROTECT");
+setting_command!(ConfigProtectMaskArgs, "CONFIG_PROTECT_MASK");
+
+impl RunAsync<&Cli> for PortdirArgs {
+    type Output = Result<u8>;
+
+    async fn run_async(self, cli: &Cli) -> Self::Output {
+        portdir(cli, &mut std::io::stdout(), &mut std::io::stderr()).await
+    }
+}
+
+impl RunAsync<&Cli> for PortdirOverlayArgs {
+    type Output = Result<u8>;
+
+    async fn run_async(self, cli: &Cli) -> Self::Output {
+        portdir_overlay(cli, &mut std::io::stdout(), &mut std::io::stderr()).await
+    }
+}
+
+impl RunAsync<&Cli> for GetReposArgs {
+    type Output = Result<u8>;
+
+    async fn run_async(self, _cli: &Cli) -> Self::Output {
+        get_repos(&self.eroot, &mut std::io::stdout())
+    }
+}
+
+impl RunAsync<&Cli> for GetRepoPathArgs {
+    type Output = Result<u8>;
+
+    async fn run_async(self, _cli: &Cli) -> Self::Output {
+        get_repo_path(
+            &self.eroot,
+            &self.repos,
+            &mut std::io::stdout(),
+            &mut std::io::stderr(),
+        )
+    }
+}
+
+impl RunAsync<&Cli> for MassBestVersionArgs {
+    type Output = Result<u8>;
+
+    async fn run_async(self, _cli: &Cli) -> Self::Output {
+        mass_best_version(&self.eroot, &self.atoms)
+    }
 }
 
 /// Python's `shlex.quote`: unchanged when every character is safe, else single-quoted
