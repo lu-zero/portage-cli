@@ -78,7 +78,10 @@ impl FileStamp {
 struct VdbStamp {
     root: FileStamp,
     counter: Option<(FileStamp, Vec<u8>)>,
-    categories: Vec<(String, FileStamp)>,
+    /// Each category's stamp and its sorted package entry names. The names
+    /// matter: directory mtimes only advance once per kernel timestamp tick,
+    /// so a register/unregister inside one tick leaves the stamp unchanged.
+    categories: Vec<(String, FileStamp, Vec<String>)>,
 }
 
 impl VdbStamp {
@@ -98,7 +101,13 @@ impl VdbStamp {
             if !path.is_dir() {
                 continue;
             }
-            categories.push((path.file_name()?.to_owned(), FileStamp::read(&path)?));
+            let stamp = FileStamp::read(&path)?;
+            let mut packages = Vec::new();
+            for package in fs::read_dir(path.as_std_path()).ok()? {
+                packages.push(package.ok()?.file_name().into_string().ok()?);
+            }
+            packages.sort_unstable();
+            categories.push((path.file_name()?.to_owned(), stamp, packages));
         }
         categories.sort_by(|a, b| a.0.cmp(&b.0));
 
