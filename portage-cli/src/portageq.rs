@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use anyhow::{Context, Result};
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use portage_atom::{Cpv, Dep};
 use portage_repo::ReposConf;
 use portage_resolve::Roots;
@@ -250,15 +250,30 @@ pub(crate) fn vdb_path(cli: &Cli, out: &mut dyn Write) -> Result<u8> {
     Ok(0)
 }
 
+/// A resolved setting, then portageq's deprecation warning on stderr
+async fn deprecated_setting(
+    cli: &Cli,
+    name: &str,
+    warning: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<u8> {
+    let status = settings_var(cli, name, out).await?;
+    writeln!(err, "{warning}")?;
+    Ok(status)
+}
+
 /// `PORTDIR`, plus portageq's deprecation warning on stderr
 pub(crate) async fn portdir(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> Result<u8> {
-    let status = settings_var(cli, "PORTDIR", out).await?;
-    writeln!(
-        err,
+    deprecated_setting(
+        cli,
+        "PORTDIR",
         "WARNING: 'portageq portdir' is deprecated. Use the get_repo_path command instead. \
-         eg: 'portageq get_repo_path / gentoo' instead."
-    )?;
-    Ok(status)
+         eg: 'portageq get_repo_path / gentoo' instead.",
+        out,
+        err,
+    )
+    .await
 }
 
 /// `PORTDIR_OVERLAY`, plus portageq's deprecation warning on stderr
@@ -267,18 +282,18 @@ pub(crate) async fn portdir_overlay(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<u8> {
-    let status = settings_var(cli, "PORTDIR_OVERLAY", out).await?;
-    writeln!(
-        err,
+    deprecated_setting(
+        cli,
+        "PORTDIR_OVERLAY",
         "WARNING: 'portageq portdir_overlay' is deprecated. Use the get_repos and get_repo_path \
-         commands or the repos_config command instead. eg: 'portageq repos_config /'"
-    )?;
-    Ok(status)
+         commands or the repos_config command instead. eg: 'portageq repos_config /'",
+        out,
+        err,
+    )
+    .await
 }
 
-/// Portage's repo-name rule: a word character, then word characters or `-`.
-///
-/// A leading `-` is rejected (`get_repo_path / -x` exits 2).
+/// Portage's repo-name rule, `^[\w][\w-]*`, so a leading `-` is rejected
 fn is_valid_repo_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -288,23 +303,15 @@ fn is_valid_repo_name(name: &str) -> bool {
     word(first) && chars.all(|c| word(c) || c == '-')
 }
 
-/// Host global `repos.conf` plus `<eroot>/etc/portage/repos.conf`.
+/// Host global `repos.conf` plus the eroot's user confdir.
 ///
-/// Real `portageq get_repos <eroot>` keeps the host global file even when
-/// `<eroot>` is not `/`; the eroot only replaces the user confdir.
+/// The eroot does not replace `/usr/share/portage/config/repos.conf`.
 fn eroot_repos(eroot: &str) -> Result<ReposConf> {
     let root = Utf8PathBuf::from(eroot);
-    let roots = Roots::default()
-        .with_config(Some(root.clone()))
-        .with_base(Some(root.clone()))
-        .with_target(Some(root));
-    let user = roots
-        .config()
-        .unwrap_or(Utf8Path::new("/"))
-        .join("etc/portage/repos.conf");
+    let roots = Roots::default().with_config(Some(root.clone()));
     let conf = ReposConf::load_from(&[
         Utf8PathBuf::from("/usr/share/portage/config/repos.conf"),
-        user,
+        root.join("etc/portage/repos.conf"),
     ])?;
     Ok(conf.with_portdir_overlay(&roots.portdir_overlay()))
 }
@@ -329,10 +336,8 @@ fn repo_names(conf: &ReposConf) -> String {
         .join(" ")
 }
 
-/// One location per repo name.
-///
-/// An invalid name exits 2. An unknown name prints an empty line and stops
-/// (exit 1), so later names are not printed. No names at all exits 3.
+/// One location per repo name. No names exits 3, an invalid name exits 2,
+/// and the first unknown name prints an empty line and stops (exit 1).
 pub(crate) fn get_repo_path(
     eroot: &str,
     repos: &[String],
@@ -355,7 +360,6 @@ fn write_repo_paths(
         writeln!(err, "ERROR: insufficient parameters!")?;
         return Ok(3);
     }
-    let mut code = 0;
     for name in repos {
         if !is_valid_repo_name(name) {
             writeln!(err, "ERROR: invalid repository: {name}")?;
@@ -365,12 +369,11 @@ fn write_repo_paths(
             Some(path) => writeln!(out, "{}", path.display())?,
             None => {
                 writeln!(out)?;
-                code = 1;
-                break;
+                return Ok(1);
             }
         }
     }
-    Ok(code)
+    Ok(0)
 }
 
 /// Python's `shlex.quote`: unchanged when every character is safe, else single-quoted
@@ -441,7 +444,7 @@ mod tests {
 
     fn sample_conf() -> (tempfile::TempDir, ReposConf) {
         let tmp = tempfile::tempdir().unwrap();
-        let root = Utf8PathBuf::from(tmp.path().to_string_lossy().as_ref());
+        let root = Utf8PathBuf::from(tmp.path().to_str().unwrap());
         let global = root.join("global.conf");
         let user = root.join("user.conf");
         std::fs::write(
