@@ -3978,3 +3978,92 @@ fn circular_build_dep_alternative_kept_when_installed() {
         "an installed go satisfies the circular alternative; no go-bootstrap"
     );
 }
+
+// A kept install keeps the deps it was built with. Today's `+http2` must
+// not pull nghttp2 while curl stays installed without that flag.
+fn solve_kept_curl(policy: InstalledPolicy, kept_use: bool) -> Option<Version> {
+    let http2 = Interned::intern("http2");
+    let mut repo = InMemoryRepository::new();
+    let mut desired = UseConfig::new();
+    desired.enable(http2);
+    repo.set_use_config(desired);
+    repo.add_version(
+        portage_atom::Cpv::parse("net-libs/nghttp2-1.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    let curl_cpv = portage_atom::Cpv::parse("net-misc/curl-8.0").unwrap();
+    repo.add_version_with_iuse(
+        curl_cpv.clone(),
+        None,
+        None,
+        vec![http2],
+        PackageDeps {
+            rdepend: (DepEntry::parse("http2? ( net-libs/nghttp2 )").unwrap()).into(),
+            depend: (DepEntry::parse("http2? ( net-libs/nghttp2 )").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("app-misc/app-1.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("net-misc/curl").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    let mut kept = HashMap::new();
+    if kept_use {
+        // VDB USE: built without http2.
+        kept.insert(curl_cpv, UseConfig::new());
+    }
+    let mut provider = PortageDependencyProvider::new(crate::repository::WithKeptInstalledUse {
+        inner: repo,
+        kept,
+    });
+    let curl = PortagePackage::unslotted(Cpn::parse("net-misc/curl").unwrap());
+    provider.add_installed(InstalledPackage {
+        package: curl.clone(),
+        version: Version::parse("8.0").unwrap(),
+        policy,
+        active_use: vec![],
+        iuse: vec![http2],
+    });
+    let app = PortagePackage::unslotted(Cpn::parse("app-misc/app").unwrap());
+    let solution = provider
+        .resolve_targets(vec![(app, PortageVersionSet::any())])
+        .unwrap();
+    assert_eq!(solution.get(&curl), Some(&Version::parse("8.0").unwrap()));
+    solution
+        .get(&PortagePackage::unslotted(
+            Cpn::parse("net-libs/nghttp2").unwrap(),
+        ))
+        .cloned()
+}
+
+#[test]
+fn kept_installed_package_deps_use_its_built_use() {
+    assert_eq!(
+        solve_kept_curl(InstalledPolicy::Favor, true),
+        None,
+        "kept curl built with -http2 must not pull nghttp2 via today's +http2"
+    );
+}
+
+#[test]
+fn rebuilt_installed_package_deps_use_desired_use() {
+    // `-N` drift (Rebuild policy, no kept-USE entry): curl is rebuilt with
+    // today's +http2, so nghttp2 is needed.
+    assert_eq!(
+        solve_kept_curl(InstalledPolicy::Rebuild, false),
+        Some(Version::parse("1.0").unwrap())
+    );
+    // Without kept-USE data (any other repository) the old desired-USE
+    // reduction is unchanged.
+    assert_eq!(
+        solve_kept_curl(InstalledPolicy::Favor, false),
+        Some(Version::parse("1.0").unwrap())
+    );
+}

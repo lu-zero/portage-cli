@@ -140,6 +140,47 @@ pub trait PackageRepository {
     /// folded into one config.  The solver consumes this; it never resolves
     /// policy itself.  See `docs/use-and-solver-boundary.md`.
     fn desired_use(&self, cpv: &Cpv) -> UseConfig;
+
+    /// USE an installed version was built with, when that version stays
+    /// installed. `Some` reduces its deps with this config instead of
+    /// [`desired_use`](Self::desired_use). `None` keeps today's desired USE.
+    fn kept_installed_use(&self, _cpv: &Cpv) -> Option<UseConfig> {
+        None
+    }
+}
+
+/// A [`PackageRepository`] view that adds the build-time USE of installed
+/// versions which stay installed (see
+/// [`PackageRepository::kept_installed_use`])
+///
+/// Every other query is forwarded to `inner` unchanged.
+pub struct WithKeptInstalledUse<R> {
+    /// The wrapped repository
+    pub inner: R,
+    /// Build-time USE per installed-and-kept cpv
+    pub kept: HashMap<Cpv, UseConfig>,
+}
+
+impl<R: PackageRepository> PackageRepository for WithKeptInstalledUse<R> {
+    fn all_packages(&self) -> Vec<Cpn> {
+        self.inner.all_packages()
+    }
+
+    fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, PackageVersions)> {
+        self.inner.versions_for(cpn)
+    }
+
+    fn slots_for(&self, cpn: &Cpn) -> Vec<Interned<DefaultInterner>> {
+        self.inner.slots_for(cpn)
+    }
+
+    fn desired_use(&self, cpv: &Cpv) -> UseConfig {
+        self.inner.desired_use(cpv)
+    }
+
+    fn kept_installed_use(&self, cpv: &Cpv) -> Option<UseConfig> {
+        self.kept.get(cpv).cloned()
+    }
 }
 
 /// Order slots by their best version (ascending; the newest-version slot

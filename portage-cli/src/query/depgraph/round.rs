@@ -236,9 +236,26 @@ pub(super) fn solve_round(
         // can be registered as installed below — unconditional, unlike the
         // target_installed seeding above: emptytree only affects VDB selection.
         seeds.extend(provided.iter().map(|cpv| cpv.cpn));
+        // Kept installs reduce deps with VDB USE. Rebuilds, `--emptytree`,
+        // and USE the co-solve fixpoint forces this iteration stay on
+        // today's desired USE.
+        let kept_use = kept_installed_use(
+            target_installed,
+            pkg_use.get(package_use.len()..).unwrap_or(&[]),
+            rebuilding_installed_cpvs,
+            emptytree_native,
+            |e, pkg| {
+                use_reinstall_mode.is_some_and(|mode| {
+                    package_needs_use_reinstall(mode, e, pkg, data, &iteration_policy)
+                })
+            },
+        );
         let provider_start = Instant::now();
         let mut provider = PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map(
-            adapter,
+            portage_atom_pubgrub::WithKeptInstalledUse {
+                inner: adapter,
+                kept: kept_use,
+            },
             seeds,
             solve_with_bdeps,
             slot_map_ref,
@@ -839,4 +856,97 @@ pub(super) fn solve_round(
         resume_omitted,
         round_metrics,
     })
+}
+
+/// Build-time USE of installed versions that stay installed.
+///
+/// Left out, and so reduced with today's desired USE: `rebuilding`,
+/// `use_rebuild`, packages in `forced_use`, and everything under
+/// `--emptytree`.
+fn kept_installed_use(
+    target_installed: &[installed::VdbEntry],
+    forced_use: &[(Dep, Vec<UseOverride>)],
+    rebuilding: &HashSet<Cpv>,
+    emptytree: bool,
+    use_rebuild: impl Fn(&installed::VdbEntry, &PortagePackage) -> bool,
+) -> HashMap<Cpv, portage_atom_pubgrub::UseConfig> {
+    let mut kept = HashMap::new();
+    if emptytree {
+        return kept;
+    }
+    let forced: HashSet<Cpn> = forced_use.iter().map(|(dep, _)| dep.cpn).collect();
+    for e in target_installed {
+        if forced.contains(&e.cpn) {
+            continue;
+        }
+        let cpv = Cpv::new(e.cpn, e.version.clone());
+        if rebuilding.contains(&cpv) {
+            continue;
+        }
+        let pkg = match e.slot.filter(|s| !s.is_empty()) {
+            Some(s) => PortagePackage::slotted(e.cpn, s),
+            None => PortagePackage::unslotted(e.cpn),
+        };
+        if use_rebuild(e, &pkg) {
+            continue;
+        }
+        // VDB `USE` lists every enabled flag, implicit ones (ARCH, ELIBC_*,
+        // KERNEL_*, ABI_*) included; anything it does not list was off.
+        let mut cfg = portage_atom_pubgrub::UseConfig::new();
+        for flag in &e.active_use {
+            cfg.enable(*flag);
+        }
+        kept.insert(cpv, cfg);
+    }
+    kept
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_atom_pubgrub::UseFlagState;
+
+    fn entry(cpn: &str, version: &str, active_use: &[&str]) -> installed::VdbEntry {
+        installed::VdbEntry {
+            cpn: Cpn::try_new(cpn).expect("test cpn parses"),
+            slot: Some(Interned::intern("0")),
+            version: version.parse().expect("test version parses"),
+            active_use: active_use.iter().map(|f| Interned::intern(f)).collect(),
+            iuse: Vec::new(),
+            eapi: portage_metadata::Eapi::Eight,
+            deps: Vec::new(),
+        }
+    }
+
+    fn cpv(s: &str) -> Cpv {
+        Cpv::parse(s).expect("test cpv parses")
+    }
+
+    #[test]
+    fn kept_installed_use_takes_vdb_use_and_skips_rebuilds() {
+        let installed = [
+            entry("net-misc/curl", "8.0", &["ssl", "amd64"]),
+            entry("app-misc/reinstalled", "1.0", &["foo"]),
+            entry("app-misc/drifted", "1.0", &[]),
+            entry("app-misc/forced", "1.0", &[]),
+        ];
+        let rebuilding: HashSet<Cpv> = [cpv("app-misc/reinstalled-1.0")].into();
+        let forced = [(
+            Dep::parse("app-misc/forced").expect("test atom parses"),
+            Vec::new(),
+        )];
+        let drifted = Cpn::try_new("app-misc/drifted").expect("test cpn parses");
+        let kept = kept_installed_use(&installed, &forced, &rebuilding, false, |e, _| {
+            e.cpn == drifted
+        });
+        assert_eq!(kept.len(), 1, "only curl stays installed: {kept:?}");
+        let curl = &kept[&cpv("net-misc/curl-8.0")];
+        assert_eq!(curl.get(Interned::intern("ssl")), UseFlagState::Enabled);
+        assert_eq!(curl.get(Interned::intern("amd64")), UseFlagState::Enabled);
+        // Not in VDB USE: built without it, whatever today's default says.
+        assert_eq!(curl.get(Interned::intern("http2")), UseFlagState::Disabled);
+
+        let none = kept_installed_use(&installed, &[], &HashSet::new(), true, |_, _| false);
+        assert!(none.is_empty(), "--emptytree rebuilds everything");
+    }
 }

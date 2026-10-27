@@ -560,13 +560,19 @@ impl PortageDependencyProvider {
                 // Index order matches `dep_classes`: DEPEND (0) and BDEPEND (2)
                 // are the build-time classes.
                 let mut class_idx = 0usize;
+                // A kept installed version is reduced with the USE it was
+                // built with. Today's desired USE still feeds the post-solve
+                // `-N`/`-U` and USE-dep checks.
+                let kept_use_cfg = repo.kept_installed_use(&cpv);
+                let dep_use_cfg = kept_use_cfg.as_ref().unwrap_or(&cpv_use_cfg);
+
                 let class_results: [convert::ConversionResult; 5] = dep_classes.map(|entries| {
                     let buildtime = matches!(class_idx, 0 | 2);
                     class_idx += 1;
                     convert::convert_deps_class(
                         entries,
                         &cpn_str,
-                        &cpv_use_cfg,
+                        dep_use_cfg,
                         slot_map,
                         meta.empty_any_of_matches,
                         buildtime,
@@ -595,7 +601,7 @@ impl PortageDependencyProvider {
                 // in the DEPEND class (index 0); they reference virtual nodes,
                 // which are stripped from the install order.
                 if let Some(ru) = &meta.required_use {
-                    let enc = convert::encode_required_use(&cpn_str, ru, &cpv_use_cfg);
+                    let enc = convert::encode_required_use(&cpn_str, ru, dep_use_cfg);
                     by_class[0].extend(enc.requirements);
                     all_virtual_choices.extend(enc.virtual_choices);
                 }
