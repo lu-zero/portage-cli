@@ -846,10 +846,10 @@ fn classify_root_targets(
     let mut deps = Vec::new();
     let mut use_deps = Vec::new();
     let mut cpns: std::collections::HashSet<Cpn> = std::collections::HashSet::new();
-    // Root targets with no acceptable candidate, dropped from the solve and
-    // reported after the plan (world-family provenance only — anything else is
-    // fatal below).
+    // World-family atoms are dropped and reported after the plan. Any other
+    // unsatisfiable atom is fatal; all of them are reported, not only the first.
     let mut unsatisfiable: Vec<output::UnsatisfiableTarget> = Vec::new();
+    let mut fatal: Vec<output::UnsatisfiableTarget> = Vec::new();
     let mut masked_kept: Vec<(Cpv, Option<Interned<DefaultInterner>>, String)> = Vec::new();
     for target in atoms {
         let atom = &target.atom;
@@ -912,9 +912,8 @@ fn classify_root_targets(
                         continue;
                     }
                     targets::RootTargetDecision::Fatal => {
-                        let message =
-                            output::unsatisfiable_target_message(&unsat, data, multi_repo);
-                        return Err(crate::error::UnsatisfiableTarget(message).into());
+                        fatal.push(unsat);
+                        continue;
                     }
                 }
             }
@@ -924,6 +923,14 @@ fn classify_root_targets(
             use_deps.push((pkg.clone(), vs.clone(), required, target.label()));
         }
         deps.push((pkg, vs));
+    }
+    if !fatal.is_empty() {
+        let message = fatal
+            .iter()
+            .map(|target| output::unsatisfiable_target_message(target, data, multi_repo))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(crate::error::UnsatisfiableTarget(message).into());
     }
     Ok(RootTargets {
         deps,

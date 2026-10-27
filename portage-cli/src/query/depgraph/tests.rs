@@ -420,6 +420,45 @@ fn a_target_use_requirement_no_version_has_is_unsatisfiable() {
 }
 
 #[test]
+fn every_fatal_unsatisfiable_target_is_reported() {
+    let pkgs = [
+        Pkg {
+            cpv: "app-misc/flagged-1",
+            keywords: "amd64",
+            depend: "",
+            iuse: "foo",
+            slot: "0",
+        },
+        Pkg {
+            cpv: "app-misc/gone-1",
+            keywords: "",
+            depend: "",
+            iuse: "",
+            slot: "0",
+        },
+    ];
+    let fix = fixture(&pkgs, &[]);
+    let atoms = [
+        TargetAtom::explicit("app-misc/flagged[nosuchflag]"),
+        TargetAtom::explicit("app-misc/gone"),
+    ];
+    let Err(err) = try_solve(&fix, Solve::new(&atoms)) else {
+        panic!("unsatisfiable targets must not resolve");
+    };
+    let message = err
+        .downcast_ref::<crate::error::UnsatisfiableTarget>()
+        .map(|e| e.0.clone())
+        .unwrap_or_default();
+    let flagged = message
+        .find("app-misc/flagged[nosuchflag]")
+        .expect(&message);
+    let gone = message.find("app-misc/gone").expect(&message);
+    assert!(flagged < gone, "{message}");
+    assert!(message.contains("Missing IUSE: nosuchflag"), "{message}");
+    assert!(message.contains("missing keyword"), "{message}");
+}
+
+#[test]
 fn a_keyword_dropped_dependency_is_not_installable() {
     let fix = fixture(&masked_dep(), &[]);
     let atoms = [TargetAtom::explicit("app-misc/qux")];
