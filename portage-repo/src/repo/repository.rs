@@ -759,11 +759,9 @@ impl Repository {
 
     /// Verify that `entry`'s recorded eclass checksums still match the live tree
     ///
-    /// For every `(name, md5)` in `entry.eclasses`, the eclass is located by
-    /// searching this repository's `eclass/` directory and each
-    /// [`masters`](Self::masters) entry's (in order), then its current md5 is
-    /// compared against the recorded one. An entry with no `_eclasses_` is
-    /// trivially fresh.
+    /// For every `(name, md5)` in `entry.eclasses`, locate the eclass in this
+    /// repository and then in [`masters`](Self::masters), last master first,
+    /// and compare its md5. An entry with no `_eclasses_` is fresh.
     ///
     /// This does **not** verify `entry.md5` against the ebuild on disk —
     /// callers that want that check should compare it themselves (they
@@ -790,8 +788,9 @@ impl Repository {
         if entry.eclasses.is_empty() {
             return true;
         }
+        // Own `eclass/`, then masters last-listed first, matching `shell_with_masters`.
         let eclass_dirs: Vec<Utf8PathBuf> = std::iter::once(self.path.join("eclass"))
-            .chain(self.masters.iter().map(|m| m.path.join("eclass")))
+            .chain(self.masters.iter().rev().map(|m| m.path.join("eclass")))
             .collect();
         for (name, recorded) in &entry.eclasses {
             let actual = digests.entry(*name).or_insert_with(|| {
@@ -1466,6 +1465,31 @@ mod tests {
         // Empty eclass list — trivially fresh.
         let entry = make_entry(&[]);
         assert!(local.is_fresh(&entry));
+    }
+
+    #[test]
+    fn is_fresh_uses_the_eclass_from_the_last_master_like_inherit() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let first_dir = tempfile::tempdir().unwrap();
+        let last_dir = tempfile::tempdir().unwrap();
+        let local = Repository {
+            masters: vec![make_test_repo(&first_dir), make_test_repo(&last_dir)],
+            ..make_test_repo(&local_dir)
+        };
+        for (dir, body) in [(&first_dir, "first\n"), (&last_dir, "last\n")] {
+            std::fs::create_dir_all(dir.path().join("eclass")).unwrap();
+            std::fs::write(dir.path().join("eclass").join("shared.eclass"), body).unwrap();
+        }
+        let entry_for = |body: &[u8]| {
+            let md5 = format!("{:x}", md5::compute(body));
+            let raw = format!("EAPI=8\nDESCRIPTION=test\nSLOT=0\n_eclasses_=shared\t{md5}\n");
+            CacheEntry::parse(&raw).unwrap()
+        };
+
+        // `inherit shared` sources the last master's copy (see
+        // `shell_with_masters`), so that is the digest a fresh entry records.
+        assert!(local.is_fresh(&entry_for(b"last\n")));
+        assert!(!local.is_fresh(&entry_for(b"first\n")));
     }
 
     #[test]
