@@ -566,10 +566,13 @@ impl Version {
         if let Some(ref raw) = self.raw {
             write!(f, "{raw}")
         } else {
-            for (i, digits) in self.digits.iter().enumerate() {
+            // `digits` is empty on a builder value; fall back to each `u64`.
+            let n = self.numbers.len().max(self.digits.len());
+            for i in 0..n {
                 if i > 0 {
                     write!(f, ".")?;
                 }
+                let digits = component_digits(self, i).expect("component in range");
                 write!(f, "{digits}")?;
             }
             if let Some(letter) = self.letter {
