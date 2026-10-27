@@ -260,8 +260,9 @@ pub(crate) fn parse_slot_dep(input: &mut &str) -> ModalResult<SlotDep> {
     alt((
         // Just operator: := or :*
         parse_slot_operator.map(SlotDep::Operator),
-        // Slot with optional operator: :0, :0=, :0/1.2
-        (parse_slot, opt(parse_slot_operator)).map(|(slot, op)| SlotDep::Slot {
+        // Slot with optional `=`: :0, :0=, :0/1.2, :0/1.2=. PMS (and Portage's
+        // `Atom`) reject `*` after a named slot, e.g. `:5*`.
+        (parse_slot, opt('='.value(SlotOperator::Equal))).map(|(slot, op)| SlotDep::Slot {
             slot: Some(slot),
             op,
         }),
@@ -273,6 +274,18 @@ pub(crate) fn parse_slot_dep(input: &mut &str) -> ModalResult<SlotDep> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn star_operator_is_rejected_after_a_named_slot() {
+        assert!(SlotDep::parse("*").is_ok());
+        assert!(SlotDep::parse("5=").is_ok());
+        assert!(SlotDep::parse("0/1.2=").is_ok());
+        assert!(SlotDep::parse("5*").is_err());
+        assert!(SlotDep::parse("0/1.2*").is_err());
+        assert!(crate::Dep::parse("!kde-apps/libksane:5*").is_err());
+        assert!(crate::Dep::parse("=foo/bar-1*:6*").is_err());
+        assert!(crate::Dep::parse("=foo/bar-1*:6=").is_ok());
+    }
 
     #[test]
     fn test_slot_parsing() {
