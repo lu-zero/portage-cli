@@ -74,7 +74,7 @@ assert_eq!(cpv.version.numbers[2], 0);
 ```rust
 use portage_atom::{Dep, Operator};
 
-let dep = Dep::parse(">=dev-lang/rust-1.75.0:0[llvm_targets_AMDGPU]::gentoo")?;
+let dep = Dep::parse(">=dev-lang/rust-1.75.0:0::gentoo[llvm_targets_AMDGPU]")?;
 
 // Access components
 assert!(dep.version.is_some());

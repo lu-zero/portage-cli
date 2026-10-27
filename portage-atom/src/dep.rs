@@ -39,9 +39,9 @@ impl fmt::Display for Blocker {
 /// Full dependency atom
 ///
 /// Represents a complete dependency atom as it appears in ebuild `*DEPEND`
-/// variables, e.g. `>=dev-lang/rust-1.75.0:0[ssl]::gentoo`.
+/// variables, e.g. `>=dev-lang/rust-1.75.0:0::gentoo[ssl]`.
 ///
-/// The general form is `[!|!!][op]category/package[-ver][:slot][use][::repo]`.
+/// The general form is `[!|!!][op]category/package[-ver][:slot][::repo][use]`.
 ///
 /// See [PMS 8.3](https://projects.gentoo.org/pms/9/pms.html#package-dependency-specifications)
 /// for the full specification.
@@ -243,6 +243,11 @@ impl fmt::Display for Dep {
             write!(f, ":{}", slot)?;
         }
 
+        // Portage's atom syntax puts the repository before the USE deps.
+        if let Some(repo) = &self.repo {
+            write!(f, "::{}", repo)?;
+        }
+
         if let Some(use_deps) = &self.use_deps
             && !use_deps.is_empty()
         {
@@ -254,10 +259,6 @@ impl fmt::Display for Dep {
                 write!(f, "{}", dep)?;
             }
             write!(f, "]")?;
-        }
-
-        if let Some(repo) = &self.repo {
-            write!(f, "::{}", repo)?;
         }
 
         Ok(())
@@ -290,7 +291,8 @@ fn parse_repo(input: &mut &str) -> ModalResult<Interned<DefaultInterner>> {
 
 /// Parse full dependency atom
 ///
-/// Handles: [!|!!][op]cat/pkg[-ver][:slot][use][::repo]
+/// Handles: [!|!!][op]cat/pkg[-ver][:slot][::repo][use] (and the legacy
+/// `[:slot][use][::repo]` order)
 pub(crate) fn parse_dep(input: &mut &str) -> ModalResult<Dep> {
     use crate::version::{Operator, parse_operator};
     use winnow::combinator::fail;
@@ -321,9 +323,15 @@ pub(crate) fn parse_dep(input: &mut &str) -> ModalResult<Dep> {
 
     let slot_dep = opt(preceded(':', parse_slot_dep)).parse_next(input)?;
 
+    // Portage order is `:slot::repo[use]`; the legacy `:slot[use]::repo`
+    // order em used to print is still accepted.
+    let mut repo = opt(preceded("::", parse_repo)).parse_next(input)?;
+
     let use_deps = opt(parse_use_deps).parse_next(input)?;
 
-    let repo = opt(preceded("::", parse_repo)).parse_next(input)?;
+    if repo.is_none() {
+        repo = opt(preceded("::", parse_repo)).parse_next(input)?;
+    }
 
     Ok(Dep {
         cpn,
@@ -425,6 +433,26 @@ mod tests {
         let dep = Dep::parse("dev-lang/rust::gentoo").unwrap();
         assert_eq!(dep.repo, Some(Interned::intern("gentoo")));
         assert_eq!(dep.to_string(), "dev-lang/rust::gentoo");
+    }
+
+    #[test]
+    fn repo_comes_before_use_deps_like_portage() {
+        let dep = Dep::parse("dev-libs/openssl::gentoo[asm]").unwrap();
+        assert_eq!(dep.repo, Some(Interned::intern("gentoo")));
+        assert_eq!(dep.use_deps.as_ref().unwrap().len(), 1);
+        assert_eq!(dep.to_string(), "dev-libs/openssl::gentoo[asm]");
+
+        let dep = Dep::parse(">=dev-libs/openssl-3:0/3=::gentoo[asm,-test]").unwrap();
+        assert_eq!(dep.repo, Some(Interned::intern("gentoo")));
+        assert_eq!(dep.use_deps.as_ref().unwrap().len(), 2);
+
+        // Legacy order still parses, and prints in Portage order.
+        let legacy = Dep::parse("dev-libs/openssl[asm]::gentoo").unwrap();
+        assert_eq!(legacy, Dep::parse("dev-libs/openssl::gentoo[asm]").unwrap());
+        assert_eq!(legacy.to_string(), "dev-libs/openssl::gentoo[asm]");
+
+        // Only one repository.
+        assert!(Dep::parse("dev-libs/openssl::gentoo[asm]::other").is_err());
     }
 
     #[test]
@@ -577,7 +605,7 @@ mod tests {
             "dev-lang/rust:0/1.75",
             "dev-lang/rust[ssl]",
             "dev-lang/rust::gentoo",
-            ">=dev-lang/rust-1.75.0:0[ssl]::gentoo",
+            ">=dev-lang/rust-1.75.0:0::gentoo[ssl]",
         ];
         for input in inputs {
             let dep = Dep::parse(input).unwrap();
