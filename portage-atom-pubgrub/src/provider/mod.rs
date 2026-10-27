@@ -557,13 +557,19 @@ impl PortageDependencyProvider {
                     }
                 }
 
+                // Index order matches `dep_classes`: DEPEND (0) and BDEPEND (2)
+                // are the build-time classes.
+                let mut class_idx = 0usize;
                 let class_results: [convert::ConversionResult; 5] = dep_classes.map(|entries| {
-                    convert::convert_deps_groups(
+                    let buildtime = matches!(class_idx, 0 | 2);
+                    class_idx += 1;
+                    convert::convert_deps_class(
                         entries,
                         &cpn_str,
                         &cpv_use_cfg,
                         slot_map,
                         meta.empty_any_of_matches,
+                        buildtime,
                     )
                 });
 

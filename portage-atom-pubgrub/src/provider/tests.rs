@@ -3908,3 +3908,73 @@ fn kept_build_deps_upgrade_a_kept_packages_build_tool() {
     assert_eq!(solve(true), Some(Version::parse("1.1").unwrap()));
     assert_eq!(solve(false), None);
 }
+
+/// go lists itself before go-bootstrap in `BDEPEND`. Without an install,
+/// that circular alternative must not satisfy the build.
+fn go_bootstrap_repo() -> InMemoryRepository {
+    let mut repo = InMemoryRepository::new();
+    repo.add_version(
+        portage_atom::Cpv::parse("dev-lang/go-bootstrap-1.24.6").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("dev-lang/go-1.27.3").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: (vec![]).into(),
+            bdepend: (DepEntry::parse(
+                "|| ( >=dev-lang/go-1.24.6 >=dev-lang/go-bootstrap-1.24.6 )",
+            )
+            .unwrap())
+            .into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        },
+    );
+    repo
+}
+
+#[test]
+fn circular_build_dep_alternative_is_not_self_satisfied() {
+    let mut provider = PortageDependencyProvider::new(go_bootstrap_repo());
+    let go = PortagePackage::unslotted(Cpn::parse("dev-lang/go").unwrap());
+    let solution = provider
+        .resolve_targets(vec![(go, PortageVersionSet::any())])
+        .unwrap();
+    assert!(
+        solution
+            .get(&PortagePackage::unslotted(
+                Cpn::parse("dev-lang/go-bootstrap").unwrap()
+            ))
+            .is_some(),
+        "go's own BDEPEND must be satisfied by go-bootstrap, not by go itself"
+    );
+}
+
+#[test]
+fn circular_build_dep_alternative_kept_when_installed() {
+    let mut provider = PortageDependencyProvider::new(go_bootstrap_repo());
+    let go = PortagePackage::unslotted(Cpn::parse("dev-lang/go").unwrap());
+    provider.add_installed(InstalledPackage {
+        package: go.clone(),
+        version: Version::parse("1.25.0").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+    let solution = provider
+        .resolve_targets(vec![(go, PortageVersionSet::any())])
+        .unwrap();
+    assert!(
+        solution
+            .get(&PortagePackage::unslotted(
+                Cpn::parse("dev-lang/go-bootstrap").unwrap()
+            ))
+            .is_none(),
+        "an installed go satisfies the circular alternative; no go-bootstrap"
+    );
+}

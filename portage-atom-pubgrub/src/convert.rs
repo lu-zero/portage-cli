@@ -148,26 +148,32 @@ fn convert_deps(
     use_config: &UseConfig,
     slot_map: &SlotMap,
 ) -> ConversionResult {
-    convert_deps_groups(entries, cpn_str, use_config, slot_map, true)
+    convert_deps_class(entries, cpn_str, use_config, slot_map, true, false)
 }
 
-/// [`convert_deps`] with PMS table 8.6 empty-`||`/`^^` policy
+/// Convert one dependency class.
 ///
 /// `empty_any_of_matches` is EAPI 0–6 (vacuous success). EAPI 7–9 pass
 /// `false` so an any-of/exactly-one-of with no remaining members is
 /// unsatisfiable.
-pub fn convert_deps_groups(
+///
+/// When `buildtime` is set, an any-of alternative that names this package
+/// ranks after the others, so the package does not satisfy its own
+/// `DEPEND` or `BDEPEND`. An installed copy still wins in `choose_version`.
+pub(crate) fn convert_deps_class(
     entries: &[DepEntry],
     cpn_str: &str,
     use_config: &UseConfig,
     slot_map: &SlotMap,
     empty_any_of_matches: bool,
+    buildtime: bool,
 ) -> ConversionResult {
     let mut ctx = ConvertCtx {
         cpn_str,
         use_config,
         slot_map,
         empty_any_of_matches,
+        buildtime,
         requirements: Vec::new(),
         blockers: Vec::new(),
         virtual_choices: Vec::new(),
@@ -196,6 +202,9 @@ struct ConvertCtx<'a> {
     use_config: &'a UseConfig,
     slot_map: &'a SlotMap,
     empty_any_of_matches: bool,
+    /// Converting a build-time class (`DEPEND`/`BDEPEND`): rank circular
+    /// any-of alternatives last (see [`convert_deps_class`])
+    buildtime: bool,
     requirements: Vec<Req>,
     blockers: Vec<Dep>,
     virtual_choices: Vec<VirtualChoice>,
@@ -478,6 +487,13 @@ impl ConvertCtx<'_> {
         }
     }
 
+    /// Whether an any-of alternative is a plain (non-blocker) atom on the
+    /// package whose dependencies are being converted
+    fn is_circular(&self, entry: &DepEntry) -> bool {
+        matches!(entry, DepEntry::Atom(dep)
+            if dep.blocker.is_none() && dep.cpn.to_string() == self.cpn_str)
+    }
+
     fn convert_choice_group(&mut self, children: &[DepEntry], allow_none: bool) {
         let id = next_choice_id();
         let pkg = PortagePackage::choice(id);
@@ -493,8 +509,24 @@ impl ConvertCtx<'_> {
             branch_blockers.push((Version::new(&[0]), vec![]));
         }
 
-        for (i, child) in children.iter().enumerate() {
-            let ver_num = n - i;
+        // Branch rank: first-listed highest, except that circular build-time
+        // alternatives (naming the package being built) go after all others.
+        let circular: Vec<bool> = children
+            .iter()
+            .map(|c| self.buildtime && self.is_circular(c))
+            .collect();
+        let demote = circular.iter().any(|&c| c) && !circular.iter().all(|&c| c);
+        let order: Vec<usize> = if demote {
+            (0..n)
+                .filter(|&i| !circular[i])
+                .chain((0..n).filter(|&i| circular[i]))
+                .collect()
+        } else {
+            (0..n).collect()
+        };
+        for (rank, &i) in order.iter().enumerate() {
+            let child = &children[i];
+            let ver_num = n - rank;
             let saved_reqs = std::mem::take(&mut self.requirements);
             let saved_blockers = std::mem::take(&mut self.blockers);
             // Save use_deps so they don't leak into the parent's dep list.
@@ -1615,7 +1647,8 @@ mod tests {
     fn empty_any_of_unmatches_on_eapi_7() {
         let config = UseConfig::new();
         let entries = DepEntry::parse("|| ( ssl? ( dev-libs/openssl ) )").unwrap();
-        let result = convert_deps_groups(&entries, "test/pkg", &config, &empty_slots(), false);
+        let result =
+            convert_deps_class(&entries, "test/pkg", &config, &empty_slots(), false, false);
         assert_eq!(result.requirements.len(), 1);
         assert!(
             result.virtual_choices[0].versions.is_empty(),
