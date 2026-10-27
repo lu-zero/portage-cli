@@ -105,12 +105,11 @@ side of that tradeoff.
 [`grep-qgrep-workalike-plan.md`](./done/grep-qgrep-workalike-plan.md) for grep's
 full design and live parity-test results; `grep` is no longer a stub.
 `portageq` now implements its VDB group (`has_version`/`best_version`/
-`match`/`mass_best_version`, live-verified byte-exact against real
-`portageq`) — see
+`match`/`mass_best_version`), `envvar`, the settings one-liners, and
+`get_repos`/`get_repo_path` — see
 [`portageq-workalike-plan.md`](./portageq-workalike-plan.md) for what
-that covers and what's still missing (settings/`envvar`, repos,
-metadata/contents/owners, `best_visible`, and the protect/eclass/license
-tail).
+that covers and what's still missing (metadata/contents/owners,
+`best_visible`, and the protect/eclass/license tail).
 
 ## Not a gap
 

@@ -212,3 +212,46 @@ fn portageq_envvar_matches_portage() {
         );
     }
 }
+
+/// stdout, stderr, and exit status of `program args…`
+fn captured(program: &str, args: &[&str]) -> (String, String, Option<i32>) {
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .expect("failed to run the command");
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code(),
+    )
+}
+
+#[test]
+#[ignore]
+fn portageq_settings_and_repos_match_portage() {
+    for args in [
+        &["vdb_path"][..],
+        &["pkgdir"],
+        &["distdir"],
+        &["gentoo_mirrors"],
+        &["config_protect"],
+        &["config_protect_mask"],
+        &["portdir"],
+        &["portdir_overlay"],
+        &["get_repos", "/"],
+        &["get_repo_path", "/", "gentoo"],
+        &["get_repo_path", "/", "gentoo", "nosuch"],
+        &["get_repo_path", "/", "nosuch", "gentoo"],
+        &["get_repo_path", "/"],
+        &["get_repo_path", "/", "bad name"],
+        &["get_repos", "/no/such/dir"],
+    ] {
+        let mut em_args = vec!["portageq"];
+        em_args.extend_from_slice(args);
+        assert_eq!(
+            captured(env!("CARGO_BIN_EXE_em"), &em_args),
+            captured("portageq", args),
+            "{args:?}"
+        );
+    }
+}

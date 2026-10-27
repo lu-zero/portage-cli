@@ -11,9 +11,10 @@ hit, miss, invalid atom, missing `<EROOT>` — all byte-exact, including the
 
 **`envvar` done 2026-10-22** (byte-identical to portageq on a live host for plain, `-v`, unset, `NAME*`,
 `PORTDIR`/`PORTDIR_OVERLAY`, no-args; `FEATURES` differs because em does not stack make.globals' incrementals,
-the same gap `em --info` has). **Not yet done:** the rest of steps 3–7 below (the settings one-liners, repos group,
-metadata/contents/owners, `best_visible`, protect/eclass/license/
-`repos_config` tail) — still bare, not stubbed. `match`'s glob-style extended
+the same gap `em --info` has). **Settings one-liners and `get_repos`/`get_repo_path` done 2026-10-27**
+(`vdb_path`, `pkgdir`, `distdir`, `gentoo_mirrors`, `config_protect`, `config_protect_mask`, `portdir`,
+`portdir_overlay`). **Not yet done:** the rest of steps 3–7 below (metadata/contents/owners,
+`best_visible`, protect/eclass/license/`repos_config` tail) — still bare, not stubbed. `match`'s glob-style extended
 syntax (`cat/*`, `*/*`) is also not yet supported (falls through to
 "invalid atom" today); only plain dependency atoms and the empty-atom
 "match everything" case work so far. Comparison-test parity (§5's

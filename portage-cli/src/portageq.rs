@@ -1,20 +1,24 @@
 //! `em portageq` — Portage's own query interface (subset)
 //!
 //! Implements the "VDB group" of real `portageq`'s subcommands
-//! (`has_version`/`best_version`/`match`/`mass_best_version`) and `envvar`.
-//! The repos, metadata/contents/owners, best_visible and protect/eclass/license
+//! (`has_version`/`best_version`/`match`/`mass_best_version`), `envvar`,
+//! the settings one-liners, and `get_repos`/`get_repo_path`.
+//! Metadata, contents, owners, best_visible, and the protect/eclass/license
 //! groups are not implemented.
 //!
-//! The VDB commands take `<EROOT>` as their own positional argument (real
-//! portageq's `uses_eroot` convention), independent of `em`'s own
-//! `--root`/`--prefix`/`--local` — this applet deliberately carries none of
-//! those (see `cli/topology.rs`'s module doc). `envvar` reads the config root
-//! `em`'s prefix-position `--root`/`--prefix`/`--local`/`--target` select.
+//! The VDB commands and `get_repos`/`get_repo_path` take `<EROOT>` as their
+//! own positional argument (real portageq's `uses_eroot` convention),
+//! independent of `em`'s own `--root`/`--prefix`/`--local`. `envvar` and the
+//! settings one-liners read the config root those flags select.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 
 use anyhow::{Context, Result};
+use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::{Cpv, Dep};
+use portage_repo::ReposConf;
+use portage_resolve::Roots;
 use portage_vdb::{InstalledPackage, Vdb};
 
 use crate::cli::Cli;
@@ -146,18 +150,7 @@ pub(crate) fn mass_best_version(eroot: &str, atoms: &[String]) -> Result<u8> {
 /// `envvar [-v] NAME…`: the configuration of the config root `em`'s topology selects, as
 /// Portage resolves it, with the variables it derives from the roots and repositories
 pub(crate) async fn envvar(cli: &Cli, verbose: bool, names: &[String]) -> Result<u8> {
-    let loaded = crate::settings::load(cli).await?;
-    let empty = portage_repo::Settings::default();
-    let settings = loaded.as_deref().unwrap_or(&empty);
-    let mut vars: std::collections::BTreeMap<String, String> = settings
-        .iter()
-        .map(|(name, setting)| (name.to_owned(), setting.value.clone()))
-        .collect();
-    vars.extend(
-        crate::settings::derived(&cli.roots())?
-            .into_iter()
-            .map(|(name, value)| (name.to_owned(), value)),
-    );
+    let vars = resolved_vars(cli).await?;
     let lookup = |name: &str| vars.get(name).cloned();
     let all = || vars.keys().cloned().collect();
     let mut out = std::io::stdout().lock();
@@ -217,6 +210,167 @@ fn print_envvar(
         }
     }
     Ok(status)
+}
+
+/// The configuration `envvar` prints: resolved settings, with derived roots and repos on top
+async fn resolved_vars(cli: &Cli) -> Result<BTreeMap<String, String>> {
+    let loaded = crate::settings::load(cli).await?;
+    let empty = portage_repo::Settings::default();
+    let settings = loaded.as_deref().unwrap_or(&empty);
+    let mut vars: BTreeMap<String, String> = settings
+        .iter()
+        .map(|(name, setting)| (name.to_owned(), setting.value.clone()))
+        .collect();
+    vars.extend(
+        crate::settings::derived(&cli.roots())?
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value)),
+    );
+    Ok(vars)
+}
+
+/// One resolved setting on its own line. Unset prints an empty line and exits 1.
+pub(crate) async fn settings_var(cli: &Cli, name: &str, out: &mut dyn Write) -> Result<u8> {
+    let vars = resolved_vars(cli).await?;
+    match vars.get(name) {
+        Some(value) => {
+            writeln!(out, "{value}")?;
+            Ok(0)
+        }
+        None => {
+            writeln!(out)?;
+            Ok(1)
+        }
+    }
+}
+
+/// `<merge_root>/var/db/pkg`
+pub(crate) fn vdb_path(cli: &Cli, out: &mut dyn Write) -> Result<u8> {
+    writeln!(out, "{}", cli.roots().merge_root().join("var/db/pkg"))?;
+    Ok(0)
+}
+
+/// `PORTDIR`, plus portageq's deprecation warning on stderr
+pub(crate) async fn portdir(cli: &Cli, out: &mut dyn Write, err: &mut dyn Write) -> Result<u8> {
+    let status = settings_var(cli, "PORTDIR", out).await?;
+    writeln!(
+        err,
+        "WARNING: 'portageq portdir' is deprecated. Use the get_repo_path command instead. \
+         eg: 'portageq get_repo_path / gentoo' instead."
+    )?;
+    Ok(status)
+}
+
+/// `PORTDIR_OVERLAY`, plus portageq's deprecation warning on stderr
+pub(crate) async fn portdir_overlay(
+    cli: &Cli,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<u8> {
+    let status = settings_var(cli, "PORTDIR_OVERLAY", out).await?;
+    writeln!(
+        err,
+        "WARNING: 'portageq portdir_overlay' is deprecated. Use the get_repos and get_repo_path \
+         commands or the repos_config command instead. eg: 'portageq repos_config /'"
+    )?;
+    Ok(status)
+}
+
+/// Portage's repo-name rule: a word character, then word characters or `-`.
+///
+/// A leading `-` is rejected (`get_repo_path / -x` exits 2).
+fn is_valid_repo_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    word(first) && chars.all(|c| word(c) || c == '-')
+}
+
+/// Host global `repos.conf` plus `<eroot>/etc/portage/repos.conf`.
+///
+/// Real `portageq get_repos <eroot>` keeps the host global file even when
+/// `<eroot>` is not `/`; the eroot only replaces the user confdir.
+fn eroot_repos(eroot: &str) -> Result<ReposConf> {
+    let root = Utf8PathBuf::from(eroot);
+    let roots = Roots::default()
+        .with_config(Some(root.clone()))
+        .with_base(Some(root.clone()))
+        .with_target(Some(root));
+    let user = roots
+        .config()
+        .unwrap_or(Utf8Path::new("/"))
+        .join("etc/portage/repos.conf");
+    let conf = ReposConf::load_from(&[
+        Utf8PathBuf::from("/usr/share/portage/config/repos.conf"),
+        user,
+    ])?;
+    Ok(conf.with_portdir_overlay(&roots.portdir_overlay()))
+}
+
+/// Space-separated repo names, overlays first (the reverse of resolution order)
+pub(crate) fn get_repos(eroot: &str, out: &mut dyn Write) -> Result<u8> {
+    if let Err(code) = validate_eroot(eroot) {
+        return Ok(code);
+    }
+    let conf = eroot_repos(eroot)?;
+    writeln!(out, "{}", repo_names(&conf))?;
+    Ok(0)
+}
+
+fn repo_names(conf: &ReposConf) -> String {
+    conf.repos()
+        .iter()
+        .rev()
+        .filter(|repo| repo.location.as_path().is_some())
+        .map(|repo| repo.name.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One location per repo name.
+///
+/// An invalid name exits 2. An unknown name prints an empty line and stops
+/// (exit 1), so later names are not printed. No names at all exits 3.
+pub(crate) fn get_repo_path(
+    eroot: &str,
+    repos: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<u8> {
+    if let Err(code) = validate_eroot(eroot) {
+        return Ok(code);
+    }
+    write_repo_paths(&eroot_repos(eroot)?, repos, out, err)
+}
+
+fn write_repo_paths(
+    conf: &ReposConf,
+    repos: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<u8> {
+    if repos.is_empty() {
+        writeln!(err, "ERROR: insufficient parameters!")?;
+        return Ok(3);
+    }
+    let mut code = 0;
+    for name in repos {
+        if !is_valid_repo_name(name) {
+            writeln!(err, "ERROR: invalid repository: {name}")?;
+            return Ok(2);
+        }
+        match conf.find(name).and_then(|entry| entry.location.as_path()) {
+            Some(path) => writeln!(out, "{}", path.display())?,
+            None => {
+                writeln!(out)?;
+                code = 1;
+                break;
+            }
+        }
+    }
+    Ok(code)
 }
 
 /// Python's `shlex.quote`: unchanged when every character is safe, else single-quoted
@@ -282,6 +436,72 @@ mod tests {
             envvar_output(false, &["PORTDIR"])
                 .1
                 .starts_with("WARNING: 'portageq envvar PORTDIR' is deprecated.")
+        );
+    }
+
+    fn sample_conf() -> (tempfile::TempDir, ReposConf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from(tmp.path().to_string_lossy().as_ref());
+        let global = root.join("global.conf");
+        let user = root.join("user.conf");
+        std::fs::write(
+            global.as_str(),
+            format!("[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = {root}/gentoo\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            user.as_str(),
+            format!("[mmm]\nlocation = {root}/mmm\n\n[zzz]\nlocation = {root}/zzz\n"),
+        )
+        .unwrap();
+        let conf = ReposConf::load_from(&[global, user]).unwrap();
+        (tmp, conf)
+    }
+
+    #[test]
+    fn repo_names_list_overlays_first() {
+        let (_tmp, conf) = sample_conf();
+        assert_eq!(repo_names(&conf), "zzz mmm gentoo");
+        assert!(!is_valid_repo_name(""));
+        assert!(!is_valid_repo_name("foo.bar"));
+        assert!(!is_valid_repo_name("-x"));
+        assert!(is_valid_repo_name("exp-llvm-libc"));
+    }
+
+    #[test]
+    fn repo_paths_stop_at_the_first_unknown_name() {
+        let (tmp, conf) = sample_conf();
+        let root = tmp.path().to_string_lossy().into_owned();
+        let run = |repos: &[&str]| {
+            let repos: Vec<String> = repos.iter().map(|s| (*s).to_string()).collect();
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let code = write_repo_paths(&conf, &repos, &mut out, &mut err).unwrap();
+            (
+                String::from_utf8(out).unwrap(),
+                String::from_utf8(err).unwrap(),
+                code,
+            )
+        };
+        assert_eq!(
+            run(&[]),
+            (String::new(), "ERROR: insufficient parameters!\n".into(), 3)
+        );
+        assert_eq!(
+            run(&["bad name"]),
+            (
+                String::new(),
+                "ERROR: invalid repository: bad name\n".into(),
+                2
+            )
+        );
+        assert_eq!(
+            run(&["gentoo", "nosuch"]),
+            (format!("{root}/gentoo\n\n"), String::new(), 1)
+        );
+        assert_eq!(run(&["nosuch", "gentoo"]), ("\n".into(), String::new(), 1));
+        assert_eq!(
+            run(&["zzz", "mmm"]),
+            (format!("{root}/zzz\n{root}/mmm\n"), String::new(), 0)
         );
     }
 

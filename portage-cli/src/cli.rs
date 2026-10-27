@@ -2460,6 +2460,34 @@ pub enum PortageqCommand {
         #[arg(positional, required, value_name = "NAME")]
         names: Vec<String>,
     },
+    #[arg(name = "vdb_path", help = "Print the installed-package database path")]
+    VdbPath,
+    #[arg(name = "pkgdir", help = "Print the binary-package directory")]
+    Pkgdir,
+    #[arg(name = "distdir", help = "Print the distfiles directory")]
+    Distdir,
+    #[arg(name = "gentoo_mirrors", help = "Print GENTOO_MIRRORS")]
+    GentooMirrors,
+    #[arg(name = "config_protect", help = "Print CONFIG_PROTECT")]
+    ConfigProtect,
+    #[arg(name = "config_protect_mask", help = "Print CONFIG_PROTECT_MASK")]
+    ConfigProtectMask,
+    #[arg(name = "portdir", help = "Print the main repository path (deprecated)")]
+    Portdir,
+    #[arg(name = "portdir_overlay", help = "Print overlay paths (deprecated)")]
+    PortdirOverlay,
+    #[arg(name = "get_repos", help = "List repository names, overlays first")]
+    GetRepos {
+        #[arg(positional, value_name = "EROOT")]
+        eroot: String,
+    },
+    #[arg(name = "get_repo_path", help = "Print each repository's location")]
+    GetRepoPath {
+        #[arg(positional, value_name = "EROOT")]
+        eroot: String,
+        #[arg(positional, value_name = "REPO")]
+        repos: Vec<String>,
+    },
     #[arg(
         name = "mass_best_version",
         help = "Print `atom:cpv` for each of several atoms' best installed version"
