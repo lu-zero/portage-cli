@@ -463,9 +463,8 @@ impl Version {
     /// bumps the last suffix number, else the letter, else the last numeric
     /// component, then adds `_alpha`. Written digits stay: `26.04*` ends at `26.05_alpha`.
     ///
-    /// `None` means that bump does not fit in `u64`. The range is exact except when
-    /// the last numeric component of a plain pattern is `0` or starts with one:
-    /// `26.041` sorts inside `=26.04*`, and `04` has no least successor.
+    /// `None` means that bump does not fit in `u64`. See [`Self::glob_bounds_exact`]
+    /// for when the range holds versions that are no match.
     pub fn glob_bounds(&self) -> (Version, Option<Version>) {
         if self.revision.0 != 0 {
             let mut lower = self.clone();
@@ -492,6 +491,26 @@ impl Version {
             bumped_numeric(self)
         };
         (lower, upper)
+    }
+
+    /// Whether [`Self::glob_bounds`] holds only [`Self::glob_matches`] matches,
+    /// short of extra suffixes under the `_alpha` padding
+    ///
+    /// Not when a plain pattern's last numeric component (not the first) is `0`
+    /// or starts with one: `26.041` sorts inside `=26.04*`, and `04` has no least
+    /// successor. Nor when a suffix or revision bump overflows.
+    pub fn glob_bounds_exact(&self) -> bool {
+        if self.revision.0 != 0 {
+            return self.revision.0 != u64::MAX;
+        }
+        if let Some(last) = self.suffixes.last() {
+            return last.version != Some(u64::MAX);
+        }
+        if self.letter.is_some() {
+            return true;
+        }
+        let n = self.numbers.len().max(self.digits.len());
+        n < 2 || !component_digits(self, n - 1).is_some_and(|d| d.starts_with('0'))
     }
 
     /// Whether this is a live (VCS/snapshot-tracking) version per Gentoo's
@@ -1379,6 +1398,7 @@ mod tests {
         let mut bad = Vec::new();
         for p in patterns {
             let pattern = Version::parse(p).unwrap();
+            assert!(pattern.glob_bounds_exact(), "{p}");
             let (lower, upper) = pattern.glob_bounds();
             for c in candidates {
                 let v = Version::parse(c).unwrap();
@@ -1389,6 +1409,17 @@ mod tests {
             }
         }
         assert!(bad.is_empty(), "{bad:#?}");
+
+        for p in ["1.0", "26.04", "3.0.0", "1.09"] {
+            assert!(!Version::parse(p).unwrap().glob_bounds_exact(), "{p}");
+        }
+        let max = u64::MAX;
+        assert!(
+            !Version::parse(&format!("1_rc{max}"))
+                .unwrap()
+                .glob_bounds_exact()
+        );
+        assert!(Version::parse("0").unwrap().glob_bounds_exact());
     }
 
     #[test]

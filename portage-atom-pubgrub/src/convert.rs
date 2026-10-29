@@ -115,6 +115,9 @@ pub(crate) struct UseDepConstraint {
 /// Slot info for a CPN: pre-computed `(slot_interned, slotted_package)` pairs
 pub type SlotMap = HashMap<Cpn, Vec<(Interned<DefaultInterner>, PortagePackage)>>;
 
+/// The versions of a CPN the solver can pick, for `=V*` ranges that are not exact
+pub(crate) type KnownVersions<'a> = &'a dyn Fn(&Cpn) -> Vec<Version>;
+
 /// The `UseDecision` virtual package for a given package's USE flag
 ///
 /// USE flags are package-scoped, so the node name embeds the CPN: the *same*
@@ -148,7 +151,15 @@ fn convert_deps(
     use_config: &UseConfig,
     slot_map: &SlotMap,
 ) -> ConversionResult {
-    convert_deps_class(entries, cpn_str, use_config, slot_map, true, false)
+    convert_deps_class(
+        entries,
+        cpn_str,
+        use_config,
+        slot_map,
+        &|_| Vec::new(),
+        true,
+        false,
+    )
 }
 
 /// Convert one dependency class.
@@ -165,6 +176,7 @@ pub(crate) fn convert_deps_class(
     cpn_str: &str,
     use_config: &UseConfig,
     slot_map: &SlotMap,
+    known_versions: KnownVersions<'_>,
     empty_any_of_matches: bool,
     buildtime: bool,
 ) -> ConversionResult {
@@ -172,6 +184,7 @@ pub(crate) fn convert_deps_class(
         cpn_str,
         use_config,
         slot_map,
+        known_versions,
         empty_any_of_matches,
         buildtime,
         requirements: Vec::new(),
@@ -201,6 +214,7 @@ struct ConvertCtx<'a> {
     cpn_str: &'a str,
     use_config: &'a UseConfig,
     slot_map: &'a SlotMap,
+    known_versions: KnownVersions<'a>,
     empty_any_of_matches: bool,
     /// Converting a build-time class (`DEPEND`/`BDEPEND`): rank circular
     /// any-of alternatives last (see [`convert_deps_class`])
@@ -324,7 +338,9 @@ impl ConvertCtx<'_> {
         let version_set = match &dep.version {
             Some(v) => {
                 let op = dep.op.unwrap_or(Operator::Equal);
-                PortageVersionSet::from_operator(op, dep.glob, v.clone())
+                PortageVersionSet::from_operator_among(op, dep.glob, v.clone(), || {
+                    (self.known_versions)(cpn)
+                })
             }
             None => PortageVersionSet::any(),
         };
@@ -1647,8 +1663,15 @@ mod tests {
     fn empty_any_of_unmatches_on_eapi_7() {
         let config = UseConfig::new();
         let entries = DepEntry::parse("|| ( ssl? ( dev-libs/openssl ) )").unwrap();
-        let result =
-            convert_deps_class(&entries, "test/pkg", &config, &empty_slots(), false, false);
+        let result = convert_deps_class(
+            &entries,
+            "test/pkg",
+            &config,
+            &empty_slots(),
+            &|_| Vec::new(),
+            false,
+            false,
+        );
         assert_eq!(result.requirements.len(), 1);
         assert!(
             result.virtual_choices[0].versions.is_empty(),

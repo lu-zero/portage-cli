@@ -4067,3 +4067,29 @@ fn rebuilt_installed_package_deps_use_desired_use() {
         Some(Version::parse("1.0").unwrap())
     );
 }
+
+// `3.01` sorts inside the `=3.0*` range but is no glob match, so a dependency must not take it.
+#[test]
+fn glob_dep_skips_a_version_inside_its_range_that_does_not_match() {
+    let mut repo = InMemoryRepository::new();
+    for v in ["3.0", "3.01"] {
+        let cpv = portage_atom::Cpv::parse(&format!("dev-lang/nasm-{v}")).unwrap();
+        repo.add_version(cpv, Some(Interned::intern("0")), None, empty_deps());
+    }
+    repo.add_version(
+        portage_atom::Cpv::parse("app-misc/foo-1").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("=dev-lang/nasm-3.0*").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    let mut provider = PortageDependencyProvider::new(repo);
+    let foo = PortagePackage::slotted(Cpn::parse("app-misc/foo").unwrap(), Interned::intern("0"));
+    let solution = provider
+        .resolve_targets(vec![(foo, PortageVersionSet::any())])
+        .unwrap();
+    let nasm = PortagePackage::slotted(Cpn::parse("dev-lang/nasm").unwrap(), Interned::intern("0"));
+    assert_eq!(solution.get(&nasm), Some(&Version::parse("3.0").unwrap()));
+}

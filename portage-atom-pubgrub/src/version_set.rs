@@ -58,6 +58,35 @@ impl PortageVersionSet {
             }
         }
     }
+
+    /// [`Self::from_operator`] with the known versions of the target in hand
+    ///
+    /// When the `=V*` range is not exact ([`Version::glob_bounds_exact`]), each
+    /// known version inside it that is no glob match is cut out. `known` runs
+    /// only then.
+    pub fn from_operator_among<I>(
+        op: Operator,
+        glob: bool,
+        v: Version,
+        known: impl FnOnce() -> I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = Version>,
+    {
+        if !(glob && op == Operator::Equal) || v.glob_bounds_exact() {
+            return Self::from_operator(op, glob, v);
+        }
+        let mut set = Self::from_operator(op, glob, v.clone());
+        for candidate in known() {
+            if set.contains(&candidate) && !candidate.glob_matches(&v) {
+                set = Self(
+                    set.0
+                        .intersection(&Ranges::singleton(candidate).complement()),
+                );
+            }
+        }
+        set
+    }
 }
 
 impl VersionSet for PortageVersionSet {
@@ -212,6 +241,27 @@ mod tests {
         assert!(!wide.contains(&Version::parse("26.08.2").unwrap()));
         // `041` sorts between `04` and `05`; there is no least successor.
         assert!(wide.contains(&Version::parse("26.041").unwrap()));
+    }
+
+    #[test]
+    fn glob_among_cuts_known_versions_that_do_not_match() {
+        let parse = |s: &str| Version::parse(s).unwrap();
+        let known = || ["3.0", "3.00", "3.0.1", "3.01", "3.05", "3.1"].map(parse);
+        let vs = PortageVersionSet::from_operator_among(Operator::Equal, true, parse("3.0"), known);
+        assert!(vs.contains(&parse("3.0")));
+        assert!(vs.contains(&parse("3.00")));
+        assert!(vs.contains(&parse("3.0.1")));
+        assert!(!vs.contains(&parse("3.01")));
+        assert!(!vs.contains(&parse("3.05")));
+        assert!(!vs.contains(&parse("3.1")));
+
+        let unused = || -> Vec<Version> { panic!("an exact glob range needs no known versions") };
+        let exact =
+            PortageVersionSet::from_operator_among(Operator::Equal, true, parse("3.1"), unused);
+        assert_eq!(
+            exact,
+            PortageVersionSet::from_operator(Operator::Equal, true, parse("3.1"))
+        );
     }
 
     #[test]

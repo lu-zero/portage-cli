@@ -513,6 +513,17 @@ impl PortageDependencyProvider {
         // virtual choice branch) is queued in turn.
         let mut queue: std::collections::VecDeque<Cpn> = seeds.into_iter().collect();
         let mut seen: HashSet<Cpn> = queue.iter().copied().collect();
+        let known_cache: std::cell::RefCell<HashMap<Cpn, Vec<Version>>> = Default::default();
+        let known_versions = |c: &Cpn| -> Vec<Version> {
+            let mut cache = known_cache.borrow_mut();
+            let versions = cache.entry(*c).or_insert_with(|| {
+                repo.versions_for(c)
+                    .into_iter()
+                    .map(|(cpv, _)| cpv.version)
+                    .collect()
+            });
+            versions.clone()
+        };
         while let Some(cpn) = queue.pop_front() {
             let versions_data = repo.versions_for(&cpn);
             // Loop-invariant per CPN (not per version) — hoisted out of the
@@ -574,6 +585,7 @@ impl PortageDependencyProvider {
                         &cpn_str,
                         dep_use_cfg,
                         slot_map,
+                        &known_versions,
                         meta.empty_any_of_matches,
                         buildtime,
                     )

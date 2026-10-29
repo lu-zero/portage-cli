@@ -180,7 +180,15 @@ impl PortageDependencyProvider {
     /// `TargetSpec` (keyword/mask-aware selection).
     fn to_portage_targets(&self, spec: &TargetSpec) -> Vec<(PortagePackage, PortageVersionSet)> {
         let vs = match (spec.op, &spec.version) {
-            (Some(op), Some(v)) => PortageVersionSet::from_operator(op, spec.glob, v.clone()),
+            (Some(op), Some(v)) => {
+                PortageVersionSet::from_operator_among(op, spec.glob, v.clone(), || {
+                    let nodes = self.packages_for_cpn(&spec.cpn);
+                    nodes
+                        .iter()
+                        .flat_map(|p| self.versions_for_pkg(p))
+                        .collect::<Vec<_>>()
+                })
+            }
             _ => PortageVersionSet::any(),
         };
         match spec.slot {
