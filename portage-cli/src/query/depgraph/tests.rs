@@ -38,6 +38,7 @@ struct Solve<'a> {
     onlydeps: bool,
     update: bool,
     deep: bool,
+    with_bdeps: bool,
     complete_graph: bool,
     exclude: &'a [String],
     resume: HashSet<(MergeRoot, String)>,
@@ -53,6 +54,7 @@ impl<'a> Solve<'a> {
             onlydeps: false,
             update: false,
             deep: false,
+            with_bdeps: false,
             complete_graph: false,
             exclude: &[],
             resume: HashSet::new(),
@@ -193,7 +195,7 @@ fn try_solve(fix: &Fix, opts: Solve<'_>) -> anyhow::Result<super::DepgraphOutcom
         roots: &fix.roots,
         host_merge_root: &fix.root,
         onlydeps: opts.onlydeps,
-        with_bdeps: false,
+        with_bdeps: opts.with_bdeps,
         root_deps_rdeps: false,
         deep: opts.deep,
         update: opts.update,
@@ -501,6 +503,24 @@ fn complete_graph_pulls_the_installed_package_whose_pin_the_update_breaks() {
         .position(|n| n == "app-misc/consumer-2")
         .unwrap_or_else(|| panic!("plan was {planned:?}"));
     assert!(bar < consumer, "plan was {planned:?}");
+}
+
+#[test]
+fn complete_graph_keeps_the_pulled_in_package_through_the_build_dep_trim() {
+    let fix = fixture(&pinned_consumer(), &[]);
+    plant_vdb(&fix.root, "app-misc/bar-1");
+    plant_vdb_rdepend(&fix.root, "app-misc/consumer-1", Some("<app-misc/bar-2"));
+    let atoms = [TargetAtom::explicit("app-misc/bar")];
+
+    let mut repair = Solve::new(&atoms);
+    repair.update = true;
+    repair.with_bdeps = true;
+    repair.complete_graph = true;
+    let planned = names(&solve(&fix, repair));
+    assert!(
+        planned.iter().any(|n| n == "app-misc/consumer-2"),
+        "plan was {planned:?}"
+    );
 }
 
 #[test]

@@ -678,11 +678,18 @@ pub(super) fn solve_round(
     );
     let mut order = filtered_order;
 
+    // Repair rounds add kept installed packages as targets; they are not
+    // command-line roots but must not be trimmed as unneeded build tools.
+    let solve_cpns: HashSet<Cpn> = root_cpns
+        .iter()
+        .copied()
+        .chain(targets.iter().map(|(pkg, _)| *pkg.cpn()))
+        .collect();
     let trim_ctx = bdepend_trim::TrimCtx {
         broot_snapshot,
         data,
         policy: final_policy,
-        root_cpns,
+        root_cpns: &solve_cpns,
         reinstall_cpns: &reinstall_cpns,
     };
     if host_config_stage {
