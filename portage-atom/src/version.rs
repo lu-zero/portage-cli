@@ -419,13 +419,16 @@ impl Version {
 
     /// Whether this version matches a glob pattern (PMS 8.3.1 `=V*`).
     ///
-    /// Compares only the numeric components the pattern has, as components, so
-    /// `1.010.5` matches `1.01*`. A shorter candidate does not. A pattern letter,
-    /// suffix prefix, or non-zero revision must match; further components still do.
+    /// The pattern's components must equal the candidate's in the same positions,
+    /// compared as components, so `1.010.5` matches `1.01*`. Anything may follow
+    /// the last one. A letter, suffix, or non-zero revision ends the numeric part,
+    /// so `1.0.1-r1` is not a `1.0-r1*` match.
     pub fn glob_matches(&self, pattern: &Version) -> bool {
         let n = pattern.numbers.len().max(pattern.digits.len());
         let cand_n = self.numbers.len().max(self.digits.len());
-        if cand_n < n {
+        let has_rev = pattern.revision.0 != 0;
+        let has_tail = pattern.letter.is_some() || !pattern.suffixes.is_empty() || has_rev;
+        if cand_n < n || (has_tail && cand_n != n) {
             return false;
         }
         for i in 0..n {
@@ -439,12 +442,12 @@ impl Version {
                 return false;
             }
         }
-        if let Some(pattern_letter) = pattern.letter
-            && self.letter.unwrap_or('\0') != pattern_letter
-        {
+        if has_tail && self.letter != pattern.letter {
             return false;
         }
-        if pattern.suffixes.len() > self.suffixes.len() {
+        if pattern.suffixes.len() > self.suffixes.len()
+            || (has_rev && pattern.suffixes.len() != self.suffixes.len())
+        {
             return false;
         }
         for (cand, pat) in self.suffixes.iter().zip(&pattern.suffixes) {
@@ -1223,7 +1226,8 @@ mod tests {
         assert!(Version::parse("262_rc1").unwrap().glob_matches(&rc1));
         assert!(Version::parse("262_rc1-r3").unwrap().glob_matches(&rc1));
         assert!(Version::parse("262_rc1_p2").unwrap().glob_matches(&rc1));
-        assert!(Version::parse("262.1_rc1").unwrap().glob_matches(&rc1));
+        assert!(!Version::parse("262.1_rc1").unwrap().glob_matches(&rc1));
+        assert!(!Version::parse("262a_rc1").unwrap().glob_matches(&rc1));
         assert!(!Version::parse("262").unwrap().glob_matches(&rc1));
         assert!(!Version::parse("262_rc2").unwrap().glob_matches(&rc1));
         // Absent suffix number is 0, so `_rc` is `_rc0`, not a prefix of `_rc1`.
@@ -1236,9 +1240,25 @@ mod tests {
 
         let rev = Version::parse("1.0-r1").unwrap();
         assert!(Version::parse("1.0-r1").unwrap().glob_matches(&rev));
-        assert!(Version::parse("1.0.1-r1").unwrap().glob_matches(&rev));
+        assert!(!Version::parse("1.0.1-r1").unwrap().glob_matches(&rev));
+        assert!(!Version::parse("1.0a-r1").unwrap().glob_matches(&rev));
+        assert!(!Version::parse("1.0_p1-r1").unwrap().glob_matches(&rev));
         assert!(!Version::parse("1.0-r2").unwrap().glob_matches(&rev));
         assert!(!Version::parse("1.0").unwrap().glob_matches(&rev));
+
+        let letter = Version::parse("1.0a").unwrap();
+        assert!(Version::parse("1.0a").unwrap().glob_matches(&letter));
+        assert!(Version::parse("1.0a_p1-r2").unwrap().glob_matches(&letter));
+        assert!(!Version::parse("1.0.5a").unwrap().glob_matches(&letter));
+        assert!(!Version::parse("1.0b").unwrap().glob_matches(&letter));
+
+        // Without a letter, suffix or revision, more numbers may follow.
+        let plain = Version::parse("1.0").unwrap();
+        assert!(
+            Version::parse("1.0.5a_rc1-r1")
+                .unwrap()
+                .glob_matches(&plain)
+        );
         // `041` sits between `04` and `05`.
         assert!(
             !Version::parse("26.041")

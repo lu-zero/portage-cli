@@ -227,7 +227,6 @@ mod tests {
         assert!(!vs.contains(&Version::parse("262").unwrap()));
         assert!(!vs.contains(&Version::parse("262_rc2").unwrap()));
         assert!(!vs.contains(&Version::parse("262_rc").unwrap()));
-        // `262.1_rc1` matches the glob and sorts above `262`, outside this band.
         assert!(!vs.contains(&Version::parse("262.1_rc1").unwrap()));
     }
 
