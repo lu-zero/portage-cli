@@ -526,6 +526,18 @@ fn complete_graph_keeps_the_pulled_in_package_through_the_build_dep_trim() {
 }
 
 #[test]
+fn complete_graph_keeps_the_plan_when_the_broken_package_cannot_follow() {
+    let fix = fixture(&pinned_consumer()[..2], &[]);
+    plant_vdb(&fix.root, "app-misc/bar-1");
+    plant_vdb_rdepend(&fix.root, "app-misc/consumer-1", Some("<app-misc/bar-2"));
+    let atoms = [TargetAtom::explicit(">=app-misc/bar-2")];
+
+    let mut repair = Solve::new(&atoms);
+    repair.complete_graph = true;
+    assert_eq!(names(&solve(&fix, repair)), ["app-misc/bar-2"]);
+}
+
+#[test]
 fn complete_graph_without_update_keeps_the_installed_pin() {
     let fix = fixture(&pinned_consumer()[..2], &[]);
     plant_vdb(&fix.root, "app-misc/bar-1");

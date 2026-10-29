@@ -207,7 +207,7 @@ pub(super) fn report_repairs(pulled_in: &[Cpn], held_back: &[super::HeldBack], i
     if !incomplete.is_empty() {
         writeln!(
             out,
-            "\n{C_OFF}!!!{C_OFF:#} Could not re-solve with {} to fix their broken dependencies",
+            "\n{C_OFF}!!!{C_OFF:#} Re-solving with {} as a target failed; the conflicts above remain",
             names(incomplete)
         )
         .ok();

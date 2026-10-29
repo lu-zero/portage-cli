@@ -1,6 +1,7 @@
 mod assemble;
 mod autounmask;
 mod prepare;
+mod provider_cache;
 mod round;
 
 #[cfg(test)]
@@ -398,6 +399,7 @@ fn resolve(
     } else {
         &prepared.target_installed_cpvs
     };
+    let providers = provider_cache::ProviderCache::default();
     let round_ctx = round::RoundCtx {
         data: &prepared.data,
         accept_keywords: target_policy.accept_keywords,
@@ -450,6 +452,7 @@ fn resolve(
         host_config_stage: prepared.host_config_stage,
         autounmask_widen: prepared.autounmask_widen,
         use_reinstall_mode: prepared.use_reinstall_mode,
+        providers: &providers,
     };
     let root_deps = &prepared.root_deps;
     let complete_graph = prepared.complete_graph;
@@ -501,6 +504,7 @@ fn resolve(
             let mut next_targets = solve_targets.clone();
             next_targets.extend(candidates.iter().cloned());
             metrics.solve_rounds += 1;
+            providers.put(outcome.provider_key, outcome.provider);
             match round::solve_round(&round_ctx, next_targets.clone()) {
                 Ok(next) => {
                     metrics.merge(&next.round_metrics);
@@ -509,10 +513,10 @@ fn resolve(
                     outcome = next;
                 }
                 Err(_) => {
-                    // Discard this round; keep the last good outcome rather than
-                    // turning an advisory chain-completion attempt into a hard
-                    // resolution failure.
+                    // Fall back to the last good targets rather than turning an advisory
+                    // repair into a hard failure; their provider is cached, so only the solve reruns.
                     repair_incomplete.extend(candidates.iter().map(|(pkg, _)| *pkg.cpn()));
+                    outcome = round::solve_round(&round_ctx, solve_targets.clone())?;
                     break;
                 }
             }

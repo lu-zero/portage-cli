@@ -16,6 +16,7 @@ use portage_resolve::{
     subslot,
 };
 
+use super::provider_cache::{ProviderCache, ProviderKey};
 use super::{
     ResolveMetrics, apply_order_filters, best_rebuild_version, package_needs_use_reinstall,
     package_use, target_conflicts, widened_autounmask_candidates,
@@ -78,10 +79,12 @@ pub(super) struct RoundCtx<'a> {
     pub(super) host_config_stage: bool,
     pub(super) autounmask_widen: bool,
     pub(super) use_reinstall_mode: Option<portage_resolve::use_reinstall::UseReinstallMode>,
+    pub(super) providers: &'a ProviderCache,
 }
 
 /// One co-solve fixpoint plus its final solve, at the current widened setting.
 type SolveAttempt = anyhow::Result<(
+    ProviderKey,
     PortageDependencyProvider,
     pubgrub::SelectedDependencies<PortagePackage, Version>,
     Vec<(Dep, Vec<UseOverride>)>,
@@ -94,6 +97,7 @@ type SolveAttempt = anyhow::Result<(
 /// attempt. Nothing is printed until the caller settles on a round.
 pub(super) struct RoundOutcome {
     pub(super) provider: PortageDependencyProvider,
+    pub(super) provider_key: ProviderKey,
     pub(super) solution: pubgrub::SelectedDependencies<PortagePackage, Version>,
     pub(super) order: Vec<(PortagePackage, Version)>,
     pub(super) edges: Vec<DepEdge>,
@@ -182,6 +186,7 @@ pub(super) fn solve_round(
         host_config_stage,
         autounmask_widen,
         use_reinstall_mode,
+        providers,
     } = *ctx;
 
     let mut round_metrics = ResolveMetrics::default();
@@ -190,36 +195,6 @@ pub(super) fn solve_round(
     // non-crossdev resolve byte-identical.
     let widened = std::cell::Cell::new(false);
     let build_and_solve = |autosolve_use: bool, pkg_use: &[(Dep, Vec<UseOverride>)]| {
-        let adapter = repo::Adapter {
-            data,
-            accept_keywords,
-            package_mask,
-            package_unmask,
-            accept_licenses,
-            accept_properties,
-            accept_restrict,
-            defaults,
-            conf,
-            env_use,
-            package_use: pkg_use,
-            profile_package_use,
-            force_mask,
-            facts: Some(policy_facts.generation_for(pkg_use)),
-            installed_cpvs: solver_installed_cpvs,
-            rebuilding_cpvs: rebuilding_installed_cpvs,
-            autosolve_use,
-            autounmask_widen: widened.get(),
-        };
-        let slot_map_ref: &SlotMap = if widened.get() {
-            widened_slot_map
-                .as_ref()
-                .expect("widened phase without a widened slot map")
-        } else {
-            slot_map
-        };
-        // Outlives `adapter` (it borrows the same run-scoped refs, including
-        // this iteration's `pkg_use`), so it stays usable after the move below.
-        let iteration_policy = adapter.policy();
         // Closure-seeded ingestion: only packages reachable from the targets
         // and the installed set get converted (a few hundred for a typical
         // resolve), instead of the whole tree — this is what makes the
@@ -236,179 +211,222 @@ pub(super) fn solve_round(
         // can be registered as installed below — unconditional, unlike the
         // target_installed seeding above: emptytree only affects VDB selection.
         seeds.extend(provided.iter().map(|cpv| cpv.cpn));
-        // Kept installs reduce deps with VDB USE. Rebuilds, `--emptytree`,
-        // and USE the co-solve fixpoint forces this iteration stay on
-        // today's desired USE.
-        let mut installed = installed_versions(
-            target_installed,
-            pkg_use.get(package_use.len()..).unwrap_or(&[]),
-            rebuilding_installed_cpvs,
-            emptytree_native,
-            |e, pkg| {
-                use_reinstall_mode.is_some_and(|mode| {
-                    package_needs_use_reinstall(mode, e, pkg, data, &iteration_policy)
-                })
-            },
-        );
-        for (cpv, slot) in provided_avail {
-            let slot = slot.as_deref().map(Interned::intern);
-            installed
-                .entry(cpv.cpn)
-                .or_default()
-                .push(InstalledVersion {
-                    version: cpv.version.clone(),
-                    built_use: portage_atom_pubgrub::UseConfig::new(),
-                    kept: false,
-                    meta: recorded_meta(slot, PackageDeps::default(), Vec::new(), false),
-                });
-        }
-        let provider_start = Instant::now();
-        let mut provider = PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map(
-            portage_atom_pubgrub::WithInstalled {
-                inner: adapter,
-                installed,
-            },
-            seeds,
-            solve_with_bdeps,
-            slot_map_ref,
-        );
-        tracing::debug!(
-            elapsed_ms = provider_start.elapsed().as_secs_f64() * 1000.0,
-            "provider build"
-        );
-        provider.set_cross_active(cross.active);
-        provider.set_is_cross_arch(cross.is_cross_arch());
-        // crossdev `--root-deps=rdeps`: caller-supplied (see `DepgraphOpts::
-        // root_deps_rdeps`) — a property of which operation is running, not of
-        // the sysroot's CHOST/CBUILD.
-        provider.set_root_deps_rdeps(root_deps_rdeps);
-        for (package, versions, use_deps, label) in root_use_deps {
-            let credit = format!("{label} (argument)");
-            provider.add_root_use_deps(
-                package.clone(),
-                versions.clone(),
-                use_deps.clone(),
-                &credit,
-            );
-        }
-        provider.set_nodeps(nodeps);
-        provider.set_rebuild_tree(emptytree_native);
-        // `--deep` and native emptytree bump `:*` deps to the newest slot.
-        provider.set_prefer_newest_slot(deep || emptytree_native);
-        // `-uD`: in-slot upgrades for the whole solve (not emptytree Rebuild).
-        // Also the path that re-opens host-satisfied build edges so deep tools
-        // can upgrade/rebuild; `-N` alone must not do that (Portage parity).
-        provider.set_prefer_update(update && deep && !emptytree_native);
-        provider.set_kept_build_deps(solve_with_bdeps && deep);
-        // `-n`/`-N`/`-U` without `-u`: a root target an installed version
-        // already satisfies keeps that version instead of taking the newest.
-        provider.set_selective_no_update(selective && !update);
-        for (pkg, version) in sysroot_installed {
-            provider.add_sysroot_installed(pkg.clone(), version.clone());
-        }
-        for (e, blockers) in target_installed.iter().zip(installed_blockers) {
-            let pkg = match e.slot.filter(|s| !s.is_empty()) {
-                Some(s) => PortagePackage::slotted(e.cpn, s),
-                None => PortagePackage::unslotted(e.cpn),
-            };
-            provider.add_installed_blockers(&pkg, blockers);
-            let policy = if emptytree_native {
-                InstalledPolicy::Rebuild
-            } else if let Some(mode) = use_reinstall_mode {
-                // Compare VDB USE/IUSE to the planned fold for this CPV.
-                // Rebuild ⇒ no Favor + full build-dep expansion when selected.
-                if package_needs_use_reinstall(mode, e, &pkg, data, &iteration_policy) {
-                    InstalledPolicy::Rebuild
-                } else {
-                    InstalledPolicy::Favor
-                }
-            } else {
-                InstalledPolicy::Favor
-            };
-            provider.add_installed(SolverInstalledPackage {
-                package: pkg,
-                version: e.version.clone(),
-                policy,
-                active_use: e.active_use.clone(),
-                iuse: e.iuse.clone(),
-            });
-        }
-        // `package.provided`: CPVs the system supplies externally. Registered as
-        // an ordinary installed/Favor package (not a separate edge filter), so a
-        // dependency edge is satisfied normally (version-range-checked) and an
-        // explicit target naming a provided CPN still gets solved/built via the
-        // existing root_pkgs reinstall check below — same as any installed pkg.
-        // Skipped when a real VDB entry already covers the same (cpn, slot): once
-        // genuinely built, the real entry wins on every later resolve for free.
-        let target_installed_keys: HashSet<(Cpn, Option<String>)> = target_installed
-            .iter()
-            .map(|e| (e.cpn, e.slot.map(|s| s.to_string())))
-            .collect();
-        // A `package.provided` CPV is supplied by the *system*, so it is present
-        // on the build host (BROOT) too: seed it as host-installed so BDEPEND on
-        // it (e.g. a build tool needing the interpreter) is satisfied without
-        // resolving a repo version onto @host — otherwise a slot the repo can't
-        // build (python:3.14 on arm64-macos) would be pulled to the newest
-        // available (python-3.15.9999), conflicting with the provided slot.
-        for (cpv, slot) in provided_avail {
-            let pkg = match slot {
-                Some(s) => PortagePackage::slotted(cpv.cpn, Interned::intern(s)),
-                None => PortagePackage::unslotted(cpv.cpn),
-            };
-            if !target_installed_keys.contains(&(cpv.cpn, slot.clone())) {
-                let (active_use, iuse) = match repo::find_cache(data, &pkg, &cpv.version) {
-                    Some(cache) => {
-                        use portage_atom_pubgrub::UseFlagState;
-                        let cfg = effective_use::effective_use(
-                            &iteration_policy,
-                            &pkg,
-                            &cpv.version,
-                            cache,
-                            true,
-                            &[],
-                        );
-                        let iuse = effective_use::iuse_set(
-                            cache,
-                            &iteration_policy.force_mask.iuse_injection,
-                        );
-                        let active = iuse
-                            .iter()
-                            .copied()
-                            .filter(|f| matches!(cfg.get(*f), UseFlagState::Enabled))
-                            .collect();
-                        (active, iuse.into_iter().collect())
-                    }
-                    None => (Vec::new(), Vec::new()),
+        let key = ProviderKey {
+            package_use: pkg_use.to_vec(),
+            autosolve_use,
+            widened: widened.get(),
+            seeds: seeds.iter().copied().collect(),
+        };
+        let mut provider = match providers.take(&key) {
+            Some(provider) => provider,
+            None => {
+                let adapter = repo::Adapter {
+                    data,
+                    accept_keywords,
+                    package_mask,
+                    package_unmask,
+                    accept_licenses,
+                    accept_properties,
+                    accept_restrict,
+                    defaults,
+                    conf,
+                    env_use,
+                    package_use: pkg_use,
+                    profile_package_use,
+                    force_mask,
+                    facts: Some(policy_facts.generation_for(pkg_use)),
+                    installed_cpvs: solver_installed_cpvs,
+                    rebuilding_cpvs: rebuilding_installed_cpvs,
+                    autosolve_use,
+                    autounmask_widen: widened.get(),
                 };
-                provider.add_installed(SolverInstalledPackage {
-                    package: pkg.clone(),
-                    version: cpv.version.clone(),
-                    policy: InstalledPolicy::Provided,
-                    active_use,
-                    iuse,
-                });
+                let slot_map_ref: &SlotMap = if widened.get() {
+                    widened_slot_map
+                        .as_ref()
+                        .expect("widened phase without a widened slot map")
+                } else {
+                    slot_map
+                };
+                // Outlives `adapter` (it borrows the same run-scoped refs, including
+                // this iteration's `pkg_use`), so it stays usable after the move below.
+                let iteration_policy = adapter.policy();
+                // Kept installs reduce deps with VDB USE. Rebuilds, `--emptytree`,
+                // and USE the co-solve fixpoint forces this iteration stay on
+                // today's desired USE.
+                let mut installed = installed_versions(
+                    target_installed,
+                    pkg_use.get(package_use.len()..).unwrap_or(&[]),
+                    rebuilding_installed_cpvs,
+                    emptytree_native,
+                    |e, pkg| {
+                        use_reinstall_mode.is_some_and(|mode| {
+                            package_needs_use_reinstall(mode, e, pkg, data, &iteration_policy)
+                        })
+                    },
+                );
+                for (cpv, slot) in provided_avail {
+                    let slot = slot.as_deref().map(Interned::intern);
+                    installed
+                        .entry(cpv.cpn)
+                        .or_default()
+                        .push(InstalledVersion {
+                            version: cpv.version.clone(),
+                            built_use: portage_atom_pubgrub::UseConfig::new(),
+                            kept: false,
+                            meta: recorded_meta(slot, PackageDeps::default(), Vec::new(), false),
+                        });
+                }
+                let provider_start = Instant::now();
+                let mut provider =
+                    PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map(
+                        portage_atom_pubgrub::WithInstalled {
+                            inner: adapter,
+                            installed,
+                        },
+                        seeds,
+                        solve_with_bdeps,
+                        slot_map_ref,
+                    );
+                tracing::debug!(
+                    elapsed_ms = provider_start.elapsed().as_secs_f64() * 1000.0,
+                    "provider build"
+                );
+                provider.set_cross_active(cross.active);
+                provider.set_is_cross_arch(cross.is_cross_arch());
+                // crossdev `--root-deps=rdeps`: caller-supplied (see `DepgraphOpts::
+                // root_deps_rdeps`) — a property of which operation is running, not of
+                // the sysroot's CHOST/CBUILD.
+                provider.set_root_deps_rdeps(root_deps_rdeps);
+                for (package, versions, use_deps, label) in root_use_deps {
+                    let credit = format!("{label} (argument)");
+                    provider.add_root_use_deps(
+                        package.clone(),
+                        versions.clone(),
+                        use_deps.clone(),
+                        &credit,
+                    );
+                }
+                provider.set_nodeps(nodeps);
+                provider.set_rebuild_tree(emptytree_native);
+                // `--deep` and native emptytree bump `:*` deps to the newest slot.
+                provider.set_prefer_newest_slot(deep || emptytree_native);
+                // `-uD`: in-slot upgrades for the whole solve (not emptytree Rebuild).
+                // Also the path that re-opens host-satisfied build edges so deep tools
+                // can upgrade/rebuild; `-N` alone must not do that (Portage parity).
+                provider.set_prefer_update(update && deep && !emptytree_native);
+                provider.set_kept_build_deps(solve_with_bdeps && deep);
+                // `-n`/`-N`/`-U` without `-u`: a root target an installed version
+                // already satisfies keeps that version instead of taking the newest.
+                provider.set_selective_no_update(selective && !update);
+                for (pkg, version) in sysroot_installed {
+                    provider.add_sysroot_installed(pkg.clone(), version.clone());
+                }
+                for (e, blockers) in target_installed.iter().zip(installed_blockers) {
+                    let pkg = match e.slot.filter(|s| !s.is_empty()) {
+                        Some(s) => PortagePackage::slotted(e.cpn, s),
+                        None => PortagePackage::unslotted(e.cpn),
+                    };
+                    provider.add_installed_blockers(&pkg, blockers);
+                    let policy = if emptytree_native {
+                        InstalledPolicy::Rebuild
+                    } else if let Some(mode) = use_reinstall_mode {
+                        // Compare VDB USE/IUSE to the planned fold for this CPV.
+                        // Rebuild ⇒ no Favor + full build-dep expansion when selected.
+                        if package_needs_use_reinstall(mode, e, &pkg, data, &iteration_policy) {
+                            InstalledPolicy::Rebuild
+                        } else {
+                            InstalledPolicy::Favor
+                        }
+                    } else {
+                        InstalledPolicy::Favor
+                    };
+                    provider.add_installed(SolverInstalledPackage {
+                        package: pkg,
+                        version: e.version.clone(),
+                        policy,
+                        active_use: e.active_use.clone(),
+                        iuse: e.iuse.clone(),
+                    });
+                }
+                // `package.provided`: CPVs the system supplies externally. Registered as
+                // an ordinary installed/Favor package (not a separate edge filter), so a
+                // dependency edge is satisfied normally (version-range-checked) and an
+                // explicit target naming a provided CPN still gets solved/built via the
+                // existing root_pkgs reinstall check below — same as any installed pkg.
+                // Skipped when a real VDB entry already covers the same (cpn, slot): once
+                // genuinely built, the real entry wins on every later resolve for free.
+                let target_installed_keys: HashSet<(Cpn, Option<String>)> = target_installed
+                    .iter()
+                    .map(|e| (e.cpn, e.slot.map(|s| s.to_string())))
+                    .collect();
+                // A `package.provided` CPV is supplied by the *system*, so it is present
+                // on the build host (BROOT) too: seed it as host-installed so BDEPEND on
+                // it (e.g. a build tool needing the interpreter) is satisfied without
+                // resolving a repo version onto @host — otherwise a slot the repo can't
+                // build (python:3.14 on arm64-macos) would be pulled to the newest
+                // available (python-3.15.9999), conflicting with the provided slot.
+                for (cpv, slot) in provided_avail {
+                    let pkg = match slot {
+                        Some(s) => PortagePackage::slotted(cpv.cpn, Interned::intern(s)),
+                        None => PortagePackage::unslotted(cpv.cpn),
+                    };
+                    if !target_installed_keys.contains(&(cpv.cpn, slot.clone())) {
+                        let (active_use, iuse) = match repo::find_cache(data, &pkg, &cpv.version) {
+                            Some(cache) => {
+                                use portage_atom_pubgrub::UseFlagState;
+                                let cfg = effective_use::effective_use(
+                                    &iteration_policy,
+                                    &pkg,
+                                    &cpv.version,
+                                    cache,
+                                    true,
+                                    &[],
+                                );
+                                let iuse = effective_use::iuse_set(
+                                    cache,
+                                    &iteration_policy.force_mask.iuse_injection,
+                                );
+                                let active = iuse
+                                    .iter()
+                                    .copied()
+                                    .filter(|f| matches!(cfg.get(*f), UseFlagState::Enabled))
+                                    .collect();
+                                (active, iuse.into_iter().collect())
+                            }
+                            None => (Vec::new(), Vec::new()),
+                        };
+                        provider.add_installed(SolverInstalledPackage {
+                            package: pkg.clone(),
+                            version: cpv.version.clone(),
+                            policy: InstalledPolicy::Provided,
+                            active_use,
+                            iuse,
+                        });
+                    }
+                    provider.add_host_installed(pkg, cpv.version.clone(), Vec::new(), Vec::new());
+                }
+                // BROOT (the host) provides build tools: a BDEPEND already present there
+                // is satisfied without building it into the plan — unless a USE-dep on
+                // that edge demands a flag the host lacks, in which case the package is
+                // rebuilt (the host entry carries USE/IUSE for that check).
+                for e in host_installed {
+                    provider.add_host_installed(
+                        e.package.clone(),
+                        e.version.clone(),
+                        e.active_use.clone(),
+                        e.iuse.clone(),
+                    );
+                }
+                provider
             }
-            provider.add_host_installed(pkg, cpv.version.clone(), Vec::new(), Vec::new());
-        }
-        // BROOT (the host) provides build tools: a BDEPEND already present there
-        // is satisfied without building it into the plan — unless a USE-dep on
-        // that edge demands a flag the host lacks, in which case the package is
-        // rebuilt (the host entry carries USE/IUSE for that check).
-        for e in host_installed {
-            provider.add_host_installed(
-                e.package.clone(),
-                e.version.clone(),
-                e.active_use.clone(),
-                e.iuse.clone(),
-            );
-        }
+        };
         let resolve_start = Instant::now();
         let result = provider.resolve_targets(targets.clone());
         tracing::debug!(
             elapsed_ms = resolve_start.elapsed().as_secs_f64() * 1000.0,
             "solver resolve"
         );
-        (provider, result)
+        (key, provider, result)
     };
 
     // Auto-apply cross-package `[flag]` USE-deps by forcing the demanded flags
@@ -432,18 +450,24 @@ pub(super) fn solve_round(
             package_use.clone(),
             data,
             |pu| {
-                let (provider, result) = build_and_solve(autosolve_use, pu);
-                result.ok().map(|sol| (provider, sol))
+                let (key, provider, result) = build_and_solve(autosolve_use, pu);
+                match result {
+                    Ok(sol) => Some((key, provider, sol)),
+                    Err(_) => {
+                        providers.put(key, provider);
+                        None
+                    }
+                }
             },
-            |(provider, _)| provider.use_flag_requirements().to_vec(),
+            |(_, provider, _)| provider.use_flag_requirements().to_vec(),
         );
 
-        let (provider, solution) = match solved {
+        let (key, provider, solution) = match solved {
             Some(solved) => solved,
             None => {
-                let (provider, result) = build_and_solve(autosolve_use, &pu);
+                let (key, provider, result) = build_and_solve(autosolve_use, &pu);
                 match result {
-                    Ok(sol) => (provider, sol),
+                    Ok(sol) => (key, provider, sol),
                     Err(_) if autosolve_use => {
                         // REQUIRED_USE could not be auto-satisfied; fall back to a
                         // fixed-USE solve so the plan + Level-A advisory still appear.
@@ -451,14 +475,15 @@ pub(super) fn solve_round(
                             "--autosolve-use could not satisfy REQUIRED_USE; \
                          falling back to a fixed-USE plan.",
                         );
-                        let (provider, result) = build_and_solve(false, &pu);
+                        providers.put(key, provider);
+                        let (key, provider, result) = build_and_solve(false, &pu);
                         let sol = result.map_err(|e2| {
                             crate::error::ResolveFailed(format!(
                                 "resolution failed:\n{}",
                                 portage_atom_pubgrub::format_solve_error(e2)
                             ))
                         })?;
-                        (provider, sol)
+                        (key, provider, sol)
                     }
                     Err(e) => {
                         return Err(crate::error::ResolveFailed(format!(
@@ -470,10 +495,10 @@ pub(super) fn solve_round(
                 }
             }
         };
-        Ok((provider, solution, pu, applied_reqs))
+        Ok((key, provider, solution, pu, applied_reqs))
     };
 
-    let (provider, solution, package_use, applied_reqs) = match attempt_solve() {
+    let (provider_key, provider, solution, package_use, applied_reqs) = match attempt_solve() {
         Ok(outcome) => {
             // A strict solve can still be degraded: hard deps whose
             // every version was acceptance-filtered are dropped at
@@ -484,7 +509,7 @@ pub(super) fn solve_round(
             // own dropped list keeps the exact-pin advisories.
             if autounmask_widen
                 && !widened.get()
-                && repo::has_widening_eligible_drops(outcome.0.dropped_deps(), data)
+                && repo::has_widening_eligible_drops(outcome.1.dropped_deps(), data)
             {
                 widened.set(true);
                 tracing::debug!(
@@ -859,6 +884,7 @@ pub(super) fn solve_round(
 
     Ok(RoundOutcome {
         provider,
+        provider_key,
         solution,
         order,
         edges,

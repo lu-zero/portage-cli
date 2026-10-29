@@ -95,6 +95,7 @@ pub(super) fn assemble(
         exclude_omitted,
         resume_omitted,
         round_metrics: _,
+        provider_key: _,
     } = outcome;
 
     if exclude_omitted > 0 {
