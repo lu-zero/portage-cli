@@ -4015,10 +4015,7 @@ fn solve_kept_curl(policy: InstalledPolicy, kept_use: bool) -> Option<Version> {
         },
     );
     // VDB USE: built without http2.
-    let installed = crate::repository::InstalledVersion {
-        version: curl_cpv.version,
-        kept_use: kept_use.then(UseConfig::new),
-    };
+    let installed = installed_version("8.0", None, kept_use, "");
     let mut provider = PortageDependencyProvider::new(crate::repository::WithInstalled {
         inner: repo,
         installed: HashMap::from([(curl_cpv.cpn, vec![installed])]),
@@ -4114,10 +4111,7 @@ fn glob_dep_skips_an_installed_only_version_that_does_not_match() {
         },
     );
     // 3.01 is installed but the repository no longer offers it.
-    let installed = crate::repository::InstalledVersion {
-        version: Version::parse("3.01").unwrap(),
-        kept_use: None,
-    };
+    let installed = installed_version("3.01", Some("0"), true, "");
     let mut provider = PortageDependencyProvider::new(crate::repository::WithInstalled {
         inner: repo,
         installed: HashMap::from([(nasm_cpn, vec![installed.clone()])]),
@@ -4135,4 +4129,73 @@ fn glob_dep_skips_an_installed_only_version_that_does_not_match() {
         .resolve_targets(vec![(foo, PortageVersionSet::any())])
         .unwrap();
     assert_eq!(solution.get(&nasm), Some(&Version::parse("3.0").unwrap()));
+}
+
+fn installed_version(
+    version: &str,
+    slot: Option<&str>,
+    kept: bool,
+    rdepend: &str,
+) -> crate::repository::InstalledVersion {
+    crate::repository::InstalledVersion {
+        version: Version::parse(version).unwrap(),
+        built_use: UseConfig::new(),
+        kept,
+        meta: crate::repository::PackageVersions {
+            slot: slot.map(Interned::intern),
+            subslot: None,
+            repo: None,
+            iuse: Vec::new(),
+            iuse_defaults: HashMap::new(),
+            deps: PackageDeps {
+                rdepend: DepEntry::parse(rdepend).unwrap().into(),
+                ..empty_deps()
+            },
+            required_use: None,
+            empty_any_of_matches: false,
+            needs_unmask: false,
+            live: false,
+        },
+    }
+}
+
+#[test]
+fn installed_only_version_keeps_its_recorded_deps() {
+    let mut repo = InMemoryRepository::new();
+    for v in ["1", "2"] {
+        let cpv = portage_atom::Cpv::parse(&format!("test/lib-{v}")).unwrap();
+        repo.add_version(cpv, Some(Interned::intern("0")), None, empty_deps());
+    }
+    // app-1 is installed, but the repository has no ebuild for it at all.
+    let app_cpn = Cpn::parse("test/app").unwrap();
+    let slot_map = build_slot_map(&repo);
+    let mut provider = PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map(
+        crate::repository::WithInstalled {
+            inner: repo,
+            installed: HashMap::from([(
+                app_cpn,
+                vec![installed_version("1", Some("0"), true, "<test/lib-2")],
+            )]),
+        },
+        vec![app_cpn, Cpn::parse("test/lib").unwrap()],
+        false,
+        &slot_map,
+    );
+    let app = PortagePackage::slotted(app_cpn, Interned::intern("0"));
+    let lib = PortagePackage::slotted(Cpn::parse("test/lib").unwrap(), Interned::intern("0"));
+    provider.add_installed(InstalledPackage {
+        package: app.clone(),
+        version: Version::parse("1").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+    let solution = provider
+        .resolve_targets(vec![
+            (lib.clone(), PortageVersionSet::any()),
+            (app.clone(), PortageVersionSet::any()),
+        ])
+        .unwrap();
+    assert_eq!(solution.get(&app), Some(&Version::parse("1").unwrap()));
+    assert_eq!(solution.get(&lib), Some(&Version::parse("1").unwrap()));
 }

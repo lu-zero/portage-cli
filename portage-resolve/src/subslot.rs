@@ -78,7 +78,7 @@ pub fn find_rebuilds(
             continue;
         }
         let active: HashSet<Interned<DefaultInterner>> = entry.active_use.iter().copied().collect();
-        let evaluated = DepEntry::evaluate_use(&entry.deps, &active);
+        let evaluated = entry.evaluated_deps(&active);
         let mut atoms = Vec::new();
         collect_bound_atoms(&evaluated, &mut atoms);
 
@@ -126,6 +126,7 @@ pub fn find_rebuilds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_atom_pubgrub::PackageDeps;
 
     fn vdb(cpn: &str, ver: &str, deps: &str) -> VdbEntry {
         VdbEntry {
@@ -135,7 +136,10 @@ mod tests {
             active_use: Vec::new(),
             iuse: Vec::new(),
             eapi: portage_metadata::Eapi::Eight,
-            deps: DepEntry::parse(deps).unwrap(),
+            deps: PackageDeps {
+                rdepend: DepEntry::parse(deps).unwrap().into(),
+                ..PackageDeps::default()
+            },
         }
     }
 

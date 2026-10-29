@@ -4,12 +4,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
-use portage_atom::interner::Interned;
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
     CededFlag, DepEdge, InstalledPackage as SolverInstalledPackage, InstalledPolicy,
-    InstalledVersion, MergeRoot, PortageDependencyProvider, PortagePackage, PortageVersionSet,
-    SlotMap, UseFlagRequirement, UseOverride,
+    InstalledVersion, MergeRoot, PackageDeps, PackageVersions, PortageDependencyProvider,
+    PortagePackage, PortageVersionSet, SlotMap, UseFlagRequirement, UseOverride,
 };
 use portage_resolve::{
     bdepend_trim, conflicts, depend_trim, effective_use, installed, repo, root_aware, root_closure,
@@ -250,13 +250,16 @@ pub(super) fn solve_round(
                 })
             },
         );
-        for (cpv, _) in provided_avail {
+        for (cpv, slot) in provided_avail {
+            let slot = slot.as_deref().map(Interned::intern);
             installed
                 .entry(cpv.cpn)
                 .or_default()
                 .push(InstalledVersion {
                     version: cpv.version.clone(),
-                    kept_use: None,
+                    built_use: portage_atom_pubgrub::UseConfig::new(),
+                    kept: false,
+                    meta: recorded_meta(slot, PackageDeps::default(), Vec::new(), false),
                 });
         }
         let provider_start = Instant::now();
@@ -867,12 +870,11 @@ pub(super) fn solve_round(
     })
 }
 
-/// Installed versions per package, with the build-time USE of those that
-/// stay installed.
+/// Installed versions per package, as recorded in the VDB.
 ///
-/// No kept USE, and so reduced with today's desired USE: `rebuilding`,
-/// `use_rebuild`, packages in `forced_use`, and everything under
-/// `--emptytree`.
+/// Not kept, and so reduced with today's desired USE when the repository
+/// offers them: `rebuilding`, `use_rebuild`, packages in `forced_use`, and
+/// everything under `--emptytree`.
 fn installed_versions(
     target_installed: &[installed::VdbEntry],
     forced_use: &[(Dep, Vec<UseOverride>)],
@@ -881,36 +883,58 @@ fn installed_versions(
     use_rebuild: impl Fn(&installed::VdbEntry, &PortagePackage) -> bool,
 ) -> HashMap<Cpn, Vec<InstalledVersion>> {
     let forced: HashSet<Cpn> = forced_use.iter().map(|(dep, _)| dep.cpn).collect();
-    let kept_use = |e: &installed::VdbEntry| {
+    let kept = |e: &installed::VdbEntry| {
         if emptytree || forced.contains(&e.cpn) {
-            return None;
+            return false;
         }
         if rebuilding.contains(&Cpv::new(e.cpn, e.version.clone())) {
-            return None;
+            return false;
         }
         let pkg = match e.slot.filter(|s| !s.is_empty()) {
             Some(s) => PortagePackage::slotted(e.cpn, s),
             None => PortagePackage::unslotted(e.cpn),
         };
-        if use_rebuild(e, &pkg) {
-            return None;
-        }
-        // VDB `USE` lists every enabled flag, implicit ones (ARCH, ELIBC_*,
-        // KERNEL_*, ABI_*) included; anything it does not list was off.
-        let mut cfg = portage_atom_pubgrub::UseConfig::new();
-        for flag in &e.active_use {
-            cfg.enable(*flag);
-        }
-        Some(cfg)
+        !use_rebuild(e, &pkg)
     };
     let mut installed: HashMap<Cpn, Vec<InstalledVersion>> = HashMap::new();
     for e in target_installed {
+        // VDB `USE` lists every enabled flag, implicit ones (ARCH, ELIBC_*,
+        // KERNEL_*, ABI_*) included; anything it does not list was off.
+        let mut built_use = portage_atom_pubgrub::UseConfig::new();
+        for flag in &e.active_use {
+            built_use.enable(*flag);
+        }
+        let slot = e.slot.filter(|s| !s.is_empty());
+        let empty_any_of_matches = e.eapi.empty_any_of_matches();
         installed.entry(e.cpn).or_default().push(InstalledVersion {
             version: e.version.clone(),
-            kept_use: kept_use(e),
+            built_use,
+            kept: kept(e),
+            meta: recorded_meta(slot, e.deps.clone(), e.iuse.clone(), empty_any_of_matches),
         });
     }
     installed
+}
+
+/// Solver metadata for an installed version the repository may not offer
+fn recorded_meta(
+    slot: Option<Interned<DefaultInterner>>,
+    deps: PackageDeps,
+    iuse: Vec<Interned<DefaultInterner>>,
+    empty_any_of_matches: bool,
+) -> PackageVersions {
+    PackageVersions {
+        slot,
+        subslot: None,
+        repo: None,
+        iuse,
+        iuse_defaults: HashMap::new(),
+        deps,
+        required_use: None,
+        empty_any_of_matches,
+        needs_unmask: false,
+        live: false,
+    }
 }
 
 #[cfg(test)]
@@ -926,7 +950,7 @@ mod tests {
             active_use: active_use.iter().map(|f| Interned::intern(f)).collect(),
             iuse: Vec::new(),
             eapi: portage_metadata::Eapi::Eight,
-            deps: Vec::new(),
+            deps: PackageDeps::default(),
         }
     }
 
@@ -951,17 +975,18 @@ mod tests {
         let versions = installed_versions(&installed, &forced, &rebuilding, false, |e, _| {
             e.cpn == drifted
         });
-        assert_eq!(versions.len(), 4, "every install is listed: {versions:?}");
+        assert_eq!(versions.len(), 4, "every install is listed");
         let kept: Vec<&Cpn> = versions
             .iter()
-            .filter(|(_, v)| v[0].kept_use.is_some())
+            .filter(|(_, v)| v[0].kept)
             .map(|(cpn, _)| cpn)
             .collect();
-        assert_eq!(kept.len(), 1, "only curl stays installed: {kept:?}");
-        let curl = versions[&cpv("net-misc/curl-8.0").cpn][0]
-            .kept_use
-            .as_ref()
-            .expect("curl is kept");
+        assert_eq!(
+            kept,
+            [&cpv("net-misc/curl-8.0").cpn],
+            "only curl stays installed"
+        );
+        let curl = &versions[&cpv("net-misc/curl-8.0").cpn][0].built_use;
         assert_eq!(curl.get(Interned::intern("ssl")), UseFlagState::Enabled);
         assert_eq!(curl.get(Interned::intern("amd64")), UseFlagState::Enabled);
         // Not in VDB USE: built without it, whatever today's default says.
@@ -969,7 +994,7 @@ mod tests {
 
         let none = installed_versions(&installed, &[], &HashSet::new(), true, |_, _| false);
         assert!(
-            none.values().flatten().all(|v| v.kept_use.is_none()),
+            none.values().flatten().all(|v| !v.kept),
             "--emptytree rebuilds everything"
         );
     }

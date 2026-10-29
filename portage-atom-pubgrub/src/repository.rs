@@ -152,14 +152,18 @@ pub trait PackageRepository {
 }
 
 /// An installed version of a package, as provider construction reads it
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InstalledVersion {
     /// The installed version
     pub version: Version,
-    /// The USE it was built with, when it stays installed. `Some` reduces its
-    /// deps with this config instead of
-    /// [`desired_use`](PackageRepository::desired_use).
-    pub kept_use: Option<UseConfig>,
+    /// The USE it was built with
+    pub built_use: UseConfig,
+    /// It stays installed, so a repository copy of it is reduced with
+    /// `built_use` instead of [`desired_use`](PackageRepository::desired_use)
+    pub kept: bool,
+    /// The metadata recorded when it was installed, used when the repository
+    /// does not offer this version
+    pub meta: PackageVersions,
 }
 
 /// A [`PackageRepository`] view that adds the installed versions (see

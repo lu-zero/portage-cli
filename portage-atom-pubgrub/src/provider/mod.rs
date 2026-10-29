@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::repository::IUseDefault;
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpn, Dep, Version};
+use portage_atom::{Cpn, Cpv, Dep, Version};
 use pubgrub::{Dependencies, SelectedDependencies};
 
 use crate::convert;
@@ -533,8 +533,18 @@ impl PortageDependencyProvider {
             // version loop below, which previously re-formatted the same
             // string for every accepted version of this package.
             let cpn_str = format!("{}/{}", cpn.category, cpn.package);
+            // An installed version the repository does not offer is built from
+            // what was recorded at install time.
+            let installed_only: Vec<_> = installed
+                .iter()
+                .filter(|i| !versions_data.iter().any(|(c, _)| c.version == i.version))
+                .map(|i| (Cpv::new(cpn, i.version.clone()), i.meta.clone(), Some(i)))
+                .collect();
+            let offered = versions_data
+                .into_iter()
+                .map(|(cpv, meta)| (cpv, meta, None));
 
-            for (cpv, meta) in versions_data {
+            for (cpv, meta, recorded) in offered.chain(installed_only) {
                 let pkg = match &meta.slot {
                     Some(slot) => PortagePackage::slotted(cpn, *slot),
                     None => {
@@ -557,7 +567,10 @@ impl PortageDependencyProvider {
                 // The resolved desired USE for this version (caller's policy:
                 // package.use + global USE folded over IUSE defaults).  This is
                 // the single authoritative set every later reader consults.
-                let cpv_use_cfg = repo.desired_use(&cpv);
+                let cpv_use_cfg = match recorded {
+                    Some(i) => i.built_use.clone(),
+                    None => repo.desired_use(&cpv),
+                };
 
                 // Record the preferred value of every ceded (`SolverDecided`)
                 // flag so `choose_version` can bias its `UseDecision` node toward
@@ -579,9 +592,8 @@ impl PortageDependencyProvider {
                 // `-N`/`-U` and USE-dep checks.
                 let dep_use_cfg = installed
                     .iter()
-                    .find(|i| i.version == cpv.version)
-                    .and_then(|i| i.kept_use.as_ref())
-                    .unwrap_or(&cpv_use_cfg);
+                    .find(|i| i.kept && i.version == cpv.version)
+                    .map_or(&cpv_use_cfg, |i| &i.built_use);
 
                 let class_results: [convert::ConversionResult; 5] = dep_classes.map(|entries| {
                     let buildtime = matches!(class_idx, 0 | 2);
@@ -660,6 +672,7 @@ impl PortageDependencyProvider {
                 version_data.desired = cpv_use_cfg;
                 version_data.needs_unmask = meta.needs_unmask;
                 version_data.live = meta.live;
+                version_data.installed_only = recorded.is_some();
 
                 let entry = packages.entry(pkg).or_insert_with(|| PackageData {
                     versions: BTreeMap::new(),
@@ -823,13 +836,13 @@ impl PortageDependencyProvider {
     /// upgraded if a dependency requires it. **Locked** packages are pinned to
     /// their exact installed version.
     ///
-    /// If the installed version is not present in the repository (e.g. a
-    /// revbump superseded it, or an older version was removed), it's
-    /// registered with empty dependencies so PubGrub can select it — without
-    /// this, PubGrub would call `get_dependencies`, receive `Unavailable`,
-    /// and fall back to the newest repository version.
+    /// An installed version the repository does not offer (e.g. a revbump
+    /// superseded it) normally comes from
+    /// [`PackageRepository::installed_for`] with its recorded deps. Without
+    /// that it is registered here with empty dependencies so PubGrub can still
+    /// select it instead of falling back to the newest repository version.
     ///
-    /// Under `Favor` (non-update) `choose_version` keeps this installed stub
+    /// Under `Favor` (non-update) `choose_version` keeps this installed version
     /// when it satisfies the constraint, matching emerge (a revbump is not
     /// pulled without `--update`).
     pub fn add_installed(&mut self, installed: InstalledPackage) {

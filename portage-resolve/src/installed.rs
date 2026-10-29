@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use portage_atom::DepEntry;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Version};
-use portage_atom_pubgrub::DepClass;
+use portage_atom::{DepEntry, UseFlagLookup};
 use portage_atom_pubgrub::PortagePackage;
+use portage_atom_pubgrub::{DepClass, PackageDeps};
 use portage_metadata::Eapi;
 use portage_vdb::{InstalledPackage, Vdb};
 
@@ -35,8 +35,18 @@ pub struct VdbEntry {
     /// `Eapi::Zero` (narrowest injection) if the VDB's `EAPI` file is
     /// unreadable.
     pub eapi: Eapi,
-    /// RDEPEND + DEPEND as stored in the VDB (pre-USE evaluation)
-    pub deps: Vec<DepEntry>,
+    /// Dependencies as stored in the VDB (pre-USE evaluation)
+    pub deps: PackageDeps,
+}
+
+impl VdbEntry {
+    /// `RDEPEND` and `DEPEND` reduced with `active`, the classes the plan's
+    /// installed-package checks read
+    pub fn evaluated_deps<A: UseFlagLookup + ?Sized>(&self, active: &A) -> Vec<DepEntry> {
+        let mut evaluated = DepEntry::evaluate_use(&self.deps.rdepend, active);
+        evaluated.extend(DepEntry::evaluate_use(&self.deps.depend, active));
+        evaluated
+    }
 }
 
 /// One captured VDB root and its installed-package handles.
@@ -329,12 +339,16 @@ fn load_one_with_cache(
                 .iter()
                 .map(Interned::from)
                 .collect();
-            let mut deps: Vec<DepEntry> = Vec::new();
-            for field in [pkg.rdepend(), pkg.depend()] {
-                if let Ok(Some(entries)) = field {
-                    deps.extend(entries);
-                }
-            }
+            let class = |field: portage_vdb::Result<Option<Vec<DepEntry>>>| {
+                field.ok().flatten().unwrap_or_default()
+            };
+            let deps = PackageDeps::new(
+                class(pkg.depend()),
+                class(pkg.rdepend()),
+                class(pkg.bdepend()),
+                class(pkg.pdepend()),
+                class(pkg.idepend()),
+            );
             let eapi = pkg.eapi().unwrap_or(Eapi::Zero);
             VdbEntry {
                 cpn: *pkg.cpn(),

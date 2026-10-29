@@ -90,7 +90,7 @@ pub fn find_conflicts(installed: &[VdbEntry], proposed: &[ProposedPkg]) -> Vec<C
     let mut conflicts = Vec::new();
     for entry in installed {
         let active_flags: HashSet<Interned<_>> = entry.active_use.iter().copied().collect();
-        let evaluated = DepEntry::evaluate_use(&entry.deps, &active_flags);
+        let evaluated = entry.evaluated_deps(&active_flags);
         let slot = entry.slot;
         let owner_replaced_by = replaced.get(&(entry.cpn, slot)).map(|v| (*v).clone());
         collect_violations(
@@ -331,7 +331,7 @@ fn removal_obstacles_once(
             continue;
         }
         let active_flags: HashSet<Interned<_>> = owner.active_use.iter().copied().collect();
-        let evaluated = DepEntry::evaluate_use(&owner.deps, &active_flags);
+        let evaluated = owner.evaluated_deps(&active_flags);
         walk_unsatisfied_deps(&evaluated, &touched, &present, &mut out, &mut |dep| {
             let needed_slot = removed
                 .iter()
@@ -357,11 +357,11 @@ fn removal_obstacles_once(
 pub fn installed_blocker_atoms(entry: &VdbEntry) -> Vec<Dep> {
     // Most installed packages declare no blockers; a cheap structural pre-scan
     // skips the evaluate_use + clone for them, keeping this whole-VDB walk cheap.
-    if !has_blocker_atom(&entry.deps) {
+    if !has_blocker_atom(&entry.deps.rdepend) && !has_blocker_atom(&entry.deps.depend) {
         return Vec::new();
     }
     let active: HashSet<Interned<DefaultInterner>> = entry.active_use.iter().copied().collect();
-    let evaluated = DepEntry::evaluate_use(&entry.deps, &active);
+    let evaluated = entry.evaluated_deps(&active);
     let mut out = Vec::new();
     collect_blocker_atoms(&evaluated, &mut out);
     out
@@ -632,7 +632,7 @@ pub fn is_hard_conflict(classified: &[ClassifiedBlocker]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use portage_atom_pubgrub::{BlockerVictim, PortagePackage};
+    use portage_atom_pubgrub::{BlockerVictim, PackageDeps, PortagePackage};
 
     fn pkg(cpn: &str, slot: &str) -> PortagePackage {
         PortagePackage::slotted(
@@ -676,10 +676,14 @@ mod tests {
             active_use: Vec::new(),
             iuse: Vec::new(),
             eapi: portage_metadata::Eapi::Eight,
-            deps: deps
-                .iter()
-                .map(|d| DepEntry::Atom(Dep::parse(d).expect("test atom parses")))
-                .collect(),
+            deps: PackageDeps {
+                rdepend: deps
+                    .iter()
+                    .map(|d| DepEntry::Atom(Dep::parse(d).expect("test atom parses")))
+                    .collect::<Vec<_>>()
+                    .into(),
+                ..PackageDeps::default()
+            },
         }
     }
 
@@ -864,8 +868,12 @@ mod tests {
             active_use: Vec::new(),
             iuse: Vec::new(),
             eapi: portage_metadata::Eapi::Eight,
-            deps: DepEntry::parse("|| ( net-dns/openresolv sys-apps/systemd )")
-                .expect("test dep string parses"),
+            deps: PackageDeps {
+                rdepend: DepEntry::parse("|| ( net-dns/openresolv sys-apps/systemd )")
+                    .expect("test dep string parses")
+                    .into(),
+                ..PackageDeps::default()
+            },
         };
         let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[]), resolvconf];
         let plan = vec![proposed("sys-apps/systemd", "0", "260.2")];
