@@ -263,11 +263,10 @@ pub struct Version {
     /// mis-compare against a package that spells it in full.
     #[cfg_attr(feature = "builder", builder(start_fn))]
     pub numbers: Numbers,
-    /// Original decimal digit strings for each component (same length as
-    /// [`Self::numbers`]). Preserves leading zeros so Algorithm 3.3 can
-    /// distinguish `1.01` from `1.1`. Empty when constructed via structural
-    /// update that only sets `numbers` — comparison then falls back to
-    /// formatting each `u64`
+    /// Written decimal digit strings for each component (same length as [`Self::numbers`])
+    ///
+    /// Kept only when some component is written with a leading zero, which Algorithm 3.3 can
+    /// compare differently (`1.01` is not `1.1`); empty otherwise, where each `u64` says it all.
     #[cfg_attr(feature = "builder", builder(skip))]
     pub digits: SmallVec<[SmolStr; 4]>,
     /// Optional single lowercase letter after the numeric components
@@ -419,13 +418,9 @@ impl Version {
             !numbers.is_empty(),
             "Version must have at least one numeric component per PMS 3.2"
         );
-        let digits = numbers
-            .iter()
-            .map(|n| SmolStr::new(n.to_string()))
-            .collect();
         Version {
             numbers: Numbers::from_slice(numbers),
-            digits,
+            digits: SmallVec::new(),
             letter: None,
             suffixes: Vec::new(),
             revision: Revision::default(),
@@ -846,6 +841,20 @@ fn parse_revision(input: &mut &str) -> ModalResult<Revision> {
         .parse_next(input)
 }
 
+/// Numeric components, plus their written digits only when one is written with a leading zero
+fn split_components(components: Vec<(SmolStr, u64)>) -> (Numbers, SmallVec<[SmolStr; 4]>) {
+    let numbers = components.iter().map(|(_, n)| *n).collect();
+    let zero_led = components
+        .iter()
+        .any(|(d, _)| d.len() > 1 && d.starts_with('0'));
+    let digits = if zero_led {
+        components.into_iter().map(|(d, _)| d).collect()
+    } else {
+        SmallVec::new()
+    };
+    (numbers, digits)
+}
+
 pub(crate) fn parse_version(input: &mut &str) -> ModalResult<Version> {
     (
         separated(1.., parse_component, '.'),
@@ -859,12 +868,7 @@ pub(crate) fn parse_version(input: &mut &str) -> ModalResult<Version> {
                 (Vec<(SmolStr, u64)>, _, _, _),
                 _,
             )| {
-                let mut numbers = Numbers::with_capacity(components.len());
-                let mut digits = SmallVec::with_capacity(components.len());
-                for (d, n) in components {
-                    digits.push(d);
-                    numbers.push(n);
-                }
+                let (numbers, digits) = split_components(components);
                 Version {
                     numbers,
                     digits,
@@ -895,12 +899,7 @@ pub(crate) fn parse_version_no_raw(input: &mut &str) -> ModalResult<(Version, bo
                 _,
                 _,
             )| {
-                let mut numbers = Numbers::with_capacity(components.len());
-                let mut digits = SmallVec::with_capacity(components.len());
-                for (d, n) in components {
-                    digits.push(d);
-                    numbers.push(n);
-                }
+                let (numbers, digits) = split_components(components);
                 (
                     Version {
                         numbers,
