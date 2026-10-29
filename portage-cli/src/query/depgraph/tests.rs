@@ -509,7 +509,9 @@ fn complete_graph_pulls_the_installed_package_whose_pin_the_update_breaks() {
 
 #[test]
 fn complete_graph_keeps_the_pulled_in_package_through_the_build_dep_trim() {
-    let fix = fixture(&pinned_consumer(), &[]);
+    let mut pkgs = pinned_consumer();
+    pkgs.retain(|p| p.cpv != "app-misc/consumer-1");
+    let fix = fixture(&pkgs, &[]);
     plant_vdb(&fix.root, "app-misc/bar-1");
     plant_vdb_rdepend(&fix.root, "app-misc/consumer-1", Some("<app-misc/bar-2"));
     let atoms = [TargetAtom::explicit("app-misc/bar")];

@@ -258,7 +258,7 @@ impl PortageDependencyProvider {
         targets.sort_by(|a, b| a.0.cmp(b.0));
         let mut out = Vec::new();
         for (target, requested) in targets {
-            if target.is_virtual() {
+            if target.is_virtual() || self.repair_targets.contains(target) {
                 continue;
             }
             let Some(selected) = solution.get(target) else {

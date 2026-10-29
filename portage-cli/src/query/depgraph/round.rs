@@ -125,7 +125,8 @@ pub(super) struct RoundOutcome {
     pub(super) round_metrics: ResolveMetrics,
 }
 
-/// Solve `targets` and return the filtered order for this round.
+/// Solve `targets`, plus the installed packages in `repairs` the plan must keep satisfied,
+/// and return the filtered order for this round.
 ///
 /// A failed `--autosolve-use` attempt falls back to a fixed-USE solve.
 /// When widening is requested, a strict failure or a strict success that
@@ -133,6 +134,7 @@ pub(super) struct RoundOutcome {
 pub(super) fn solve_round(
     ctx: &RoundCtx<'_>,
     targets: Vec<(PortagePackage, PortageVersionSet)>,
+    repairs: &[(PortagePackage, PortageVersionSet)],
 ) -> anyhow::Result<RoundOutcome> {
     let RoundCtx {
         data,
@@ -201,6 +203,7 @@ pub(super) fn solve_round(
         // co-solve fixpoint's per-iteration provider rebuild affordable.
         let mut seeds: Vec<Cpn> = targets
             .iter()
+            .chain(repairs)
             .filter(|(pkg, _)| !pkg.is_virtual())
             .map(|(pkg, _)| *pkg.cpn())
             .collect();
@@ -421,7 +424,7 @@ pub(super) fn solve_round(
             }
         };
         let resolve_start = Instant::now();
-        let result = provider.resolve_targets(targets.clone());
+        let result = provider.resolve_with_repairs(targets.clone(), repairs.to_vec());
         tracing::debug!(
             elapsed_ms = resolve_start.elapsed().as_secs_f64() * 1000.0,
             "solver resolve"
@@ -703,12 +706,11 @@ pub(super) fn solve_round(
     );
     let mut order = filtered_order;
 
-    // Repair rounds add kept installed packages as targets; they are not
-    // command-line roots but must not be trimmed as unneeded build tools.
+    // Repair targets are not command-line roots but must not be trimmed as unneeded build tools.
     let solve_cpns: HashSet<Cpn> = root_cpns
         .iter()
         .copied()
-        .chain(targets.iter().map(|(pkg, _)| *pkg.cpn()))
+        .chain(targets.iter().chain(repairs).map(|(pkg, _)| *pkg.cpn()))
         .collect();
     let trim_ctx = bdepend_trim::TrimCtx {
         broot_snapshot,

@@ -92,7 +92,8 @@ impl DependencyProvider for PortageDependencyProvider {
         // Live ebuilds are never autounmasked transitively: a tagged-live
         // candidate is only selectable when the package itself is an explicit
         // root target (naming `=pkg-9999`, or a range admitting only lives).
-        let allow_live = self.root_targets.contains_key(package);
+        let allow_live =
+            self.root_targets.contains_key(package) && !self.repair_targets.contains(package);
         let candidates = filter_to_preferred_tier(data, candidates, allow_live);
 
         // A prior iteration pinned this package (`upgrade_to`, or a root target
@@ -308,6 +309,18 @@ impl DependencyProvider for PortageDependencyProvider {
                     return Ok(Some(ver.clone()));
                 }
             }
+        }
+
+        if !self.prefer_update
+            && self.repair_targets.contains(package)
+            && let Some((installed_ver, _)) = self.installed.get(package)
+        {
+            let nearest = candidates
+                .iter()
+                .copied()
+                .filter(|v| *v >= installed_ver)
+                .min();
+            return Ok(nearest.or_else(|| candidates.into_iter().max()).cloned());
         }
 
         let version = candidates.into_iter().max().cloned();

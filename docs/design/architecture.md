@@ -567,7 +567,7 @@ only a package's own facts):
 | USE-dep constraints (`[flag]`, `[flag?]`, `[flag=]`) | crate `validate.rs` | `check_use_deps` |
 | Blockers (`!foo` / `!!foo`) | crate `validate.rs` + `conflicts` | classify; hard conflict → exit 1; WouldUnmerge on real merge |
 | `::repo` constraints | crate `validate.rs` | `check_repo_constraints` |
-| Reverse-dependency conflicts | resolve `conflicts.rs` | every installed pkg's deps vs the plan; each broken kept package is re-solved as a target (up to 3 rounds, off with `--complete-graph-if-new-ver n`), so it is updated too or holds the update back; what remains is reported as "Dependency constraint conflict" |
+| Reverse-dependency conflicts | resolve `conflicts.rs` | every installed pkg's deps vs the plan; each broken kept package is re-solved as a target (up to 3 rounds, off with `--complete-graph-if-new-ver n`) that moves to the version nearest its installed one (newest under `-uD`), so it is updated too or holds the update back; what remains is reported as "Dependency constraint conflict" |
 | `REQUIRED_USE` | cli `required_use.rs` | **Level A** — see below |
 
 ### REQUIRED_USE: Level A vs Level C

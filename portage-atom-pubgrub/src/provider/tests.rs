@@ -4199,3 +4199,65 @@ fn installed_only_version_keeps_its_recorded_deps() {
     assert_eq!(solution.get(&app), Some(&Version::parse("1").unwrap()));
     assert_eq!(solution.get(&lib), Some(&Version::parse("1").unwrap()));
 }
+
+/// app-2 is installed-only; the repository offers app-1, app-3 and app-4
+fn repair_provider(prefer_update: bool) -> (PortageDependencyProvider, PortagePackage) {
+    let mut repo = InMemoryRepository::new();
+    for v in ["1", "3", "4"] {
+        let cpv = portage_atom::Cpv::parse(&format!("test/app-{v}")).unwrap();
+        repo.add_version(cpv, Some(Interned::intern("0")), None, empty_deps());
+    }
+    let app_cpn = Cpn::parse("test/app").unwrap();
+    let slot_map = build_slot_map(&repo);
+    let mut provider = PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map(
+        crate::repository::WithInstalled {
+            inner: repo,
+            installed: HashMap::from([(
+                app_cpn,
+                vec![installed_version("2", Some("0"), true, "")],
+            )]),
+        },
+        vec![app_cpn],
+        false,
+        &slot_map,
+    );
+    let app = PortagePackage::slotted(app_cpn, Interned::intern("0"));
+    provider.add_installed(InstalledPackage {
+        package: app.clone(),
+        version: Version::parse("2").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+    provider.set_prefer_update(prefer_update);
+    (provider, app)
+}
+
+#[test]
+fn repair_target_moves_to_the_version_nearest_the_installed_one() {
+    let (mut provider, app) = repair_provider(false);
+    let solution = provider
+        .resolve_with_repairs(vec![], vec![(app.clone(), PortageVersionSet::any())])
+        .unwrap();
+    assert_eq!(solution.get(&app), Some(&Version::parse("3").unwrap()));
+    assert!(provider.check_held_back_targets(&solution).is_empty());
+
+    let below = PortageVersionSet::from_operator(
+        portage_atom::Operator::Less,
+        false,
+        Version::parse("2").unwrap(),
+    );
+    let solution = provider
+        .resolve_with_repairs(vec![], vec![(app.clone(), below)])
+        .unwrap();
+    assert_eq!(solution.get(&app), Some(&Version::parse("1").unwrap()));
+}
+
+#[test]
+fn repair_target_takes_the_newest_under_prefer_update() {
+    let (mut provider, app) = repair_provider(true);
+    let solution = provider
+        .resolve_with_repairs(vec![], vec![(app.clone(), PortageVersionSet::any())])
+        .unwrap();
+    assert_eq!(solution.get(&app), Some(&Version::parse("4").unwrap()));
+}

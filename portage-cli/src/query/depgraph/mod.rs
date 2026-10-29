@@ -460,10 +460,10 @@ fn resolve(
     // Time the initial solve plus any `--complete-graph` repair rounds.
     // The plan preview prints this where emerge prints its resolution time.
     let resolve_start = std::time::Instant::now();
-    let mut solve_targets: Vec<(PortagePackage, PortageVersionSet)> = root_deps.clone();
+    let mut repairs: Vec<(PortagePackage, PortageVersionSet)> = Vec::new();
     let mut repaired: HashSet<Cpn> = HashSet::new();
     metrics.solve_rounds += 1;
-    let mut outcome = round::solve_round(&round_ctx, solve_targets.clone())?;
+    let mut outcome = round::solve_round(&round_ctx, root_deps.clone(), &repairs)?;
     metrics.merge(&outcome.round_metrics);
     let mut tried: Vec<HeldBack> = Vec::new();
     let mut repair_incomplete: Vec<Cpn> = Vec::new();
@@ -501,22 +501,22 @@ fn resolve(
                     owner: Cpv::new(c.installed_cpn, c.installed_ver.clone()),
                 })
                 .collect();
-            let mut next_targets = solve_targets.clone();
-            next_targets.extend(candidates.iter().cloned());
+            let mut next_repairs = repairs.clone();
+            next_repairs.extend(candidates.iter().cloned());
             metrics.solve_rounds += 1;
             providers.put(outcome.provider_key, outcome.provider);
-            match round::solve_round(&round_ctx, next_targets.clone()) {
+            match round::solve_round(&round_ctx, root_deps.clone(), &next_repairs) {
                 Ok(next) => {
                     metrics.merge(&next.round_metrics);
                     tried.extend(attempt);
-                    solve_targets = next_targets;
+                    repairs = next_repairs;
                     outcome = next;
                 }
                 Err(_) => {
                     // Fall back to the last good targets rather than turning an advisory
                     // repair into a hard failure; their provider is cached, so only the solve reruns.
                     repair_incomplete.extend(candidates.iter().map(|(pkg, _)| *pkg.cpn()));
-                    outcome = round::solve_round(&round_ctx, solve_targets.clone())?;
+                    outcome = round::solve_round(&round_ctx, root_deps.clone(), &repairs)?;
                     break;
                 }
             }

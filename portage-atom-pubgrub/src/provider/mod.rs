@@ -306,6 +306,10 @@ pub struct PortageDependencyProvider {
     /// named argument selects the best accepted version, as emerge does
     /// (installed-and-best still resolves to the installed version).
     pub(crate) root_targets: std::collections::HashMap<PortagePackage, PortageVersionSet>,
+    /// Root targets added only to keep an installed package's dependencies satisfied
+    ///
+    /// They move to the version nearest the installed one rather than the newest.
+    pub(crate) repair_targets: HashSet<PortagePackage>,
     /// Whether a cross build's host-root packages list their DEPEND and BDEPEND
     pub(crate) with_bdeps: bool,
     /// `--emptytree`: do not prefer installed virtual/OR branches; full deep
@@ -803,6 +807,7 @@ impl PortageDependencyProvider {
             upgrade_pins: HashMap::new(),
             hard_pins: HashSet::new(),
             root_targets: std::collections::HashMap::new(),
+            repair_targets: HashSet::new(),
             with_bdeps,
             rebuild_tree: false,
             prefer_newest_slot: false,
@@ -1145,10 +1150,28 @@ impl PortageDependencyProvider {
         SelectedDependencies<PortagePackage, Version>,
         pubgrub::PubGrubError<Self>,
     > {
+        self.resolve_with_repairs(targets, Vec::new())
+    }
+
+    /// [`Self::resolve_targets`], plus installed packages the solve must keep satisfied
+    ///
+    /// Each repair target moves to the offered version nearest its installed one (the
+    /// newest under `prefer_update`) and is never reported as held back.
+    #[allow(clippy::result_large_err)]
+    pub fn resolve_with_repairs(
+        &mut self,
+        mut targets: Vec<(PortagePackage, PortageVersionSet)>,
+        repairs: Vec<(PortagePackage, PortageVersionSet)>,
+    ) -> std::result::Result<
+        SelectedDependencies<PortagePackage, Version>,
+        pubgrub::PubGrubError<Self>,
+    > {
         let root = PortagePackage::synthetic_root();
         let root_ver =
             Version::parse("0").expect("version string \"0\" should always parse successfully");
 
+        self.repair_targets = repairs.iter().map(|(p, _)| p.clone()).collect();
+        targets.extend(repairs);
         self.root_targets = targets.iter().cloned().collect();
 
         // Root targets have no gating flag; merged is derived from by_class.
