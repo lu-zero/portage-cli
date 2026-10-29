@@ -4014,14 +4014,14 @@ fn solve_kept_curl(policy: InstalledPolicy, kept_use: bool) -> Option<Version> {
             ..empty_deps()
         },
     );
-    let mut kept = HashMap::new();
-    if kept_use {
-        // VDB USE: built without http2.
-        kept.insert(curl_cpv, UseConfig::new());
-    }
-    let mut provider = PortageDependencyProvider::new(crate::repository::WithKeptInstalledUse {
+    // VDB USE: built without http2.
+    let installed = crate::repository::InstalledVersion {
+        version: curl_cpv.version,
+        kept_use: kept_use.then(UseConfig::new),
+    };
+    let mut provider = PortageDependencyProvider::new(crate::repository::WithInstalled {
         inner: repo,
-        kept,
+        installed: HashMap::from([(curl_cpv.cpn, vec![installed])]),
     });
     let curl = PortagePackage::unslotted(Cpn::parse("net-misc/curl").unwrap());
     provider.add_installed(InstalledPackage {
@@ -4091,5 +4091,48 @@ fn glob_dep_skips_a_version_inside_its_range_that_does_not_match() {
         .resolve_targets(vec![(foo, PortageVersionSet::any())])
         .unwrap();
     let nasm = PortagePackage::slotted(Cpn::parse("dev-lang/nasm").unwrap(), Interned::intern("0"));
+    assert_eq!(solution.get(&nasm), Some(&Version::parse("3.0").unwrap()));
+}
+
+#[test]
+fn glob_dep_skips_an_installed_only_version_that_does_not_match() {
+    let mut repo = InMemoryRepository::new();
+    let nasm_cpn = Cpn::parse("dev-lang/nasm").unwrap();
+    repo.add_version(
+        portage_atom::Cpv::parse("dev-lang/nasm-3.0").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("app-misc/foo-1").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("=dev-lang/nasm-3.0*").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    // 3.01 is installed but the repository no longer offers it.
+    let installed = crate::repository::InstalledVersion {
+        version: Version::parse("3.01").unwrap(),
+        kept_use: None,
+    };
+    let mut provider = PortageDependencyProvider::new(crate::repository::WithInstalled {
+        inner: repo,
+        installed: HashMap::from([(nasm_cpn, vec![installed.clone()])]),
+    });
+    let nasm = PortagePackage::slotted(nasm_cpn, Interned::intern("0"));
+    provider.add_installed(InstalledPackage {
+        package: nasm.clone(),
+        version: installed.version,
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+    let foo = PortagePackage::slotted(Cpn::parse("app-misc/foo").unwrap(), Interned::intern("0"));
+    let solution = provider
+        .resolve_targets(vec![(foo, PortageVersionSet::any())])
+        .unwrap();
     assert_eq!(solution.get(&nasm), Some(&Version::parse("3.0").unwrap()));
 }

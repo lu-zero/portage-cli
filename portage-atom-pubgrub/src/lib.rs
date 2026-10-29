@@ -63,8 +63,8 @@ pub use provider::{
     UseFlagRequirement, build_slot_map,
 };
 pub use repository::{
-    IUseDefault, InMemoryRepository, PackageDeps, PackageRepository, PackageVersions,
-    WithKeptInstalledUse, rank_slots_by_version,
+    IUseDefault, InMemoryRepository, InstalledVersion, PackageDeps, PackageRepository,
+    PackageVersions, WithInstalled, rank_slots_by_version,
 };
 pub use required_use::RequiredUse;
 pub use use_config::{

@@ -7,9 +7,9 @@ use std::time::Instant;
 use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
-    CededFlag, DepEdge, InstalledPackage as SolverInstalledPackage, InstalledPolicy, MergeRoot,
-    PortageDependencyProvider, PortagePackage, PortageVersionSet, SlotMap, UseFlagRequirement,
-    UseOverride,
+    CededFlag, DepEdge, InstalledPackage as SolverInstalledPackage, InstalledPolicy,
+    InstalledVersion, MergeRoot, PortageDependencyProvider, PortagePackage, PortageVersionSet,
+    SlotMap, UseFlagRequirement, UseOverride,
 };
 use portage_resolve::{
     bdepend_trim, conflicts, depend_trim, effective_use, installed, repo, root_aware, root_closure,
@@ -239,7 +239,7 @@ pub(super) fn solve_round(
         // Kept installs reduce deps with VDB USE. Rebuilds, `--emptytree`,
         // and USE the co-solve fixpoint forces this iteration stay on
         // today's desired USE.
-        let kept_use = kept_installed_use(
+        let mut installed = installed_versions(
             target_installed,
             pkg_use.get(package_use.len()..).unwrap_or(&[]),
             rebuilding_installed_cpvs,
@@ -250,11 +250,20 @@ pub(super) fn solve_round(
                 })
             },
         );
+        for (cpv, _) in provided_avail {
+            installed
+                .entry(cpv.cpn)
+                .or_default()
+                .push(InstalledVersion {
+                    version: cpv.version.clone(),
+                    kept_use: None,
+                });
+        }
         let provider_start = Instant::now();
         let mut provider = PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map(
-            portage_atom_pubgrub::WithKeptInstalledUse {
+            portage_atom_pubgrub::WithInstalled {
                 inner: adapter,
-                kept: kept_use,
+                installed,
             },
             seeds,
             solve_with_bdeps,
@@ -858,37 +867,33 @@ pub(super) fn solve_round(
     })
 }
 
-/// Build-time USE of installed versions that stay installed.
+/// Installed versions per package, with the build-time USE of those that
+/// stay installed.
 ///
-/// Left out, and so reduced with today's desired USE: `rebuilding`,
+/// No kept USE, and so reduced with today's desired USE: `rebuilding`,
 /// `use_rebuild`, packages in `forced_use`, and everything under
 /// `--emptytree`.
-fn kept_installed_use(
+fn installed_versions(
     target_installed: &[installed::VdbEntry],
     forced_use: &[(Dep, Vec<UseOverride>)],
     rebuilding: &HashSet<Cpv>,
     emptytree: bool,
     use_rebuild: impl Fn(&installed::VdbEntry, &PortagePackage) -> bool,
-) -> HashMap<Cpv, portage_atom_pubgrub::UseConfig> {
-    let mut kept = HashMap::new();
-    if emptytree {
-        return kept;
-    }
+) -> HashMap<Cpn, Vec<InstalledVersion>> {
     let forced: HashSet<Cpn> = forced_use.iter().map(|(dep, _)| dep.cpn).collect();
-    for e in target_installed {
-        if forced.contains(&e.cpn) {
-            continue;
+    let kept_use = |e: &installed::VdbEntry| {
+        if emptytree || forced.contains(&e.cpn) {
+            return None;
         }
-        let cpv = Cpv::new(e.cpn, e.version.clone());
-        if rebuilding.contains(&cpv) {
-            continue;
+        if rebuilding.contains(&Cpv::new(e.cpn, e.version.clone())) {
+            return None;
         }
         let pkg = match e.slot.filter(|s| !s.is_empty()) {
             Some(s) => PortagePackage::slotted(e.cpn, s),
             None => PortagePackage::unslotted(e.cpn),
         };
         if use_rebuild(e, &pkg) {
-            continue;
+            return None;
         }
         // VDB `USE` lists every enabled flag, implicit ones (ARCH, ELIBC_*,
         // KERNEL_*, ABI_*) included; anything it does not list was off.
@@ -896,9 +901,16 @@ fn kept_installed_use(
         for flag in &e.active_use {
             cfg.enable(*flag);
         }
-        kept.insert(cpv, cfg);
+        Some(cfg)
+    };
+    let mut installed: HashMap<Cpn, Vec<InstalledVersion>> = HashMap::new();
+    for e in target_installed {
+        installed.entry(e.cpn).or_default().push(InstalledVersion {
+            version: e.version.clone(),
+            kept_use: kept_use(e),
+        });
     }
-    kept
+    installed
 }
 
 #[cfg(test)]
@@ -923,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn kept_installed_use_takes_vdb_use_and_skips_rebuilds() {
+    fn installed_versions_take_vdb_use_and_skip_rebuilds() {
         let installed = [
             entry("net-misc/curl", "8.0", &["ssl", "amd64"]),
             entry("app-misc/reinstalled", "1.0", &["foo"]),
@@ -936,17 +948,29 @@ mod tests {
             Vec::new(),
         )];
         let drifted = Cpn::try_new("app-misc/drifted").expect("test cpn parses");
-        let kept = kept_installed_use(&installed, &forced, &rebuilding, false, |e, _| {
+        let versions = installed_versions(&installed, &forced, &rebuilding, false, |e, _| {
             e.cpn == drifted
         });
+        assert_eq!(versions.len(), 4, "every install is listed: {versions:?}");
+        let kept: Vec<&Cpn> = versions
+            .iter()
+            .filter(|(_, v)| v[0].kept_use.is_some())
+            .map(|(cpn, _)| cpn)
+            .collect();
         assert_eq!(kept.len(), 1, "only curl stays installed: {kept:?}");
-        let curl = &kept[&cpv("net-misc/curl-8.0")];
+        let curl = versions[&cpv("net-misc/curl-8.0").cpn][0]
+            .kept_use
+            .as_ref()
+            .expect("curl is kept");
         assert_eq!(curl.get(Interned::intern("ssl")), UseFlagState::Enabled);
         assert_eq!(curl.get(Interned::intern("amd64")), UseFlagState::Enabled);
         // Not in VDB USE: built without it, whatever today's default says.
         assert_eq!(curl.get(Interned::intern("http2")), UseFlagState::Disabled);
 
-        let none = kept_installed_use(&installed, &[], &HashSet::new(), true, |_, _| false);
-        assert!(none.is_empty(), "--emptytree rebuilds everything");
+        let none = installed_versions(&installed, &[], &HashSet::new(), true, |_, _| false);
+        assert!(
+            none.values().flatten().all(|v| v.kept_use.is_none()),
+            "--emptytree rebuilds everything"
+        );
     }
 }

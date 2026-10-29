@@ -141,27 +141,39 @@ pub trait PackageRepository {
     /// policy itself.  See `docs/use-and-solver-boundary.md`.
     fn desired_use(&self, cpv: &Cpv) -> UseConfig;
 
-    /// USE an installed version was built with, when that version stays
-    /// installed. `Some` reduces its deps with this config instead of
-    /// [`desired_use`](Self::desired_use). `None` keeps today's desired USE.
-    fn kept_installed_use(&self, _cpv: &Cpv) -> Option<UseConfig> {
-        None
+    /// The installed versions of `cpn`
+    ///
+    /// Read while the provider is built, so a kept install is reduced with
+    /// its built USE and a `=V*` range can exclude installed versions the
+    /// glob rejects.
+    fn installed_for(&self, _cpn: &Cpn) -> &[InstalledVersion] {
+        &[]
     }
 }
 
-/// A [`PackageRepository`] view that adds the build-time USE of installed
-/// versions which stay installed (see
-/// [`PackageRepository::kept_installed_use`])
-///
-/// Every other query is forwarded to `inner` unchanged.
-pub struct WithKeptInstalledUse<R> {
-    /// The wrapped repository
-    pub inner: R,
-    /// Build-time USE per installed-and-kept cpv
-    pub kept: HashMap<Cpv, UseConfig>,
+/// An installed version of a package, as provider construction reads it
+#[derive(Debug, Clone)]
+pub struct InstalledVersion {
+    /// The installed version
+    pub version: Version,
+    /// The USE it was built with, when it stays installed. `Some` reduces its
+    /// deps with this config instead of
+    /// [`desired_use`](PackageRepository::desired_use).
+    pub kept_use: Option<UseConfig>,
 }
 
-impl<R: PackageRepository> PackageRepository for WithKeptInstalledUse<R> {
+/// A [`PackageRepository`] view that adds the installed versions (see
+/// [`PackageRepository::installed_for`])
+///
+/// Every other query is forwarded to `inner` unchanged.
+pub struct WithInstalled<R> {
+    /// The wrapped repository
+    pub inner: R,
+    /// Installed versions per package
+    pub installed: HashMap<Cpn, Vec<InstalledVersion>>,
+}
+
+impl<R: PackageRepository> PackageRepository for WithInstalled<R> {
     fn all_packages(&self) -> Vec<Cpn> {
         self.inner.all_packages()
     }
@@ -178,8 +190,8 @@ impl<R: PackageRepository> PackageRepository for WithKeptInstalledUse<R> {
         self.inner.desired_use(cpv)
     }
 
-    fn kept_installed_use(&self, cpv: &Cpv) -> Option<UseConfig> {
-        self.kept.get(cpv).cloned()
+    fn installed_for(&self, cpn: &Cpn) -> &[InstalledVersion] {
+        self.installed.get(cpn).map_or(&[], Vec::as_slice)
     }
 }
 

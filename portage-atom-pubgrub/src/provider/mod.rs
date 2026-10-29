@@ -517,15 +517,18 @@ impl PortageDependencyProvider {
         let known_versions = |c: &Cpn| -> Vec<Version> {
             let mut cache = known_cache.borrow_mut();
             let versions = cache.entry(*c).or_insert_with(|| {
+                let installed = repo.installed_for(c).iter().map(|i| i.version.clone());
                 repo.versions_for(c)
                     .into_iter()
                     .map(|(cpv, _)| cpv.version)
+                    .chain(installed)
                     .collect()
             });
             versions.clone()
         };
         while let Some(cpn) = queue.pop_front() {
             let versions_data = repo.versions_for(&cpn);
+            let installed = repo.installed_for(&cpn);
             // Loop-invariant per CPN (not per version) — hoisted out of the
             // version loop below, which previously re-formatted the same
             // string for every accepted version of this package.
@@ -574,8 +577,11 @@ impl PortageDependencyProvider {
                 // A kept installed version is reduced with the USE it was
                 // built with. Today's desired USE still feeds the post-solve
                 // `-N`/`-U` and USE-dep checks.
-                let kept_use_cfg = repo.kept_installed_use(&cpv);
-                let dep_use_cfg = kept_use_cfg.as_ref().unwrap_or(&cpv_use_cfg);
+                let dep_use_cfg = installed
+                    .iter()
+                    .find(|i| i.version == cpv.version)
+                    .and_then(|i| i.kept_use.as_ref())
+                    .unwrap_or(&cpv_use_cfg);
 
                 let class_results: [convert::ConversionResult; 5] = dep_classes.map(|entries| {
                     let buildtime = matches!(class_idx, 0 | 2);

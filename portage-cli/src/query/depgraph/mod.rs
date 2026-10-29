@@ -860,8 +860,11 @@ fn classify_root_targets(
                 let op = dep.op.unwrap_or(Operator::GreaterOrEqual);
                 PortageVersionSet::from_operator_among(op, dep.glob, v.clone(), || {
                     let known = data.versions.get(&dep.cpn).into_iter().flatten();
+                    let held = installed.get(&dep.cpn).into_iter().flat_map(|s| s.values());
                     known
-                        .map(|(cpv, _)| cpv.version.clone())
+                        .map(|(cpv, _)| &cpv.version)
+                        .chain(held)
+                        .cloned()
                         .collect::<Vec<_>>()
                 })
             }
