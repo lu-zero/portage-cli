@@ -22,7 +22,8 @@ pub(super) fn assemble(
 ) -> anyhow::Result<DepgraphOutcome> {
     let Resolved {
         outcome,
-        repair_completed,
+        repair_pulled_in,
+        repair_held_back,
         repair_incomplete,
         resolve_secs,
     } = resolved;
@@ -293,27 +294,12 @@ pub(super) fn assemble(
     //  - REQUIRED_USE, evaluated per-package against its effective USE.
     let (hard_conflict, unmerges, required_use_unsatisfied, masked_installed) = {
         // `dep_conflicts` was computed per-round above (settled by the
-        // `--complete-graph` repair loop, or from the single round when the
-        // gate is off) — reporting it here, once, is the only place this
+        // repair loop, or from the single round when it is off) — reporting it here, once, is the only place this
         // advisory prints.
         if !dep_conflicts.is_empty() {
             output::report_conflicts(&dep_conflicts, &use_expand);
         }
-        if !repair_completed.is_empty() {
-            let names: Vec<String> = repair_completed.iter().map(ToString::to_string).collect();
-            println!(
-                ">>> --complete-graph: completed the update chain by also pulling in {}",
-                names.join(", ")
-            );
-        }
-        if !repair_incomplete.is_empty() {
-            let names: Vec<String> = repair_incomplete.iter().map(ToString::to_string).collect();
-            println!(
-                ">>> --complete-graph: could not extend the chain to include {} \
-                 — leaving the plan as computed",
-                names.join(", ")
-            );
-        }
+        output::report_repairs(&repair_pulled_in, &repair_held_back, &repair_incomplete);
 
         let hits = provider.check_blockers_detailed(&solution);
         let classified = conflicts::classify_blockers(&hits, &target_installed, &proposed);

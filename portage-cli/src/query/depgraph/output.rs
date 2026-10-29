@@ -162,6 +162,58 @@ fn colorize_use_flags_chunk(chunk: &str) -> String {
 /// of which would repeat the requirer and the proposed version. Grouped
 /// target → proposed version → requirer → version constraint, so each is
 /// stated once and the USE deps collapse into one flat list beneath it.
+/// What the conflict repair did: packages it pulled in, updates it held back, re-solves that failed
+pub(super) fn report_repairs(pulled_in: &[Cpn], held_back: &[super::HeldBack], incomplete: &[Cpn]) {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut out = anstream::stderr();
+    let names = |cpns: &[Cpn]| {
+        let names: Vec<String> = cpns
+            .iter()
+            .map(|c| format!("{C_PKG}{c}{C_PKG:#}"))
+            .collect();
+        names.join(", ")
+    };
+    if !pulled_in.is_empty() {
+        writeln!(
+            out,
+            "\nAlso in the plan, since it would otherwise break them: {}",
+            names(pulled_in)
+        )
+        .ok();
+    }
+    if !held_back.is_empty() {
+        let mut grouped: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for h in held_back {
+            grouped
+                .entry(h.proposed.to_string())
+                .or_default()
+                .insert(format!(
+                    "{C_OFF}{}{C_OFF:#} required by {C_PKG}{}{C_PKG:#} (installed)",
+                    h.dep, h.owner
+                ));
+        }
+        writeln!(
+            out,
+            "\n{C_OFF}!!!{C_OFF:#} Updates skipped due to a dependency conflict:\n"
+        )
+        .ok();
+        for (proposed, requirers) in &grouped {
+            writeln!(out, "  {C_PKG}{proposed}{C_PKG:#} conflicts with").ok();
+            for line in requirers {
+                writeln!(out, "    {line}").ok();
+            }
+        }
+    }
+    if !incomplete.is_empty() {
+        writeln!(
+            out,
+            "\n{C_OFF}!!!{C_OFF:#} Could not re-solve with {} to fix their broken dependencies",
+            names(incomplete)
+        )
+        .ok();
+    }
+}
+
 pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict], use_expand: &[String]) {
     use std::collections::{BTreeMap, BTreeSet};
     // A constraint carried by a package the plan itself replaces is stale, not

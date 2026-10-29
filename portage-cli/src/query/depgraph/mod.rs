@@ -355,12 +355,23 @@ pub struct DepgraphOpts<'a> {
     pub quiet: bool,
 }
 
-/// The settled solve: last good round, plus `--complete-graph` repair notes.
+/// The settled solve: last good round, plus what the conflict repair did.
 struct Resolved {
     outcome: round::RoundOutcome,
-    repair_completed: Vec<Cpn>,
+    /// Broken installed packages that entered the plan
+    repair_pulled_in: Vec<Cpn>,
+    /// Proposals dropped because a broken installed package kept its version
+    repair_held_back: Vec<HeldBack>,
+    /// Broken installed packages whose re-solve failed
     repair_incomplete: Vec<Cpn>,
     resolve_secs: f64,
+}
+
+/// A version the plan stopped proposing because an installed package that stays requires otherwise
+pub(super) struct HeldBack {
+    pub(super) proposed: Cpv,
+    pub(super) dep: Dep,
+    pub(super) owner: Cpv,
 }
 
 pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome> {
@@ -451,7 +462,7 @@ fn resolve(
     metrics.solve_rounds += 1;
     let mut outcome = round::solve_round(&round_ctx, solve_targets.clone())?;
     metrics.merge(&outcome.round_metrics);
-    let mut repair_completed: Vec<Cpn> = Vec::new();
+    let mut tried: Vec<HeldBack> = Vec::new();
     let mut repair_incomplete: Vec<Cpn> = Vec::new();
     if complete_graph && !empty {
         const MAX_REPAIR_ROUNDS: usize = 3;
@@ -461,27 +472,39 @@ fn resolve(
             // pin the plan just broke, not itself replaced this run. Each one
             // is re-targeted as a root dep by its own cpn/slot so the solver
             // picks a version compatible with the rest of the plan.
-            let candidates: Vec<(PortagePackage, PortageVersionSet)> =
+            let fresh: Vec<&conflicts::Conflict> =
                 conflicts::retained_owners(&outcome.dep_conflicts)
-                    .filter(|c| repaired.insert(c.installed_cpn))
-                    .map(|c| {
-                        let pkg = match c.slot {
-                            Some(s) => PortagePackage::slotted(c.installed_cpn, s),
-                            None => PortagePackage::unslotted(c.installed_cpn),
-                        };
-                        (pkg, PortageVersionSet::any())
-                    })
+                    .filter(|c| !repaired.contains(&c.installed_cpn))
                     .collect();
+            let candidates: Vec<(PortagePackage, PortageVersionSet)> = fresh
+                .iter()
+                .filter(|c| repaired.insert(c.installed_cpn))
+                .map(|c| {
+                    let pkg = match c.slot {
+                        Some(s) => PortagePackage::slotted(c.installed_cpn, s),
+                        None => PortagePackage::unslotted(c.installed_cpn),
+                    };
+                    (pkg, PortageVersionSet::any())
+                })
+                .collect();
             if candidates.is_empty() {
                 break;
             }
+            let attempt: Vec<HeldBack> = fresh
+                .iter()
+                .map(|c| HeldBack {
+                    proposed: Cpv::new(c.dep.cpn, c.proposed_ver.clone()),
+                    dep: c.dep.clone(),
+                    owner: Cpv::new(c.installed_cpn, c.installed_ver.clone()),
+                })
+                .collect();
             let mut next_targets = solve_targets.clone();
             next_targets.extend(candidates.iter().cloned());
             metrics.solve_rounds += 1;
             match round::solve_round(&round_ctx, next_targets.clone()) {
                 Ok(next) => {
                     metrics.merge(&next.round_metrics);
-                    repair_completed.extend(candidates.iter().map(|(pkg, _)| *pkg.cpn()));
+                    tried.extend(attempt);
                     solve_targets = next_targets;
                     outcome = next;
                 }
@@ -495,13 +518,43 @@ fn resolve(
             }
         }
     }
+    let (repair_pulled_in, repair_held_back) =
+        settle_repairs(tried, &outcome.order, &outcome.proposed);
     let resolve_secs = resolve_start.elapsed().as_secs_f64();
     Ok(Resolved {
         outcome,
-        repair_completed,
+        repair_pulled_in,
+        repair_held_back,
         repair_incomplete,
         resolve_secs,
     })
+}
+
+/// Split the repaired conflicts by the final plan: the owner entered it, or the proposal it broke is gone
+///
+/// A conflict that matches neither is still in the plan and reported as such.
+fn settle_repairs(
+    tried: Vec<HeldBack>,
+    order: &[(PortagePackage, Version)],
+    proposed: &[conflicts::ProposedPkg],
+) -> (Vec<Cpn>, Vec<HeldBack>) {
+    let planned: HashSet<Cpn> = order.iter().map(|(pkg, _)| *pkg.cpn()).collect();
+    let proposed: HashSet<Cpv> = proposed
+        .iter()
+        .map(|p| Cpv::new(p.cpn, p.version.clone()))
+        .collect();
+    let mut pulled_in: Vec<Cpn> = Vec::new();
+    let mut held_back = Vec::new();
+    for t in tried {
+        if planned.contains(&t.owner.cpn) {
+            if !pulled_in.contains(&t.owner.cpn) {
+                pulled_in.push(t.owner.cpn);
+            }
+        } else if !proposed.contains(&t.proposed) {
+            held_back.push(t);
+        }
+    }
+    (pulled_in, held_back)
 }
 
 /// Narrow the round's autounmask candidates to the ones still actionable.

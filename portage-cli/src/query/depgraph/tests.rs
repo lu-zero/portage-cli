@@ -12,7 +12,9 @@ use portage_atom_pubgrub::{MergeRoot, PortagePackage, UseFlagRequirement};
 use portage_repo::RepoSet;
 
 use super::targets::TargetAtom;
-use super::{AutounmaskPersist, DepgraphOpts, apply_order_filters, depgraph};
+use super::{
+    AutounmaskPersist, DepgraphOpts, HeldBack, apply_order_filters, depgraph, settle_repairs,
+};
 use crate::cli::DepgraphFormat;
 
 struct Pkg {
@@ -770,4 +772,36 @@ fn a_masked_installed_package_in_another_slot_is_not_reported() {
         masked_names(&outcome)
     );
     assert_eq!(outcome.exit_code, 0);
+}
+
+#[test]
+fn settle_repairs_splits_pulled_in_held_back_and_still_broken() {
+    let held = |proposed: &str, owner: &str| HeldBack {
+        proposed: Cpv::parse(proposed).unwrap(),
+        dep: Dep::parse("<app-misc/bar-2").unwrap(),
+        owner: Cpv::parse(owner).unwrap(),
+    };
+    let tried = vec![
+        held("app-misc/bar-2", "app-misc/pulled-1"),
+        held("app-misc/bar-2", "app-misc/pulled-1"),
+        held("app-misc/bar-2", "app-misc/kept-1"),
+        held("app-misc/baz-2", "app-misc/broken-1"),
+    ];
+    let slot = Some(Interned::intern("0"));
+    let order = [(
+        PortagePackage::slotted(
+            Cpn::parse("app-misc/pulled").unwrap(),
+            Interned::intern("0"),
+        ),
+        Version::parse("2").unwrap(),
+    )];
+    let proposed = [super::conflicts::ProposedPkg {
+        cpn: Cpn::parse("app-misc/baz").unwrap(),
+        slot,
+        version: Version::parse("2").unwrap(),
+    }];
+    let (pulled_in, held_back) = settle_repairs(tried, &order, &proposed);
+    assert_eq!(pulled_in, [Cpn::parse("app-misc/pulled").unwrap()]);
+    let held_back: Vec<String> = held_back.iter().map(|h| h.owner.to_string()).collect();
+    assert_eq!(held_back, ["app-misc/kept-1"]);
 }
