@@ -341,14 +341,41 @@ fn cmp_component(i: usize, a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Hash a single component consistently with [`cmp_component`] equality
-fn hash_component<H: Hasher>(i: usize, digits: &str, state: &mut H) {
-    if i == 0 || !digits.starts_with('0') {
-        let s = digits.trim_start_matches('0');
-        let s = if s.is_empty() { "0" } else { s };
-        s.hash(state);
-    } else {
-        digits.trim_end_matches('0').hash(state);
+/// Whether component `i` compares as a digit string: a later component written with a leading zero
+///
+/// Every other component compares as its integer, which [`cmp_component`] agrees with.
+fn compares_as_digits(v: &Version, i: usize) -> bool {
+    i > 0
+        && v.digits
+            .get(i)
+            .is_some_and(|d| d.len() > 1 && d.starts_with('0'))
+}
+
+/// [`cmp_component`] for component `i` of two versions, without touching digit strings when it can
+fn cmp_component_at(a: &Version, b: &Version, i: usize) -> Ordering {
+    if let (Some(x), Some(y)) = (a.numbers.get(i), b.numbers.get(i))
+        && !compares_as_digits(a, i)
+        && !compares_as_digits(b, i)
+    {
+        return x.cmp(y);
+    }
+    let a = component_digits(a, i).expect("component in range");
+    let b = component_digits(b, i).expect("component in range");
+    cmp_component(i, a.as_ref(), b.as_ref())
+}
+
+/// Hash component `i` consistently with [`cmp_component_at`] equality
+///
+/// An all-zero digit string equals the integer `0`, so it hashes as one.
+fn hash_component<H: Hasher>(v: &Version, i: usize, state: &mut H) {
+    if compares_as_digits(v, i) {
+        let trimmed = v.digits[i].trim_end_matches('0');
+        if !trimmed.is_empty() {
+            return trimmed.hash(state);
+        }
+    }
+    if let Some(n) = v.numbers.get(i) {
+        n.hash(state);
     }
 }
 
@@ -367,9 +394,7 @@ impl Hash for Version {
         let n = self.numbers.len().max(self.digits.len());
         n.hash(state);
         for i in 0..n {
-            if let Some(d) = component_digits(self, i) {
-                hash_component(i, d.as_ref(), state);
-            }
+            hash_component(self, i, state);
         }
         // `Ord` treats a missing letter as `'\0'`. Hash the same value so
         // `None` and `Some('\0')` stay one key.
@@ -559,9 +584,7 @@ impl Version {
         let b_len = other.numbers.len().max(other.digits.len());
         let shared = a_len.min(b_len);
         for i in 0..shared {
-            let a = component_digits(self, i).expect("component in range");
-            let b = component_digits(other, i).expect("component in range");
-            match cmp_component(i, a.as_ref(), b.as_ref()) {
+            match cmp_component_at(self, other, i) {
                 Ordering::Equal => continue,
                 o => return o,
             }
@@ -1605,6 +1628,34 @@ mod tests {
         ];
         for v in versions {
             Version::parse(v).unwrap_or_else(|e| panic!("failed to parse version '{v}': {e}"));
+        }
+    }
+
+    #[test]
+    fn component_fast_path_agrees_with_the_digit_string_rule() {
+        use std::hash::{BuildHasher, RandomState};
+        let written = [
+            "0", "00", "000", "1", "01", "001", "10", "010", "100", "5", "50", "05",
+        ];
+        let hasher = RandomState::new();
+        for i in 0..2 {
+            let at = |c: &str| {
+                Version::parse(&if i == 0 {
+                    format!("{c}.1")
+                } else {
+                    format!("1.{c}")
+                })
+                .unwrap()
+            };
+            for a in written {
+                for b in written {
+                    let (va, vb) = (at(a), at(b));
+                    assert_eq!(va.cmp(&vb), cmp_component(i, a, b), "{va} vs {vb}");
+                    if va == vb {
+                        assert_eq!(hasher.hash_one(&va), hasher.hash_one(&vb), "{va} vs {vb}");
+                    }
+                }
+            }
         }
     }
 }
