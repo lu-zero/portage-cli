@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::repository::IUseDefault;
 use portage_atom::interner::{DefaultInterner, Interned};
@@ -54,7 +56,7 @@ pub(crate) struct VersionData {
     pub(crate) blockers: Vec<Dep>,
     pub(crate) use_deps: Vec<convert::UseDepConstraint>,
     pub(crate) iuse: Vec<Interned<DefaultInterner>>,
-    pub(crate) iuse_defaults: HashMap<Interned<DefaultInterner>, IUseDefault>,
+    pub(crate) iuse_defaults: std::collections::HashMap<Interned<DefaultInterner>, IUseDefault>,
     pub(crate) repo: Option<Interned<DefaultInterner>>,
     pub(crate) repo_constraints: Vec<convert::RepoConstraint>,
     pub(crate) slot_operator_deps: Vec<convert::SlotOperatorDep>,
@@ -127,7 +129,7 @@ impl VersionData {
             blockers: Vec::new(),
             use_deps: Vec::new(),
             iuse: Vec::new(),
-            iuse_defaults: HashMap::new(),
+            iuse_defaults: std::collections::HashMap::new(),
             repo: None,
             repo_constraints: Vec::new(),
             slot_operator_deps: Vec::new(),
@@ -428,7 +430,7 @@ pub(crate) struct HostEntry {
 /// it via
 /// [`PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map`].
 pub fn build_slot_map<R: PackageRepository>(repo: &R) -> convert::SlotMap {
-    let mut cpn_slots: HashMap<Cpn, Vec<Interned<DefaultInterner>>> = HashMap::new();
+    let mut cpn_slots: HashMap<Cpn, Vec<Interned<DefaultInterner>>> = HashMap::default();
     for cpn in repo.all_packages() {
         let slots = repo.slots_for(&cpn);
         if !slots.is_empty() {
@@ -507,10 +509,10 @@ impl PortageDependencyProvider {
         with_bdeps: bool,
         slot_map: &convert::SlotMap,
     ) -> Self {
-        let mut packages = HashMap::new();
-        let mut use_decision_prefer: HashMap<PortagePackage, Version> = HashMap::new();
+        let mut packages = HashMap::default();
+        let mut use_decision_prefer: HashMap<PortagePackage, Version> = HashMap::default();
         let mut use_decision_meta: HashMap<PortagePackage, (Cpn, Interned<DefaultInterner>)> =
-            HashMap::new();
+            HashMap::default();
 
         // Second pass: register versions and convert deps for the closure of
         // `seeds` — every package referenced by a converted dependency (or a
@@ -713,7 +715,7 @@ impl PortageDependencyProvider {
 
         // Build alternatives before filtering so a missing branch still sees its
         // siblings. Complete repositories do not need this materialization.
-        let mut or_alternatives: HashMap<PortagePackage, Vec<PortagePackage>> = HashMap::new();
+        let mut or_alternatives: HashMap<PortagePackage, Vec<PortagePackage>> = HashMap::default();
         if missing_merged {
             for (pkg, data) in packages.iter_mut() {
                 if !matches!(pkg, PortagePackage::Choice { .. }) {
@@ -791,23 +793,23 @@ impl PortageDependencyProvider {
 
         Self {
             packages,
-            installed: HashMap::new(),
-            installed_cpns: HashSet::new(),
-            installed_use: HashMap::new(),
-            installed_blockers: HashMap::new(),
-            installed_iuse: HashMap::new(),
-            host_installed: HashMap::new(),
-            sysroot_installed: HashMap::new(),
+            installed: HashMap::default(),
+            installed_cpns: HashSet::default(),
+            installed_use: HashMap::default(),
+            installed_blockers: HashMap::default(),
+            installed_iuse: HashMap::default(),
+            host_installed: HashMap::default(),
+            sysroot_installed: HashMap::default(),
             cross_active: false,
             is_cross_arch: false,
-            host_aliases: HashMap::new(),
+            host_aliases: HashMap::default(),
             dropped_deps,
             dropped_parents,
             use_flag_requirements: Vec::new(),
-            upgrade_pins: HashMap::new(),
-            hard_pins: HashSet::new(),
-            root_targets: std::collections::HashMap::new(),
-            repair_targets: HashSet::new(),
+            upgrade_pins: HashMap::default(),
+            hard_pins: HashSet::default(),
+            root_targets: std::collections::HashMap::default(),
+            repair_targets: HashSet::default(),
             with_bdeps,
             rebuild_tree: false,
             prefer_newest_slot: false,
@@ -819,8 +821,8 @@ impl PortageDependencyProvider {
             nodeps: false,
             use_decision_prefer,
             use_decision_meta,
-            solved_use_decisions: HashMap::new(),
-            selected_virtuals: HashMap::new(),
+            solved_use_decisions: HashMap::default(),
+            selected_virtuals: HashMap::default(),
         }
     }
 
@@ -1211,7 +1213,7 @@ impl PortageDependencyProvider {
         // before filtering virtuals because per-branch constraints live in
         // Choice/SlotChoice nodes.
         self.use_flag_requirements = self.compute_use_flag_requirements(&solution);
-        let mut rejected: HashSet<(PortagePackage, Version)> = HashSet::new();
+        let mut rejected: HashSet<(PortagePackage, Version)> = HashSet::default();
 
         for _ in 1..MAX_RESOLVE_ITERS {
             let Some((pkg, ver, hard)) = self.next_resolve_pin(&solution, &rejected) else {

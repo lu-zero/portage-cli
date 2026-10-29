@@ -1,8 +1,8 @@
 //! The PubGrub `DependencyProvider` implementation: version prioritisation,
 //! version choice (installed-preference heuristics), and dependency lookup
 
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
 
 use portage_atom::{UseDefault, Version};
 use pubgrub::{
@@ -660,7 +660,7 @@ fn host_satisfied_on_broot(
     p: &PortagePackage,
     vs: &PortageVersionSet,
 ) -> bool {
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     host_satisfied_on_broot_inner(provider, vd, p, vs, &mut seen)
 }
 

@@ -21,6 +21,7 @@ cargo doc --no-deps               # Build docs — must have no warnings
 - `pubgrub` — PubGrub version solving algorithm
 - `version-ranges` — Interval set type used by pubgrub
 - `thiserror` — Error types
+- `rustc-hash` — FxHash for the provider's package-keyed maps (already in the tree via `pubgrub`)
 
 Any new dependency must be justified.
 

@@ -2,7 +2,9 @@
 //! the solution implies (the "needed" set) — autounmask suggestions for new
 //! packages and rebuild requirements for installed ones
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+
+use rustc_hash::FxHashMap as HashMap;
 
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{UseDefault, UseDepKind, Version};
@@ -184,11 +186,11 @@ impl PortageDependencyProvider {
         solution: &SelectedDependencies<PortagePackage, Version>,
     ) -> Vec<UseFlagRequirement> {
         // Accumulate per target: (version, enable_set, disable_set, requirers).
-        let mut by_target: HashMap<PortagePackage, TargetAcc> = HashMap::new();
+        let mut by_target: HashMap<PortagePackage, TargetAcc> = HashMap::default();
         // Installed packages that should be upgraded to a newer repo version
         // rather than rebuilt at the installed version.  Keyed by the installed
         // package; value is the newer version to build instead.
-        let mut upgrade_to: HashMap<PortagePackage, Version> = HashMap::new();
+        let mut upgrade_to: HashMap<PortagePackage, Version> = HashMap::default();
         let root = PortagePackage::synthetic_root();
         let root_ver = Version::parse("0").expect("\"0\" is a version");
 

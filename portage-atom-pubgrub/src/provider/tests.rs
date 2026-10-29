@@ -2,7 +2,8 @@ use super::*;
 use crate::repository::{InMemoryRepository, PackageDeps, PackageVersions};
 use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Dep, DepEntry, DepList};
-use pubgrub::DependencyProvider as _; // for choose_version in tests
+use pubgrub::DependencyProvider as _;
+use std::collections::HashMap; // for choose_version in tests
 
 fn empty_deps() -> PackageDeps {
     PackageDeps {
