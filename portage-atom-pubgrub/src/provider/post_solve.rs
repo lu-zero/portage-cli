@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{UseDefault, UseDepKind, Version};
@@ -24,6 +24,13 @@ type TargetAcc = (
     BTreeSet<Interned<DefaultInterner>>,
     BTreeSet<Interned<DefaultInterner>>,
 );
+
+/// Requirements gathered so far, and the targets whose flag sets grew during this iteration
+#[derive(Default)]
+struct Accumulated {
+    by_target: HashMap<PortagePackage, TargetAcc>,
+    grown: HashSet<PortagePackage>,
+}
 
 pub(crate) fn eval_violated_use_dep(
     kind: UseDepKind,
@@ -61,6 +68,10 @@ impl PortageDependencyProvider {
     /// version) and upgrade-expansion (parent = an installed package at
     /// its pending upgrade version). `parent_ver` is the version being
     /// expanded.
+    ///
+    /// With `dirty`, a constraint is evaluated again only when its inputs grew: the target's
+    /// requirements, or an installed parent's own.
+    #[allow(clippy::too_many_arguments)]
     fn accumulate_use_dep_violations(
         &self,
         parent: &PortagePackage,
@@ -68,13 +79,19 @@ impl PortageDependencyProvider {
         parent_is_installed: bool,
         udeps: &[convert::UseDepConstraint],
         solution: &SelectedDependencies<PortagePackage, Version>,
-        by_target: &mut HashMap<PortagePackage, TargetAcc>,
+        acc: &mut Accumulated,
+        dirty: Option<&HashSet<PortagePackage>>,
     ) {
+        let by_target = &mut acc.by_target;
         // The synthetic root's constraints are the requested atoms', credited to their labels.
         let credit_parent = !parent.is_virtual() || *parent == PortagePackage::synthetic_root();
+        let parent_dirty = dirty.is_none_or(|d| parent_is_installed && d.contains(parent));
         for constraint in udeps {
             let (target_pkg, vs) = &constraint.target;
             if target_pkg.is_virtual() {
+                continue;
+            }
+            if !parent_dirty && dirty.is_some_and(|d| !d.contains(target_pkg)) {
                 continue;
             }
 
@@ -160,10 +177,13 @@ impl PortageDependencyProvider {
                             BTreeSet::new(),
                         )
                     });
-                    if requires_enabled {
-                        entry.1.insert(ud.flag);
+                    let added = if requires_enabled {
+                        entry.1.insert(ud.flag)
                     } else {
-                        entry.2.insert(ud.flag);
+                        entry.2.insert(ud.flag)
+                    };
+                    if added {
+                        acc.grown.insert(target_pkg.clone());
                     }
                     if credit_parent {
                         entry.3.insert(constraint.parent_cpn_str);
@@ -185,8 +205,7 @@ impl PortageDependencyProvider {
         &self,
         solution: &SelectedDependencies<PortagePackage, Version>,
     ) -> Vec<UseFlagRequirement> {
-        // Accumulate per target: (version, enable_set, disable_set, requirers).
-        let mut by_target: HashMap<PortagePackage, TargetAcc> = HashMap::default();
+        let mut acc = Accumulated::default();
         // Installed packages that should be upgraded to a newer repo version
         // rather than rebuilt at the installed version.  Keyed by the installed
         // package; value is the newer version to build instead.
@@ -200,11 +219,9 @@ impl PortageDependencyProvider {
         // 2. When an installed package gains a violation, check if a newer repo
         //    version exists whose constraints should also be expanded (upgrade
         //    the package rather than rebuilding the old version).
+        // After the first pass only constraints whose inputs grew are evaluated again.
+        let mut dirty: Option<HashSet<PortagePackage>> = None;
         loop {
-            let prev_total: usize = by_target
-                .values()
-                .map(|(_, e, d, _)| e.len() + d.len())
-                .sum();
             let prev_upgrades = upgrade_to.len();
 
             // -- main solution packages --
@@ -224,7 +241,8 @@ impl PortageDependencyProvider {
                     at_installed_ver,
                     &vd.use_deps,
                     solution,
-                    &mut by_target,
+                    &mut acc,
+                    dirty.as_ref(),
                 );
             }
 
@@ -235,14 +253,16 @@ impl PortageDependencyProvider {
                 false,
                 &self.root_use_deps,
                 solution,
-                &mut by_target,
+                &mut acc,
+                dirty.as_ref(),
             );
 
             // -- upgrade expansion --
             // For each installed package with violations, check whether a newer
             // repo version exists.  If so, record the upgrade and process the
             // newer version's USE dep constraints in the next fixpoint iteration.
-            let installed_with_violations: Vec<(PortagePackage, Version)> = by_target
+            let installed_with_violations: Vec<(PortagePackage, Version)> = acc
+                .by_target
                 .iter()
                 .filter(|(pkg, _)| self.installed.contains_key(pkg))
                 .filter(|(pkg, _)| !upgrade_to.contains_key(*pkg))
@@ -273,27 +293,27 @@ impl PortageDependencyProvider {
                 else {
                     continue;
                 };
-                // The upgraded version is by definition not the installed build.
+                // The upgraded version is by definition not the installed build, and
+                // is expanded once, in full.
                 self.accumulate_use_dep_violations(
                     &pkg,
                     &new_ver,
                     false,
                     &vd.use_deps,
                     solution,
-                    &mut by_target,
+                    &mut acc,
+                    None,
                 );
             }
 
-            let new_total: usize = by_target
-                .values()
-                .map(|(_, e, d, _)| e.len() + d.len())
-                .sum();
-            if new_total == prev_total && upgrade_to.len() == prev_upgrades {
+            if acc.grown.is_empty() && upgrade_to.len() == prev_upgrades {
                 break;
             }
+            dirty = Some(std::mem::take(&mut acc.grown));
         }
 
-        let mut reqs: Vec<UseFlagRequirement> = by_target
+        let mut reqs: Vec<UseFlagRequirement> = acc
+            .by_target
             .into_iter()
             .map(
                 |(pkg, (ver, enable, disable, requirers))| UseFlagRequirement {

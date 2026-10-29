@@ -4262,3 +4262,56 @@ fn repair_target_takes_the_newest_under_prefer_update() {
         .unwrap();
     assert_eq!(solution.get(&app), Some(&Version::parse("4").unwrap()));
 }
+
+#[test]
+fn a_flag_an_installed_package_must_gain_cascades_through_its_conditional_deps() {
+    // app needs l1[x]; each installed link lacks x and carries the next one's [x?], so all must gain x.
+    // A chain this long needs more than one pass in nearly any walk order.
+    let links = ["test/l1", "test/l2", "test/l3", "test/l4", "test/l5"];
+    let x = Interned::intern("x");
+    let mut repo = InMemoryRepository::new();
+    let add = |repo: &mut InMemoryRepository, cpv: String, rdepend: String| {
+        repo.add_version_with_iuse(
+            portage_atom::Cpv::parse(&cpv).unwrap(),
+            Some(Interned::intern("0")),
+            None,
+            vec![x],
+            PackageDeps {
+                rdepend: DepEntry::parse(&rdepend).unwrap().into(),
+                ..empty_deps()
+            },
+        );
+    };
+    add(&mut repo, "test/app-1".into(), format!("{}[x]", links[0]));
+    for (i, link) in links.iter().enumerate() {
+        let next = links
+            .get(i + 1)
+            .map(|n| format!("{n}[x?]"))
+            .unwrap_or_default();
+        add(&mut repo, format!("{link}-1"), next);
+    }
+    repo.set_use_config(UseConfig::new());
+    let mut provider = PortageDependencyProvider::new(repo);
+    for link in links {
+        provider.add_installed(InstalledPackage {
+            package: PortagePackage::slotted(Cpn::parse(link).unwrap(), Interned::intern("0")),
+            version: Version::parse("1").unwrap(),
+            policy: InstalledPolicy::Favor,
+            active_use: vec![],
+            iuse: vec![x],
+        });
+    }
+    let app = PortagePackage::slotted(Cpn::parse("test/app").unwrap(), Interned::intern("0"));
+    provider
+        .resolve_targets(vec![(app, PortageVersionSet::any())])
+        .unwrap();
+
+    let mut rebuilt: Vec<String> = provider
+        .reinstall_deps()
+        .iter()
+        .filter(|r| r.required_enabled.contains(&x))
+        .map(|r| r.package.cpn().to_string())
+        .collect();
+    rebuilt.sort();
+    assert_eq!(rebuilt, links);
+}
