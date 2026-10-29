@@ -343,12 +343,8 @@ pub struct DepgraphOpts<'a> {
     /// completed work, which is required for correct `--emptytree` resume (VDB presence is not
     /// a completion marker there). Empty for every non-resume call.
     pub resume_completed: HashSet<(MergeRoot, String)>,
-    /// `--complete-graph`: when a deep update (`-uD`) moves a `~`-pinned
-    /// family but leaves a retained installed dependent behind (whose pin
-    /// the move now breaks), pull that dependent into the plan too rather
-    /// than stopping the chain halfway. Gated behind an explicit flag
-    /// because there is no emerge parity to validate against, and the
-    /// policy can revert an upgrade a dependent has no satisfying version for.
+    /// Re-solve with each kept installed package whose dependencies the plan breaks as a target,
+    /// so it is updated too or holds the update back
     pub complete_graph: bool,
     /// Suppress the Pretty/JSON/Tree plan preview — for an internal probe
     /// that only wants a field off [`DepgraphOutcome`] (e.g.
@@ -374,8 +370,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     assemble::assemble(prepared, resolved, &metrics)
 }
 
-/// Solve the classified roots, then repair retained-owner conflicts when
-/// `--complete-graph` is set.
+/// Solve the classified roots, then re-solve with the kept installed packages the plan breaks.
 fn resolve(
     prepared: &prepare::Prepared<'_>,
     metrics: &mut ResolveMetrics,
@@ -447,7 +442,6 @@ fn resolve(
     };
     let root_deps = &prepared.root_deps;
     let complete_graph = prepared.complete_graph;
-    let update = prepared.update;
     let empty = prepared.empty;
     // Time the initial solve plus any `--complete-graph` repair rounds.
     // The plan preview prints this where emerge prints its resolution time.
@@ -459,7 +453,7 @@ fn resolve(
     metrics.merge(&outcome.round_metrics);
     let mut repair_completed: Vec<Cpn> = Vec::new();
     let mut repair_incomplete: Vec<Cpn> = Vec::new();
-    if complete_graph && update && !empty {
+    if complete_graph && !empty {
         const MAX_REPAIR_ROUNDS: usize = 3;
         for _ in 0..MAX_REPAIR_ROUNDS {
             // Retained-owner conflicts (`owner_replaced_by.is_none()`) are the

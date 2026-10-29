@@ -423,6 +423,9 @@ pub fn merge_resume_flags(saved: &MergeFlags, cli: &MergeFlags) -> MergeFlags {
         autounmask: saved.autounmask || cli.autounmask,
         autosolve_use: saved.autosolve_use || cli.autosolve_use,
         complete_graph: saved.complete_graph || cli.complete_graph,
+        complete_graph_if_new_ver: cli
+            .complete_graph_if_new_ver
+            .or(saved.complete_graph_if_new_ver),
         with_bdeps: cli.with_bdeps.or(saved.with_bdeps),
         with_bdeps_auto: cli.with_bdeps_auto.or(saved.with_bdeps_auto),
         root_deps: saved.root_deps || cli.root_deps,

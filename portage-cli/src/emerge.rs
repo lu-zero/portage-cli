@@ -638,7 +638,7 @@ async fn emerge_atoms_inner(
         } else {
             std::collections::HashSet::new()
         },
-        complete_graph: merge_flags.complete_graph,
+        complete_graph: merge_flags.repair_broken_installed(),
         quiet: false,
     })
     .await?;

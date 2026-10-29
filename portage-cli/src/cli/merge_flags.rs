@@ -140,14 +140,16 @@ pub struct MergeFlags {
     #[arg(long = "eta")]
     pub eta: bool,
 
-    /// With `-u`/`--update` `-D`/`--deep`: when moving a version-pinned
-    /// family (e.g. upgrading `llvm` pulls `clang` along) would leave a
-    /// retained package's pin broken (e.g. `lldb` still pinned to the old
-    /// `llvm`), pull that package into the plan too instead of stopping
-    /// halfway. Off by default: this can revert the upgrade instead if the
-    /// retained package has no version satisfying the new pin.
+    /// Re-solve with the installed packages whose dependencies the plan breaks, even with `--complete-graph-if-new-ver n`
+    ///
+    /// A broken installed package (e.g. `clang` pinned to the `llvm` being upgraded) is updated along
+    /// with it, or holds the update back when no version of it fits. This is the default.
     #[arg(long)]
     pub complete_graph: bool,
+
+    /// `n`: do not re-solve a plan that breaks installed packages' dependencies, only report them
+    #[arg(long, value_name = "y|n")]
+    pub complete_graph_if_new_ver: Option<YesNo>,
 
     /// Follow the build-time dependencies (DEPEND, BDEPEND) of installed packages that are kept
     ///
@@ -219,6 +221,11 @@ impl MergeFlags {
         }
     }
 
+    /// Whether the solve is redone when the plan breaks an installed package's dependencies
+    pub fn repair_broken_installed(&self) -> bool {
+        self.complete_graph || self.complete_graph_if_new_ver != Some(YesNo::N)
+    }
+
     /// Whether depclean keeps installed packages' build-time deps: all but `--with-bdeps n`
     pub fn depclean_bdeps(&self) -> bool {
         self.with_bdeps != Some(YesNo::N)
@@ -228,6 +235,21 @@ impl MergeFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn broken_installed_repair_is_on_unless_turned_off() {
+        assert!(MergeFlags::default().repair_broken_installed());
+        let off = MergeFlags {
+            complete_graph_if_new_ver: Some(YesNo::N),
+            ..MergeFlags::default()
+        };
+        assert!(!off.repair_broken_installed());
+        let forced = MergeFlags {
+            complete_graph: true,
+            ..off
+        };
+        assert!(forced.repair_broken_installed());
+    }
 
     #[test]
     fn with_bdeps_defaults_to_auto() {

@@ -65,7 +65,12 @@ How the solver and build scheduler behave.
 
   Off by default; flips are reported.
 * `--eta` — With `-p`/`--pretend` or `-a`/`--ask`, print an "Expected time of completion" for the plan alongside the merge list, estimated from activity history (median of recent successful merges per package; wall uses the build graph + `--jobs` when blockers are available). Shown even when the plan needs USE/mask changes to proceed.
-* `--complete-graph` — With `-u`/`--update` `-D`/`--deep`: when moving a version-pinned family (e.g. upgrading `llvm` pulls `clang` along) would leave a retained package's pin broken (e.g. `lldb` still pinned to the old `llvm`), pull that package into the plan too instead of stopping halfway. Off by default: this can revert the upgrade instead if the retained package has no version satisfying the new pin.
+* `--complete-graph` — Re-solve with the installed packages whose dependencies the plan breaks, even with `--complete-graph-if-new-ver n`
+
+  A broken installed package (e.g. `clang` pinned to the `llvm` being upgraded) is updated along with it, or holds the update back when no version of it fits. This is the default.
+* `--complete-graph-if-new-ver <y|n>` — `n`: do not re-solve a plan that breaks installed packages' dependencies, only report them
+  * `y`: Yes
+  * `n`: No
 * `--with-bdeps <y|n>` — Follow the build-time dependencies (DEPEND, BDEPEND) of installed packages that are kept
 
   With `--deep`, their upgrades and missing build tools enter the plan; `em depclean` keeps them installed. Unset, it is on for depclean, and for installs unless binary packages are used or `--with-bdeps-auto n` is given.
