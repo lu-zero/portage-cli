@@ -612,6 +612,34 @@ fn actionable_autounmask_candidates(
 /// [`root_closure::host`], and those install into the host, not the VDB
 /// `target_installed` was read from. Counting one as replacing a target package
 /// would hide a real conflict on that name.
+/// Installed packages with the deps the solve used for them
+///
+/// That is the current ebuild's when the repository still offers the installed version (emerge's
+/// dynamic deps), the recorded ones otherwise. Built USE and the rest of the record are kept.
+fn installed_as_solved(
+    installed: &[installed::VdbEntry],
+    provider: &PortageDependencyProvider,
+    data: &repo::RepoData,
+) -> Vec<installed::VdbEntry> {
+    installed
+        .iter()
+        .map(|e| {
+            let pkg = match e.slot.filter(|s| !s.is_empty()) {
+                Some(s) => PortagePackage::slotted(e.cpn, s),
+                None => PortagePackage::unslotted(e.cpn),
+            };
+            let current = provider
+                .offers(&pkg, &e.version)
+                .then(|| repo::ebuild_deps(data, &e.cpn, &e.version))
+                .flatten();
+            match current {
+                Some(deps) => installed::VdbEntry { deps, ..e.clone() },
+                None => e.clone(),
+            }
+        })
+        .collect()
+}
+
 fn target_conflicts(
     order: &[(PortagePackage, Version)],
     target_installed: &[installed::VdbEntry],

@@ -1018,6 +1018,14 @@ impl PortageDependencyProvider {
         self.packages.get(self.package_data_key(package))
     }
 
+    /// Whether the repository offers `version` of `package`, so the solve used its ebuild's deps
+    ///
+    /// `false` for an installed version known only from its installed record, and for unknown pairs.
+    pub fn offers(&self, package: &PortagePackage, version: &Version) -> bool {
+        self.package_data(package)
+            .is_some_and(|d| d.versions.get(version).is_some_and(|vd| !vd.installed_only))
+    }
+
     /// Whether the solved `version` of `package` came from widened
     /// candidate supply (outside keyword/mask/license acceptance)
     ///

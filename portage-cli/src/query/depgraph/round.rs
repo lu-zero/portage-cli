@@ -18,8 +18,8 @@ use portage_resolve::{
 
 use super::provider_cache::{ProviderCache, ProviderKey};
 use super::{
-    ResolveMetrics, apply_order_filters, best_rebuild_version, package_needs_use_reinstall,
-    package_use, target_conflicts, widened_autounmask_candidates,
+    ResolveMetrics, apply_order_filters, best_rebuild_version, installed_as_solved,
+    package_needs_use_reinstall, package_use, target_conflicts, widened_autounmask_candidates,
 };
 
 /// Inputs shared by every solve round of one [`super::depgraph`] call.
@@ -882,7 +882,10 @@ pub(super) fn solve_round(
     // installed package's `<` bound). Computed here (pure, no report yet)
     // so the `--complete-graph` repair loop can decide whether another
     // round is needed before anything is printed or written.
-    let (proposed, dep_conflicts) = target_conflicts(&order, target_installed);
+    let (proposed, dep_conflicts) = target_conflicts(
+        &order,
+        &installed_as_solved(target_installed, &provider, data),
+    );
 
     Ok(RoundOutcome {
         provider,

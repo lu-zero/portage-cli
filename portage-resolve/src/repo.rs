@@ -1466,6 +1466,12 @@ fn package_deps_from_metadata(meta: &portage_metadata::EbuildMetadata) -> Packag
     )
 }
 
+/// The dependency classes of the ebuild the repository holds for `cpn`-`version`
+pub fn ebuild_deps(data: &RepoData, cpn: &Cpn, version: &Version) -> Option<PackageDeps> {
+    data.cache_entry(cpn, version)
+        .map(|cache| package_deps_from_metadata(&cache.metadata))
+}
+
 impl PackageRepository for Adapter<'_> {
     fn all_packages(&self) -> Vec<Cpn> {
         self.data.cpns.clone()

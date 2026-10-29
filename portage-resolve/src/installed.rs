@@ -12,6 +12,7 @@ use portage_vdb::{InstalledPackage, Vdb};
 use crate::Roots;
 
 /// One VDB-installed package, as the depgraph's post-solve passes need it
+#[derive(Clone)]
 pub struct VdbEntry {
     /// The package name
     pub cpn: Cpn,

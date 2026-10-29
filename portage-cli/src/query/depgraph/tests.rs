@@ -819,3 +819,29 @@ fn settle_repairs_splits_pulled_in_held_back_and_still_broken() {
     let held_back: Vec<String> = held_back.iter().map(|h| h.owner.to_string()).collect();
     assert_eq!(held_back, ["app-misc/kept-1"]);
 }
+
+#[test]
+fn a_blocked_package_only_the_installed_record_still_needs_is_unmerged() {
+    let pkg = |cpv, depend| Pkg {
+        cpv,
+        keywords: "amd64",
+        depend,
+        iuse: "",
+        slot: "0",
+    };
+    let fix = fixture(
+        &[
+            pkg("app-misc/x-1", "!app-misc/y"),
+            pkg("app-misc/y-1", ""),
+            pkg("app-misc/z-1", ""),
+        ],
+        &[],
+    );
+    plant_vdb(&fix.root, "app-misc/y-1");
+    plant_vdb_rdepend(&fix.root, "app-misc/z-1", Some("app-misc/y"));
+    let atoms = [TargetAtom::explicit("app-misc/x")];
+
+    let outcome = solve(&fix, Solve::new(&atoms));
+    let unmerged: Vec<String> = outcome.unmerges.iter().map(|u| u.cpv.to_string()).collect();
+    assert_eq!(unmerged, ["app-misc/y-1"]);
+}

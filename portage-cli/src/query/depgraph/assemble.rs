@@ -303,7 +303,11 @@ pub(super) fn assemble(
         output::report_repairs(&repair_pulled_in, &repair_held_back, &repair_incomplete);
 
         let hits = provider.check_blockers_detailed(&solution);
-        let classified = conflicts::classify_blockers(&hits, &target_installed, &proposed);
+        let classified = conflicts::classify_blockers(
+            &hits,
+            &super::installed_as_solved(&target_installed, &provider, &data),
+            &proposed,
+        );
         output::report_blockers(&classified);
         let hard_conflict = conflicts::is_hard_conflict(&classified);
         let unmerges = conflicts::planned_unmerges(&classified);

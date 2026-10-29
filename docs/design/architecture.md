@@ -570,6 +570,11 @@ only a package's own facts):
 | Reverse-dependency conflicts | resolve `conflicts.rs` | every installed pkg's deps vs the plan; each broken kept package is re-solved as a target (up to 3 rounds, off with `--complete-graph-if-new-ver n`) that moves to the version nearest its installed one (newest under `-uD`), so it is updated too or holds the update back; what remains is reported as "Dependency constraint conflict" |
 | `REQUIRED_USE` | cli `required_use.rs` | **Level A** — see below |
 
+Both installed-package checks (reverse-dependency conflicts and blocker removal) read an installed
+package's deps the way the solve did: the current ebuild's when the repository still offers that
+version (emerge's dynamic deps), the VDB's otherwise. The `:=` rebuild pass keeps the VDB's, whose
+bindings are what it compares.
+
 ### REQUIRED_USE: Level A vs Level C
 
 `REQUIRED_USE` (`^^`/`??`/`||`/`flag? ( … )`) is handled at two possible levels:
