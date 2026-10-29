@@ -458,22 +458,38 @@ impl Version {
         pattern.revision.0 == 0 || self.revision == pattern.revision
     }
 
-    /// Half-open bounds of `=V*`. Lower adds one `_alpha` (a further suffix under
-    /// it sorts lower). Upper bumps the last suffix number, or the last numeric
-    /// component when there is none, then adds `_alpha`. Written digits stay, so
-    /// `26.04*` ends before `26.05_alpha`.
+    /// Half-open bounds of `=V*`. A revision pattern is `[V, V-r(N+1))`. Otherwise
+    /// lower adds one `_alpha` (a further suffix under it sorts lower), and upper
+    /// bumps the last suffix number, else the letter, else the last numeric
+    /// component, then adds `_alpha`. Written digits stay: `26.04*` ends at `26.05_alpha`.
     ///
-    /// `None` means that bump does not fit in `u64`. A suffix pattern stops at
-    /// the next suffix number, so `262.1_rc1` is outside `=262_rc1*`.
+    /// `None` means that bump does not fit in `u64`. The range is exact except when
+    /// the last numeric component of a plain pattern is `0` or starts with one:
+    /// `26.041` sorts inside `=26.04*`, and `04` has no least successor.
     pub fn glob_bounds(&self) -> (Version, Option<Version>) {
+        if self.revision.0 != 0 {
+            let mut lower = self.clone();
+            lower.raw = None;
+            let upper = match self.revision.0.checked_add(1) {
+                Some(next) => {
+                    let mut upper = lower.clone();
+                    upper.revision = Revision(next);
+                    Some(upper)
+                }
+                None => bumped_numeric(self),
+            };
+            return (lower, upper);
+        }
         let mut lower = self.clone();
         clear_endpoint(&mut lower);
         lower.suffixes.push(alpha_suffix());
 
-        let upper = if self.suffixes.is_empty() {
-            bumped_numeric(self)
-        } else {
+        let upper = if !self.suffixes.is_empty() {
             bumped_suffix(self).or_else(|| bumped_numeric(self))
+        } else if self.letter.is_some() {
+            Some(bumped_letter(self))
+        } else {
+            bumped_numeric(self)
         };
         (lower, upper)
     }
@@ -657,15 +673,36 @@ fn bumped_suffix(v: &Version) -> Option<Version> {
     Some(upper)
 }
 
-// Width-preserving successor. Overflow drops the component: `2.0_alpha` still
-// sorts above `2_alpha`, so the carry must not leave a trailing zero.
-fn bump_last_numeric(v: &mut Version) -> bool {
+// After `z` comes the same numbers plus `.0`, the smallest longer version.
+fn bumped_letter(v: &Version) -> Version {
+    let mut upper = v.clone();
+    clear_endpoint(&mut upper);
+    match upper.letter {
+        Some(c) if c < 'z' => upper.letter = Some((c as u8 + 1) as char),
+        _ => {
+            upper.letter = None;
+            fill_digits(&mut upper);
+            upper.numbers.push(0);
+            upper.digits.push(SmolStr::new("0"));
+        }
+    }
+    upper.suffixes.push(alpha_suffix());
+    upper
+}
+
+fn fill_digits(v: &mut Version) {
     if v.digits.len() < v.numbers.len() {
         for n in &v.numbers[v.digits.len()..] {
             v.digits.push(SmolStr::new(n.to_string()));
         }
     }
     debug_assert_eq!(v.digits.len(), v.numbers.len());
+}
+
+// Width-preserving successor. Overflow drops the component: `2.0_alpha` still
+// sorts above `2_alpha`, so the carry must not leave a trailing zero.
+fn bump_last_numeric(v: &mut Version) -> bool {
+    fill_digits(v);
     while let Some(&current) = v.numbers.last() {
         match current.checked_add(1) {
             Some(next) => {
@@ -1268,6 +1305,93 @@ mod tests {
     }
 
     #[test]
+    fn glob_bounds_agree_with_glob_matches() {
+        // Patterns whose last numeric component neither is `0` nor starts with one.
+        let patterns = [
+            "1",
+            "1.2",
+            "1.2.3",
+            "1.2a",
+            "1.2z",
+            "1.2_rc",
+            "1.2_rc3",
+            "1.2_p",
+            "1.2_p1",
+            "1.2-r1",
+            "1.2a_beta2-r3",
+            "26.04.3",
+            "26.04a",
+            "26.04_rc1",
+            "26.04-r2",
+        ];
+        let candidates = [
+            "1",
+            "1.1",
+            "1.2",
+            "1.2.0",
+            "1.2.3",
+            "1.2.3.4",
+            "1.2.4",
+            "1.3",
+            "1.10",
+            "1.2a",
+            "1.2b",
+            "1.2z",
+            "1.2.0a",
+            "1.2.5a",
+            "1.2_alpha",
+            "1.2_rc",
+            "1.2_rc0",
+            "1.2_rc3",
+            "1.2_rc3_p1",
+            "1.2_rc4",
+            "1.2_p",
+            "1.2_p1",
+            "1.2_p20250710",
+            "1.2-r1",
+            "1.2-r2",
+            "1.2-r10",
+            "1.2_p1-r1",
+            "1.2a-r1",
+            "1.2a_beta2",
+            "1.2a_beta2-r3",
+            "1.2a_beta2_p1-r3",
+            "1.2a_beta3-r3",
+            "1.2.3-r1",
+            "1.2.30",
+            "1.2.03",
+            "2",
+            "26.04",
+            "26.040",
+            "26.04.3",
+            "26.04.3-r1",
+            "26.04.4",
+            "26.04a",
+            "26.04b",
+            "26.04_rc1",
+            "26.04_rc1_p2",
+            "26.04_rc2",
+            "26.04-r2",
+            "26.04-r3",
+            "26.4",
+            "26.05",
+        ];
+        let mut bad = Vec::new();
+        for p in patterns {
+            let pattern = Version::parse(p).unwrap();
+            let (lower, upper) = pattern.glob_bounds();
+            for c in candidates {
+                let v = Version::parse(c).unwrap();
+                let in_range = v >= lower && upper.as_ref().is_none_or(|u| v < *u);
+                if in_range != v.glob_matches(&pattern) {
+                    bad.push(format!("={p}* vs {c}: range {in_range}"));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    #[test]
     fn test_glob_bounds_keep_written_digits() {
         let (lower, upper) = Version::parse("26.04.3").unwrap().glob_bounds();
         assert_eq!(lower.to_string(), "26.04.3_alpha");
@@ -1283,7 +1407,11 @@ mod tests {
 
         let (lower, upper) = Version::parse("1.0a").unwrap().glob_bounds();
         assert_eq!(lower.to_string(), "1.0a_alpha");
-        assert_eq!(upper.unwrap().to_string(), "1.1_alpha");
+        assert_eq!(upper.unwrap().to_string(), "1.0b_alpha");
+
+        let (lower, upper) = Version::parse("1.0z").unwrap().glob_bounds();
+        assert_eq!(lower.to_string(), "1.0z_alpha");
+        assert_eq!(upper.unwrap().to_string(), "1.0.0_alpha");
 
         let (lower, upper) = Version::parse("262_rc1").unwrap().glob_bounds();
         assert_eq!(lower.to_string(), "262_rc1_alpha");
@@ -1294,8 +1422,8 @@ mod tests {
         assert_eq!(upper.unwrap().to_string(), "1.0_rc1_alpha");
 
         let (lower, upper) = Version::parse("1.0-r1").unwrap().glob_bounds();
-        assert_eq!(lower.to_string(), "1.0_alpha");
-        assert_eq!(upper.unwrap().to_string(), "1.1_alpha");
+        assert_eq!(lower.to_string(), "1.0-r1");
+        assert_eq!(upper.unwrap().to_string(), "1.0-r2");
 
         let max = u64::MAX.to_string();
         let (lower, upper) = Version::parse(&max).unwrap().glob_bounds();
