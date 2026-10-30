@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Blocker, Cpn, Cpv, Dep, DepEntry, Operator, Version};
-use portage_atom_pubgrub::{BlockerHit, PortageVersionSet};
+use portage_atom::{Blocker, Cpn, Cpv, Dep, DepEntry, Version};
+use portage_atom_pubgrub::BlockerHit;
 
 use crate::installed::VdbEntry;
 
@@ -380,18 +380,6 @@ fn collect_blocker_atoms(entries: &[DepEntry], out: &mut Vec<Dep>) {
             out.push(dep.clone());
         }
     });
-}
-
-/// Translate a dep atom's version constraint into the solver's
-/// [`PortageVersionSet`] (a bare atom with no version op accepts any version)
-pub fn dep_to_version_set(dep: &Dep) -> PortageVersionSet {
-    match &dep.version {
-        None => PortageVersionSet::any(),
-        Some(v) => {
-            let op = dep.op.unwrap_or(Operator::GreaterOrEqual);
-            PortageVersionSet::from_operator(op, dep.glob, v.clone())
-        }
-    }
 }
 
 /// When an auto-removed victim would be unmerged, relative to the merge of

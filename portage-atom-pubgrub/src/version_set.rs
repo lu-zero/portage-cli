@@ -55,9 +55,9 @@ impl PortageVersionSet {
 
     /// [`Self::from_operator`] with the known versions of the target in hand
     ///
-    /// When the `=V*` range is not exact ([`Version::glob_bounds_exact`]), each
-    /// known version inside it that is no glob match is cut out. `known` runs
-    /// only then.
+    /// For `=V*`, each known version lands on its [`Version::glob_matches`] side: a non-match
+    /// inside an inexact range ([`Version::glob_bounds_exact`]) is cut out, and a match below
+    /// `V_alpha` (`8.4_alpha_pre1` for `=8.4*`) is added. `known` runs only for `=V*`.
     pub fn from_operator_among<I>(
         op: Operator,
         glob: bool,
@@ -67,14 +67,23 @@ impl PortageVersionSet {
     where
         I: IntoIterator<Item = Version>,
     {
-        if !(glob && op == Operator::Equal) || v.glob_bounds_exact() {
+        if !(glob && op == Operator::Equal) {
             return Self::from_operator(op, glob, v);
         }
+        let exact = v.glob_bounds_exact();
         let mut set = Self::from_operator(op, glob, v.clone());
         for candidate in known() {
-            if set.contains(&candidate) && !candidate.glob_matches(&v) {
-                let cut = Ranges::singleton(candidate).complement();
-                set = Self(set.0.intersection(&cut));
+            let inside = set.contains(&candidate);
+            if inside && exact {
+                continue;
+            }
+            match (inside, candidate.glob_matches(&v)) {
+                (true, false) => {
+                    let cut = Ranges::singleton(candidate).complement();
+                    set = Self(set.0.intersection(&cut));
+                }
+                (false, true) => set = Self(set.0.union(&Ranges::singleton(candidate))),
+                _ => {}
             }
         }
         set
@@ -216,12 +225,33 @@ mod tests {
         assert!(!vs.contains(&parse("3.05")));
         assert!(!vs.contains(&parse("3.1")));
 
-        let unused = || -> Vec<Version> { panic!("an exact glob range needs no known versions") };
-        let exact =
-            PortageVersionSet::from_operator_among(Operator::Equal, true, parse("3.1"), unused);
+        let unused = || -> Vec<Version> { panic!("only =V* needs known versions") };
+        let ge = PortageVersionSet::from_operator_among(
+            Operator::GreaterOrEqual,
+            false,
+            parse("3.1"),
+            unused,
+        );
         assert_eq!(
-            exact,
-            PortageVersionSet::from_operator(Operator::Equal, true, parse("3.1"))
+            ge,
+            PortageVersionSet::from_operator(Operator::GreaterOrEqual, false, parse("3.1"))
+        );
+    }
+
+    #[test]
+    fn glob_among_adds_known_matches_under_the_alpha_bound() {
+        let parse = |s: &str| Version::parse(s).unwrap();
+        // sys-libs/readline-8.4_alpha_pre20251007 is a `=sys-libs/readline-8.4*` match, but sorts
+        // under the `8.4_alpha` lower bound.
+        let known = || ["8.3_p3", "8.4_alpha_pre20251007", "8.4_rc2", "8.4_p1"].map(parse);
+        let vs = PortageVersionSet::from_operator_among(Operator::Equal, true, parse("8.4"), known);
+        for v in ["8.4_alpha_pre20251007", "8.4_rc2", "8.4_p1"] {
+            assert!(vs.contains(&parse(v)), "{v}");
+        }
+        assert!(!vs.contains(&parse("8.3_p3")));
+        assert!(
+            !vs.contains(&parse("8.4_alpha_beta")),
+            "unknown versions keep the range"
         );
     }
 

@@ -11,9 +11,8 @@
 use std::collections::{HashMap, HashSet};
 
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpn, DepEntry, Slot, SlotDep, SlotOperator, Version};
+use portage_atom::{Cpn, Cpv, DepEntry, Slot, SlotDep, SlotOperator, Version};
 
-use crate::conflicts::dep_to_version_set;
 use crate::installed::VdbEntry;
 
 /// An installed package needing a rebuild because a planned dependency's
@@ -95,13 +94,12 @@ pub fn find_rebuilds(
             let Some(planned) = planned_slots.get(&dep.cpn) else {
                 continue;
             };
-            let vs = dep_to_version_set(dep);
             // A planned version in the bound slot, satisfying the dep's version
             // range, but with a different subslot ⇒ the binding is invalidated.
             // (A range mismatch is a dependency conflict, reported elsewhere.)
             let invalidated = planned.iter().any(|(ver, pslot)| {
                 pslot.slot == s.slot
-                    && vs.contains(ver)
+                    && dep.matches_cpv(&Cpv::new(dep.cpn, ver.clone()), None)
                     && effective_subslot(pslot) != bound_subslot
             });
             if invalidated && !triggers.contains(&dep.cpn) {

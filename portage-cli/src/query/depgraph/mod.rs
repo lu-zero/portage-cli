@@ -1178,8 +1178,9 @@ fn trigger_still_satisfied(
         return false;
     }
     atoms.iter().any(|dep| {
-        let vs = conflicts::dep_to_version_set(dep);
-        planned.iter().any(|(ver, _)| vs.contains(ver))
+        planned
+            .iter()
+            .any(|(ver, _)| dep.matches_cpv(&Cpv::new(dep.cpn, ver.clone()), None))
     })
 }
 
