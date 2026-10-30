@@ -496,7 +496,7 @@ pub(super) fn assemble(
                 effective_use::apply_ceded(&mut effective, *cpn, &ceded);
                 (Vec::new(), Vec::new(), effective.enabled_flags())
             };
-            flags.sort();
+            flags.sort_by(|a, b| a.as_str().cmp(b.as_str()));
             flags.dedup();
             // A cross-derived cpn (`cross-<tuple>/gcc`) has no on-disk tree of
             // its own — `real_cpn_of` redirects the *file* lookup to the real

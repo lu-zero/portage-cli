@@ -312,19 +312,28 @@ impl PortageDependencyProvider {
             dirty = Some(std::mem::take(&mut acc.grown));
         }
 
+        // Interned values order by interning order, which varies between runs; these are shown.
+        let by_name = |set: BTreeSet<Interned<DefaultInterner>>| {
+            let mut flags: Vec<_> = set.into_iter().collect();
+            flags.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            flags
+        };
         let mut reqs: Vec<UseFlagRequirement> = acc
             .by_target
             .into_iter()
-            .map(
-                |(pkg, (ver, enable, disable, requirers))| UseFlagRequirement {
+            .map(|(pkg, (ver, enable, disable, requirers))| {
+                let mut required_by: Vec<String> =
+                    requirers.iter().map(|s| s.to_string()).collect();
+                required_by.sort();
+                UseFlagRequirement {
                     package: pkg.clone(),
                     version: ver,
                     upgrade_to: upgrade_to.remove(&pkg),
-                    required_enabled: enable.into_iter().collect(),
-                    required_disabled: disable.into_iter().collect(),
-                    required_by: requirers.into_iter().map(|s| s.to_string()).collect(),
-                },
-            )
+                    required_enabled: by_name(enable),
+                    required_disabled: by_name(disable),
+                    required_by,
+                }
+            })
             .collect();
         // `by_target` is a HashMap, so collect order is nondeterministic; sort by
         // (package, version) so use_flag_requirements — and everything derived
