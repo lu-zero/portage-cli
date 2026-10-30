@@ -1264,6 +1264,60 @@ mod tests {
         );
     }
 
+    /// `glob_matches` against the answers Portage's `match_from_list` gives for `=V*`
+    #[test]
+    fn glob_matches_agree_with_portage() {
+        // (candidate, pattern, Portage's answer)
+        let cases = [
+            ("262", "262_rc1", false),
+            ("262_rc2", "262_rc1", false),
+            ("262_rc1-r1", "262_rc1", true),
+            ("0_pre20241109", "0_p", false),
+            ("1.0", "1.0_rc3_p1", false),
+            ("1.0.0-r2", "1.0.0_p20250710", false),
+            ("4.13.2_p20240222", "4.13.2_p20", false),
+            ("10", "1", false),
+            ("1.0-r10", "1.0-r1", false),
+            ("1.2.3", "1.2", true),
+            ("1.2_rc1", "1.2", true),
+            ("1.2a", "1.2", true),
+            ("1.0_rc3", "1.0_rc", true),
+            ("1.0-r3", "1.0", true),
+            ("007.1", "7", true),
+            ("7.1", "007", true),
+            ("26.04.3", "26.04", true),
+            ("26.4.3", "26.04", false),
+            ("1.0_p20250710", "1.0_p", true),
+            ("262.1_rc1", "262_rc1", false),
+            ("1.0.1-r1", "1.0-r1", false),
+            ("1.0-r2", "1.0-r1", false),
+            ("1.2_alpha_alpha", "1.2", true),
+            ("26.041", "26.04", false),
+        ];
+        let bad: Vec<_> = cases
+            .iter()
+            .filter(|(c, p, want)| {
+                let (c, p) = (Version::parse(c).unwrap(), Version::parse(p).unwrap());
+                c.glob_matches(&p) != *want
+            })
+            .map(|(c, p, want)| format!("={p}* vs {c}: portage={want}"))
+            .collect();
+        assert!(bad.is_empty(), "{bad:#?}");
+    }
+
+    /// Where Portage's text prefix and PMS disagree, em follows PMS 8.3.1: components compare
+    /// as components, and Algorithm 3.3 makes `01` and `010`, or `0` and `00`, equal
+    #[test]
+    fn glob_matches_pms_equal_components_unlike_portage() {
+        for (candidate, pattern) in [("1.010.5", "1.01"), ("2025.04.14.00", "2025.04.14.0")] {
+            let (c, p) = (
+                Version::parse(candidate).unwrap(),
+                Version::parse(pattern).unwrap(),
+            );
+            assert!(c.glob_matches(&p), "={pattern}* vs {candidate}");
+        }
+    }
+
     #[test]
     fn glob_bounds_agree_with_glob_matches() {
         // Patterns whose last numeric component neither is `0` nor starts with one.
