@@ -208,9 +208,9 @@ impl RoundCtx<'_> {
             metrics.depend_trimmed += before.saturating_sub(order.len());
             metrics.record("depend_trim", start.elapsed());
         }
-        // `-uD` re-selects build tools on purpose, and `--emptytree` lists the whole closure.
-        let deep_update = self.update && self.deep;
-        if !self.emptytree_native && !deep_update {
+        // A deep `-u`/`-N`/`-U` walks build tools on purpose, and `--emptytree` lists the whole closure.
+        let walks_build_deps = self.deep && (self.update || self.use_reinstall_mode.is_some());
+        if !self.emptytree_native && !walks_build_deps {
             let before = order.len();
             let start = Instant::now();
             order = bdepend_trim::trim_within_run_bdepend(order, full_order, true, trim_ctx);

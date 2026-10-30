@@ -266,19 +266,30 @@ impl RoundCtx<'_> {
         provider.set_prefer_newest_slot(self.deep || self.emptytree_native);
         // `-uD` upgrades in-slot across the whole solve; `-N` alone must not (Portage parity).
         provider.set_prefer_update(self.update && self.deep && !self.emptytree_native);
+        provider.set_walk_satisfied_build_deps(
+            self.use_reinstall_mode.is_some() && self.deep && !self.emptytree_native,
+        );
         provider.set_kept_build_deps(self.solve_with_bdeps && self.deep);
         // Without `-u`, a root target an installed version satisfies keeps it.
         provider.set_selective_no_update(self.selective && !self.update);
     }
 
+    /// `-N`/`-U` drift, checked on root targets and, under `--deep`, on every installed package
     fn needs_use_rebuild(
         &self,
         e: &installed::VdbEntry,
         pkg: &PortagePackage,
         policy: &repo::ResolvePolicy<'_>,
     ) -> bool {
-        self.use_reinstall_mode
-            .is_some_and(|mode| package_needs_use_reinstall(mode, e, pkg, self.data, policy))
+        let checked = self.deep
+            || self
+                .root_pkgs
+                .iter()
+                .any(|r| r.cpn() == pkg.cpn() && r.slot() == pkg.slot());
+        checked
+            && self
+                .use_reinstall_mode
+                .is_some_and(|mode| package_needs_use_reinstall(mode, e, pkg, self.data, policy))
     }
 
     /// The VDB's installed packages, with their blockers, as Favor or Rebuild

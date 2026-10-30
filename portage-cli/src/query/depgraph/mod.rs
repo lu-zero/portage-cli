@@ -1188,9 +1188,11 @@ fn trigger_still_satisfied(
     })
 }
 
-/// Whether an installed VDB entry must rebuild under `-N`/`-U` for USE/IUSE
-/// drift relative to the planned fold for its CPV (or the newest same-slot
-/// repo version when the exact CPV left the tree).
+/// Whether an installed VDB entry must rebuild under `-N`/`-U` for USE/IUSE drift
+///
+/// The comparison is with the newest visible version in its slot, as emerge's
+/// `_reinstall_for_flags` compares with the best ebuild: new IUSE there counts too. With
+/// none visible, the installed version's own ebuild, if the tree still has it.
 fn package_needs_use_reinstall(
     mode: portage_resolve::use_reinstall::UseReinstallMode,
     e: &installed::VdbEntry,
@@ -1202,27 +1204,30 @@ fn package_needs_use_reinstall(
     use portage_resolve::use_reinstall::needs_use_reinstall;
     use std::collections::HashSet;
 
-    // Prefer the installed CPV's cache entry; fall back to newest same-slot
-    // version when the exact CPV left the tree.
-    let (plan_ver, cache) = if let Some(c) = repo::find_cache(data, pkg, &e.version) {
-        (e.version.clone(), c)
-    } else {
-        let Some((cpv, c)) = data.versions.get(&e.cpn).and_then(|vers| {
-            vers.iter().rev().find(|(_, entry)| {
-                let got = entry.metadata.slot.slot.as_str();
-                match e.slot.as_ref().map(|s| s.as_str()) {
-                    Some(want) => got == want || got.split('/').next() == Some(want),
-                    None => true,
-                }
-            })
-        }) else {
-            return false;
-        };
-        (cpv.version.clone(), c)
+    let same_slot = |entry: &portage_metadata::CacheEntry| {
+        let got = entry.metadata.slot.slot.as_str();
+        match e.slot.as_ref().map(|s| s.as_str()) {
+            Some(want) => got == want || got.split('/').next() == Some(want),
+            None => true,
+        }
     };
-    // Stable-keyword decision is approximate here (any stable token); force
-    // mask's stable sets rarely change reinstall detection vs the main USE fold.
-    let stable = true;
+    let best = data.versions.get(&e.cpn).and_then(|vers| {
+        vers.iter()
+            .rev()
+            .find(|(cpv, entry)| same_slot(entry) && policy.accepts_version(data, cpv, entry))
+    });
+    let (plan_ver, cache) = match best {
+        Some((cpv, c)) => (cpv.version.clone(), c),
+        None => match repo::find_cache(data, pkg, &e.version) {
+            Some(c) => (e.version.clone(), c),
+            None => return false,
+        },
+    };
+    let stable = policy.accept_keywords.is_stable(
+        &cache.metadata.keywords,
+        &Cpv::new(e.cpn, plan_ver.clone()),
+        Some(cache.metadata.slot.slot),
+    );
     let cfg = effective_use::effective_use(policy, pkg, &plan_ver, cache, stable, &[]);
     let cur_iuse = effective_use::iuse_set(cache, &policy.force_mask.iuse_injection);
     let cur_enabled: HashSet<_> = cur_iuse

@@ -332,6 +332,9 @@ pub struct PortageDependencyProvider {
     /// and from [`InstalledPolicy::Rebuild`] (emptytree full build-closure
     /// expansion).
     pub(crate) prefer_update: bool,
+    /// `--deep` with `-N` or `-U`: build edges BROOT satisfies are still listed, so what lies behind
+    /// them is checked for USE changes, as emerge's deep walk does; `prefer_update` implies it
+    pub(crate) walk_satisfied_build_deps: bool,
     /// `--with-bdeps` with `--deep`: an installed package kept at its version still lists its
     /// DEPEND and BDEPEND, so their upgrades and missing build tools enter the plan as in emerge
     pub(crate) kept_build_deps: bool,
@@ -796,6 +799,7 @@ impl PortageDependencyProvider {
             rebuild_tree: false,
             prefer_newest_slot: false,
             prefer_update: false,
+            walk_satisfied_build_deps: false,
             kept_build_deps: false,
             root_use_deps: Vec::new(),
             selective_no_update: false,
@@ -927,6 +931,12 @@ impl PortageDependencyProvider {
     /// the solve (disable the Favor early-return for non-root packages)
     pub fn set_prefer_update(&mut self, active: bool) {
         self.prefer_update = active;
+    }
+
+    /// `--deep` with `-N` or `-U`: list build edges BROOT already satisfies, so the packages
+    /// behind them are checked too (`--update --deep` does already)
+    pub fn set_walk_satisfied_build_deps(&mut self, active: bool) {
+        self.walk_satisfied_build_deps = active;
     }
 
     /// `--with-bdeps` with `--deep`: an installed package kept at its version still lists its

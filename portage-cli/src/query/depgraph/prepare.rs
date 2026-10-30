@@ -440,9 +440,14 @@ pub(super) async fn prepare<'a>(
                 && root_pkgs
                     .iter()
                     .any(|r| r.cpn() == pkg.cpn() && r.slot() == pkg.slot());
-            let use_rebuild = use_reinstall_mode.is_some_and(|mode| {
-                package_needs_use_reinstall(mode, e, &pkg, &data, &target_policy)
-            });
+            let checked = deep
+                || root_pkgs
+                    .iter()
+                    .any(|r| r.cpn() == pkg.cpn() && r.slot() == pkg.slot());
+            let use_rebuild = checked
+                && use_reinstall_mode.is_some_and(|mode| {
+                    package_needs_use_reinstall(mode, e, &pkg, &data, &target_policy)
+                });
             if explicit_reinstall || use_rebuild {
                 rebuilding_installed_cpvs.insert(Cpv::new(e.cpn, e.version.clone()));
             }

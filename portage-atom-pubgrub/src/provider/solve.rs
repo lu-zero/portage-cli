@@ -164,19 +164,9 @@ impl DependencyProvider for PortageDependencyProvider {
                         return Ok(Some(installed_ver.clone()));
                     }
                 }
-                InstalledPolicy::Rebuild => {
-                    // Emptytree / `-uD`: fall through to newest in-range.
-                    // `-N`/`-U` alone: same-CPV reinstall when the installed
-                    // version is still offered (emerge `[R]`); otherwise the
-                    // newest offered one, as the installed one cannot be built.
-                    if !self.rebuild_tree
-                        && !self.prefer_update
-                        && !replaceable
-                        && range.contains(installed_ver)
-                    {
-                        return Ok(Some(installed_ver.clone()));
-                    }
-                }
+                // A rebuild takes the newest version in range, as emerge rebuilds onto its best
+                // candidate: an upgrade when there is a newer one, `[R]` when the installed one is it.
+                InstalledPolicy::Rebuild => {}
             }
         }
         let candidates = if replaceable { offered } else { candidates };
@@ -548,14 +538,14 @@ fn cross_target_runtime_deps(
     )
 }
 
-/// A kept package's DEPEND and BDEPEND: all of them under `-uD`, so their upgrades are taken,
-/// else only the edges BROOT does not satisfy
+/// A kept package's DEPEND and BDEPEND: all of them under a deep `-u`/`-N`/`-U`, so what they
+/// lead to is checked, else only the edges BROOT does not satisfy
 fn kept_build_deps(
     out: &mut Vec<(PortagePackage, PortageVersionSet)>,
     provider: &PortageDependencyProvider,
     vd: &VersionData,
 ) {
-    if provider.prefer_update {
+    if provider.prefer_update || provider.walk_satisfied_build_deps {
         let build = vd.depend().iter().chain(vd.bdepend());
         out.extend(build.map(|(p, vs, _)| (p.clone(), vs.clone())));
     } else {
@@ -600,11 +590,9 @@ fn broot_filtered(
         .chain(vd.pdepend())
         .map(|(p, vs, _)| (p.clone(), vs.clone()))
         .collect();
-    // `-uD` (`prefer_update`): keep *all* host-satisfied build edges so in-slot
-    // upgrades can select them. `--newuse` alone does **not** re-inject
-    // host-satisfied BDEPEND (Portage leaves those off the merge list; USE-deps
-    // on atoms still fail host satisfaction when an impl is missing).
-    if provider.prefer_update {
+    // A deep `-u`/`-N`/`-U` keeps host-satisfied build edges, so their upgrades and USE changes
+    // are found. Without `--deep`, Portage leaves them off the walk.
+    if provider.prefer_update || provider.walk_satisfied_build_deps {
         for (p, vs, _) in vd.depend().iter().chain(vd.bdepend()).chain(vd.idepend()) {
             out.push((p.clone(), vs.clone()));
         }

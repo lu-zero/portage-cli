@@ -1135,6 +1135,12 @@ pub struct ResolvePolicy<'a> {
 }
 
 impl<'a> ResolvePolicy<'a> {
+    /// Whether `cpv` passes keywords, masks, license, properties and restrict, as
+    /// [`Adapter::version_accepted`] decides it
+    pub fn accepts_version(&self, data: &RepoData, cpv: &Cpv, cache: &CacheEntry) -> bool {
+        version_accepted_for(self, cpv, cache, repo_name_of(data, cpv))
+    }
+
     /// Rebind `package_use` and its policy-fact generation together.
     pub fn with_package_use(
         self,

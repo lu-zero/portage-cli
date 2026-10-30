@@ -21,6 +21,8 @@ struct Pkg {
     cpv: &'static str,
     keywords: &'static str,
     depend: &'static str,
+    rdepend: &'static str,
+    bdepend: &'static str,
     iuse: &'static str,
     slot: &'static str,
 }
@@ -40,6 +42,7 @@ struct Solve<'a> {
     onlydeps: bool,
     update: bool,
     deep: bool,
+    newuse: bool,
     with_bdeps: bool,
     complete_graph: bool,
     exclude: &'a [String],
@@ -56,6 +59,7 @@ impl<'a> Solve<'a> {
             onlydeps: false,
             update: false,
             deep: false,
+            newuse: false,
             with_bdeps: false,
             complete_graph: false,
             exclude: &[],
@@ -71,6 +75,12 @@ fn cache_text(pkg: &Pkg) -> String {
     );
     if !pkg.iuse.is_empty() {
         text.push_str(&format!("IUSE={}\n", pkg.iuse));
+    }
+    if !pkg.rdepend.is_empty() {
+        text.push_str(&format!("RDEPEND={}\n", pkg.rdepend));
+    }
+    if !pkg.bdepend.is_empty() {
+        text.push_str(&format!("BDEPEND={}\n", pkg.bdepend));
     }
     text
 }
@@ -201,7 +211,7 @@ fn try_solve(fix: &Fix, opts: Solve<'_>) -> anyhow::Result<super::DepgraphOutcom
         root_deps_rdeps: false,
         deep: opts.deep,
         update: opts.update,
-        newuse: false,
+        newuse: opts.newuse,
         changed_use: false,
         selective: opts.selective,
         nodeps: false,
@@ -226,6 +236,8 @@ fn pair() -> Vec<Pkg> {
             cpv: "app-misc/foo-1",
             keywords: "amd64",
             depend: "app-misc/bar",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -233,6 +245,8 @@ fn pair() -> Vec<Pkg> {
             cpv: "app-misc/bar-1",
             keywords: "amd64",
             depend: "",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -248,6 +262,8 @@ fn pinned_consumer() -> Vec<Pkg> {
             cpv: "app-misc/bar-1",
             keywords: "amd64",
             depend: "",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -255,6 +271,8 @@ fn pinned_consumer() -> Vec<Pkg> {
             cpv: "app-misc/bar-2",
             keywords: "amd64",
             depend: "",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -262,6 +280,8 @@ fn pinned_consumer() -> Vec<Pkg> {
             cpv: "app-misc/consumer-1",
             keywords: "amd64",
             depend: "<app-misc/bar-2",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -269,6 +289,8 @@ fn pinned_consumer() -> Vec<Pkg> {
             cpv: "app-misc/consumer-2",
             keywords: "amd64",
             depend: ">=app-misc/bar-2",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -281,6 +303,8 @@ fn masked_dep() -> Vec<Pkg> {
             cpv: "app-misc/qux-1",
             keywords: "amd64",
             depend: "app-misc/masked",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -288,6 +312,8 @@ fn masked_dep() -> Vec<Pkg> {
             cpv: "app-misc/masked-1",
             keywords: "~amd64",
             depend: "",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -378,6 +404,80 @@ fn selective_n_reinstalls_a_target_update_would_keep() {
     assert_eq!(names(&solve(&fix, opts)), ["app-misc/foo-1"]);
 }
 
+fn plain(cpv: &'static str, depend: &'static str, iuse: &'static str) -> Pkg {
+    Pkg {
+        cpv,
+        keywords: "amd64",
+        depend,
+        rdepend: "",
+        bdepend: "",
+        iuse,
+        slot: "0",
+    }
+}
+
+/// `-N`, with emerge's default `--with-bdeps` under `--deep`
+fn newuse(atoms: &[TargetAtom], deep: bool) -> Solve<'_> {
+    let mut opts = Solve::new(atoms);
+    opts.newuse = true;
+    opts.deep = deep;
+    opts.with_bdeps = deep;
+    opts
+}
+
+// `-N` checks root targets, and every installed package only under `--deep`. A drifted package is
+// compared with the best visible version, whose new IUSE counts, and rebuilds onto it.
+#[test]
+fn newuse_checks_targets_or_everything_under_deep_against_the_best_version() {
+    let runtime = |cpv, rdepend| Pkg {
+        rdepend,
+        ..plain(cpv, "", "")
+    };
+    let pkgs = [
+        runtime("app-misc/top-1", "app-misc/dep"),
+        plain("app-misc/dep-1", "", "foo"),
+        plain("app-misc/dep-2", "", "foo"),
+        plain("app-misc/other-1", "", ""),
+        plain("app-misc/other-2", "", "bar"),
+    ];
+    let installed = ["app-misc/top-1", "app-misc/dep-1", "app-misc/other-1"];
+    let fix = fixture(&pkgs, &installed);
+    let top = [TargetAtom::explicit("app-misc/top")];
+    assert!(
+        names(&solve(&fix, newuse(&top, false))).is_empty(),
+        "dep drifted, but is no target"
+    );
+    assert_eq!(names(&solve(&fix, newuse(&top, true))), ["app-misc/dep-2"]);
+    let other = [TargetAtom::explicit("app-misc/other")];
+    assert_eq!(
+        names(&solve(&fix, newuse(&other, false))),
+        ["app-misc/other-2"],
+        "other-1 matches its own ebuild; other-2 adds IUSE"
+    );
+}
+
+// Under `-ND`, a rebuilt package's build tools the host already has are still checked.
+#[test]
+fn deep_newuse_checks_the_build_tools_of_a_rebuild() {
+    let build = |cpv, iuse| Pkg {
+        bdepend: "app-misc/tool",
+        ..plain(cpv, "", iuse)
+    };
+    let pkgs = [
+        build("app-misc/top-1", ""),
+        build("app-misc/top-2", "bar"),
+        plain("app-misc/tool-1", "", ""),
+        plain("app-misc/tool-2", "", "baz"),
+    ];
+    let fix = fixture(&pkgs, &["app-misc/top-1", "app-misc/tool-1"]);
+    let top = [TargetAtom::explicit("app-misc/top")];
+    assert_eq!(names(&solve(&fix, newuse(&top, false))), ["app-misc/top-2"]);
+    assert_eq!(
+        names(&solve(&fix, newuse(&top, true))),
+        ["app-misc/tool-2", "app-misc/top-2"]
+    );
+}
+
 #[test]
 fn onlydeps_plans_the_dependency_and_omits_the_target() {
     let fix = fixture(&pair(), &[]);
@@ -394,6 +494,8 @@ fn flagged() -> Vec<Pkg> {
         cpv,
         keywords: "amd64",
         depend: "",
+        rdepend: "",
+        bdepend: "",
         iuse,
         slot: "0",
     };
@@ -446,6 +548,8 @@ fn every_fatal_unsatisfiable_target_is_reported() {
             cpv: "app-misc/flagged-1",
             keywords: "amd64",
             depend: "",
+            rdepend: "",
+            bdepend: "",
             iuse: "foo",
             slot: "0",
         },
@@ -453,6 +557,8 @@ fn every_fatal_unsatisfiable_target_is_reported() {
             cpv: "app-misc/gone-1",
             keywords: "",
             depend: "",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -708,6 +814,8 @@ fn a_masked_installed_package_is_reported_when_nothing_replaces_it() {
             cpv: "app-misc/consumer-1",
             keywords: "amd64",
             depend: "app-misc/bar",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -715,6 +823,8 @@ fn a_masked_installed_package_is_reported_when_nothing_replaces_it() {
             cpv: "app-misc/bar-1",
             keywords: "~amd64",
             depend: "",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -737,6 +847,8 @@ fn a_masked_installed_package_is_not_reported_when_its_slot_is_upgraded() {
             cpv: "app-misc/other-1",
             keywords: "amd64",
             depend: ">=app-misc/bar-2",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -744,6 +856,8 @@ fn a_masked_installed_package_is_not_reported_when_its_slot_is_upgraded() {
             cpv: "app-misc/bar-1",
             keywords: "~amd64",
             depend: "",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -751,6 +865,8 @@ fn a_masked_installed_package_is_not_reported_when_its_slot_is_upgraded() {
             cpv: "app-misc/bar-2",
             keywords: "amd64",
             depend: "",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -780,6 +896,8 @@ fn a_masked_installed_package_in_another_slot_is_not_reported() {
             cpv: "app-misc/consumer-1",
             keywords: "amd64",
             depend: "app-misc/bar:0",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "0",
         },
@@ -787,6 +905,8 @@ fn a_masked_installed_package_in_another_slot_is_not_reported() {
             cpv: "app-misc/bar-1",
             keywords: "~amd64",
             depend: "",
+            rdepend: "",
+            bdepend: "",
             iuse: "",
             slot: "1",
         },
@@ -843,6 +963,8 @@ fn a_blocked_package_only_the_installed_record_still_needs_is_unmerged() {
         cpv,
         keywords: "amd64",
         depend,
+        rdepend: "",
+        bdepend: "",
         iuse: "",
         slot: "0",
     };
