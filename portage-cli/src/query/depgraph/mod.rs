@@ -298,9 +298,11 @@ pub struct DepgraphOpts<'a> {
     /// `--changed-use` / `-U`: like `newuse` but only for enabled-flag flips
     /// among shared IUSE (ignore pure IUSE add/drop).
     pub changed_use: bool,
-    /// `--noreplace` / `-n`: leave a named target alone when an installed
-    /// version already satisfies it, rather than reinstalling it.
-    pub noreplace: bool,
+    /// `--selective` / `-n`: leave a named target alone when an installed version already
+    /// satisfies it, rather than reinstalling it
+    ///
+    /// `None` is implied by `update`, `newuse` and `changed_use`; `Some(false)` overrides them.
+    pub selective: Option<bool>,
     /// `--nodeps` (emerge `-O`): merge only the named atoms, no dependency expansion
     ///
     /// Used by the staged toolchain bootstrap.

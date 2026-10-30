@@ -110,7 +110,7 @@ pub(super) async fn prepare<'a>(
         update,
         newuse,
         changed_use,
-        noreplace,
+        selective,
         nodeps,
         host_merge_root,
         extra_use_override,
@@ -135,7 +135,7 @@ pub(super) async fn prepare<'a>(
     // `create_depgraph_params`' `selective`, restricted to the flags em has: an
     // installed instance may satisfy a named target, so the target is left alone
     // instead of being reinstalled. `--emptytree` is the explicit opposite.
-    let selective = (update || noreplace || newuse || changed_use) && !empty;
+    let selective = selective.unwrap_or(update || newuse || changed_use) && !empty;
     let cross = root_aware::detect(roots, host_merge_root);
     let config_root = roots.config();
     let host_config_stage = cross.active && cross.sysroot.as_str() != cross.target.as_str();

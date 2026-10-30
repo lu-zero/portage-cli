@@ -67,6 +67,11 @@ How the solver and build scheduler behave.
   Takes precedence over `--tree`. Works with `-p` (including `-e`).
 * `-o, --onlydeps` — Only merge dependencies, not the specified packages themselves
 * `-n, --noreplace` — Do not replace installed packages that are already the same version
+* `--selective[=<y|n>]` — Leave a named package alone when an installed version satisfies it, like `-n`
+
+  `-u`, `-N` and `-U` imply it; `--selective=n` turns it off whatever else is given.
+  * `y`: Yes
+  * `n`: No
 * `-j, --jobs <N>` — Build up to N packages in parallel, respecting build-dependency order (merges are still serialised)
 
   Default 1 (sequential).

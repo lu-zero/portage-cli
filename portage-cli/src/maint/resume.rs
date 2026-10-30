@@ -419,6 +419,7 @@ pub fn merge_resume_flags(saved: &MergeFlags, cli: &MergeFlags) -> MergeFlags {
         emptytree: saved.emptytree || cli.emptytree,
         onlydeps: saved.onlydeps || cli.onlydeps,
         noreplace: saved.noreplace || cli.noreplace,
+        selective: cli.selective.or(saved.selective),
         keep_going: saved.keep_going || cli.keep_going,
         autounmask: saved.autounmask || cli.autounmask,
         autosolve_use: saved.autosolve_use || cli.autosolve_use,

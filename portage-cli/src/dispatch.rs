@@ -602,7 +602,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 update: false,
                 newuse: depgraph_flags.newuse,
                 changed_use: depgraph_flags.changed_use,
-                noreplace: false,
+                selective: None,
                 nodeps: false,
                 extra_use_override: None,
                 extra_package_use: &[],

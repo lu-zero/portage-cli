@@ -96,6 +96,12 @@ pub struct MergeFlags {
     #[arg(short = 'n', long)]
     pub noreplace: bool,
 
+    /// Leave a named package alone when an installed version satisfies it, like `-n`
+    ///
+    /// `-u`, `-N` and `-U` imply it; `--selective=n` turns it off whatever else is given.
+    #[arg(long, value_name = "y|n", default_missing = "y", require_equals)]
+    pub selective: Option<YesNo>,
+
     /// Build up to N packages in parallel, respecting build-dependency order (merges are still
     /// serialised)
     ///
@@ -224,6 +230,15 @@ impl MergeFlags {
     /// Whether the solve is redone when the plan breaks an installed package's dependencies
     pub fn repair_broken_installed(&self) -> bool {
         self.complete_graph || self.complete_graph_if_new_ver != Some(YesNo::N)
+    }
+
+    /// `--selective`, or `-n`: `None` leaves it to `-u`, `-N` and `-U`
+    pub fn selective(&self) -> Option<bool> {
+        match self.selective {
+            Some(YesNo::N) => Some(false),
+            Some(YesNo::Y) => Some(true),
+            None => self.noreplace.then_some(true),
+        }
     }
 
     /// Whether depclean keeps installed packages' build-time deps: all but `--with-bdeps n`

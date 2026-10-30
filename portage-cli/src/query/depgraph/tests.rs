@@ -35,7 +35,7 @@ struct Fix {
 struct Solve<'a> {
     atoms: &'a [TargetAtom],
     empty: bool,
-    noreplace: bool,
+    selective: Option<bool>,
     widen: bool,
     onlydeps: bool,
     update: bool,
@@ -51,7 +51,7 @@ impl<'a> Solve<'a> {
         Self {
             atoms,
             empty: false,
-            noreplace: false,
+            selective: None,
             widen: false,
             onlydeps: false,
             update: false,
@@ -203,7 +203,7 @@ fn try_solve(fix: &Fix, opts: Solve<'_>) -> anyhow::Result<super::DepgraphOutcom
         update: opts.update,
         newuse: false,
         changed_use: false,
-        noreplace: opts.noreplace,
+        selective: opts.selective,
         nodeps: false,
         extra_use_override: None,
         extra_package_use: extra,
@@ -349,7 +349,7 @@ fn noreplace_leaves_an_installed_target_out_of_the_plan() {
     let fix = fixture(&pair(), &["app-misc/foo-1", "app-misc/bar-1"]);
     let atoms = [TargetAtom::explicit("app-misc/foo")];
     let mut opts = Solve::new(&atoms);
-    opts.noreplace = true;
+    opts.selective = Some(true);
     assert!(names(&solve(&fix, opts)).is_empty());
 }
 
@@ -360,6 +360,22 @@ fn an_installed_target_is_reinstalled_when_the_resolve_is_not_selective() {
     let outcome = solve(&fix, Solve::new(&atoms));
     assert_eq!(names(&outcome), ["app-misc/foo-1"]);
     assert!(outcome.plan[0].reinstall);
+}
+
+#[test]
+fn selective_n_reinstalls_a_target_update_would_keep() {
+    let fix = fixture(&pair(), &["app-misc/foo-1", "app-misc/bar-1"]);
+    let atoms = [TargetAtom::explicit("app-misc/foo")];
+    let mut opts = Solve::new(&atoms);
+    opts.update = true;
+    assert!(
+        names(&solve(&fix, opts)).is_empty(),
+        "-u implies --selective"
+    );
+    let mut opts = Solve::new(&atoms);
+    opts.update = true;
+    opts.selective = Some(false);
+    assert_eq!(names(&solve(&fix, opts)), ["app-misc/foo-1"]);
 }
 
 #[test]
@@ -609,7 +625,7 @@ fn a_missing_explicit_atom_is_fatal() {
             update: false,
             newuse: false,
             changed_use: false,
-            noreplace: false,
+            selective: None,
             nodeps: false,
             extra_use_override: None,
             extra_package_use: extra,
@@ -747,7 +763,7 @@ fn a_masked_installed_package_is_not_reported_when_its_slot_is_upgraded() {
         TargetAtom::explicit("app-misc/other"),
     ];
     let mut opts = Solve::new(&atoms);
-    opts.noreplace = true;
+    opts.selective = Some(true);
     let outcome = solve(&fix, opts);
     assert_eq!(names(&outcome), ["app-misc/bar-2", "app-misc/other-1"]);
     assert!(

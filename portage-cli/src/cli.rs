@@ -1539,6 +1539,24 @@ mod tests {
         cli.topology_and_root().0
     }
 
+    // emerge's `--selective [y|n]`: bare is `y`, the value attaches with `=`, and `n` overrides `-n`
+    #[test]
+    fn selective_parses_like_emerge() {
+        let selective = |args: &[&str]| parse_cli(args).merge_flags().selective();
+        assert_eq!(selective(&["em", "-p", "sys-libs/zlib"]), None);
+        assert_eq!(selective(&["em", "-pn", "sys-libs/zlib"]), Some(true));
+        assert_eq!(
+            selective(&["em", "-p", "--selective", "sys-libs/zlib"]),
+            Some(true)
+        );
+        assert_eq!(
+            selective(&["em", "-pn", "--selective=n", "sys-libs/zlib"]),
+            Some(false)
+        );
+        let cli = parse_cli(&["em", "-p", "--selective", "sys-libs/zlib"]);
+        assert_eq!(emerge_applet(&cli).atoms, vec!["sys-libs/zlib".to_string()]);
+    }
+
     #[test]
     fn bare_and_explicit_emerge_produce_identical_args() {
         let bare = parse_cli(&["em", "--root", "/srv/x", "-p", "sys-libs/zlib"]);
