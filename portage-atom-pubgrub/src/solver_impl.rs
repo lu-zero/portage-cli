@@ -75,14 +75,6 @@ impl Solver for PortageDependencyProvider {
         );
     }
 
-    fn add_sysroot_installed(&mut self, pkg: SolverInstalled) {
-        PortageDependencyProvider::add_sysroot_installed(
-            self,
-            to_portage_package(pkg.cpn, pkg.slot),
-            pkg.version,
-        );
-    }
-
     fn resolve_targets(&mut self, targets: &[TargetSpec]) -> Result<Plan, SolveError> {
         let pg_targets: Vec<(PortagePackage, PortageVersionSet)> = targets
             .iter()

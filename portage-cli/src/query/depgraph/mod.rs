@@ -424,7 +424,6 @@ fn resolve(
         package_use: &prepared.resolved.package_use,
         target_installed: &prepared.target_installed,
         installed_blockers: &prepared.installed_blockers,
-        sysroot_installed: &prepared.sysroot_installed,
         host_installed: &prepared.host_installed,
         provided: &prepared.provided,
         provided_avail: &prepared.provided_avail,

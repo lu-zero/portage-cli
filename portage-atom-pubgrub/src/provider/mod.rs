@@ -285,9 +285,6 @@ pub struct PortageDependencyProvider {
     /// A flat atom set fed by the caller (policy layer); the solver is
     /// root-agnostic. Always "present" (Lock-equivalent): never re-chosen.
     pub(crate) host_installed: HashMap<PortagePackage, HostEntry>,
-    /// Packages present in the cross **sysroot** (`ESYSROOT`), used to satisfy
-    /// `DEPEND` edges for target-root instances when [`cross_active`](Self::cross_active)
-    pub(crate) sysroot_installed: HashMap<PortagePackage, Version>,
     /// Dual-root solver mode: stamp dependency targets with [`MergeRoot`] and
     /// register host-side package instances
     ///
@@ -817,7 +814,6 @@ impl PortageDependencyProvider {
             installed_blockers: HashMap::default(),
             installed_iuse: HashMap::default(),
             host_installed: HashMap::default(),
-            sysroot_installed: HashMap::default(),
             cross_active: false,
             is_cross_arch: false,
             host_aliases: HashMap::default(),
@@ -923,13 +919,6 @@ impl PortageDependencyProvider {
                 iuse,
             },
         );
-    }
-
-    /// Record a package as present in the cross sysroot (`ESYSROOT`) for `DEPEND`
-    /// satisfaction when [`set_cross_active`](Self::set_cross_active) is on
-    pub fn add_sysroot_installed(&mut self, package: PortagePackage, version: Version) {
-        self.sysroot_installed
-            .insert(package.at_merge_root(MergeRoot::Target), version);
     }
 
     /// Enable dual-root `(package, merge_root)` solver nodes for crossdev

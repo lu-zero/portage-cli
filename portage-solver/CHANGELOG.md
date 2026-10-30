@@ -7,6 +7,7 @@
 - Depends on `portage-atom` 0.12.
 - `MergeRoot::Base` for the toolchain sysroot; `MergeRoot::Target`'s discriminant changed.
 - `resolve_effective_use` takes eight parameters instead of six.
+- `Solver::add_sysroot_installed` is removed: no solver consulted it.
 
 ### Bug fixes
 

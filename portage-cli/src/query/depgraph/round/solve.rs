@@ -268,9 +268,6 @@ impl RoundCtx<'_> {
             "provider build"
         );
         self.apply_solve_policy(&mut provider);
-        for (pkg, version) in self.sysroot_installed {
-            provider.add_sysroot_installed(pkg.clone(), version.clone());
-        }
         self.register_installed(&mut provider, &policy);
         self.register_provided(&mut provider, &policy);
         // A BDEPEND the build host already has is satisfied there, unless a USE-dep needs a flag it lacks.

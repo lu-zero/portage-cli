@@ -43,7 +43,6 @@ pub(super) struct RoundCtx<'a> {
     pub(super) package_use: &'a Vec<(Dep, Vec<UseOverride>)>,
     pub(super) target_installed: &'a [installed::VdbEntry],
     pub(super) installed_blockers: &'a [Vec<Dep>],
-    pub(super) sysroot_installed: &'a [(PortagePackage, Version)],
     pub(super) host_installed: &'a [installed::HostInstalledEntry],
     pub(super) provided: &'a [Cpv],
     pub(super) provided_avail: &'a [(Cpv, Option<String>)],

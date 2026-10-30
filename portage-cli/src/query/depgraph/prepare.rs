@@ -77,7 +77,6 @@ pub(super) struct Prepared<'a> {
     pub(super) masked_root_targets: Vec<(Cpv, Option<Interned<DefaultInterner>>, String)>,
     pub(super) slot_map: SlotMap,
     pub(super) widened_slot_map: Option<SlotMap>,
-    pub(super) sysroot_installed: Vec<(PortagePackage, Version)>,
     pub(super) base_installed_cpvs: std::collections::HashSet<Cpv>,
     pub(super) root_pkgs: Vec<PortagePackage>,
     pub(super) pristine_package_use: Vec<(Dep, Vec<UseOverride>)>,
@@ -382,32 +381,16 @@ pub(super) async fn prepare<'a>(
         })
     });
 
-    // Sysroot VDB entries for `DEPEND` satisfaction under a cross build:
-    // static for the whole invocation (doesn't depend on `pkg_use`), so
-    // reading it from disk on every fixpoint iteration — as `build_and_solve`
-    // used to, inline — was pure waste. Computed once here instead.
-    let sysroot_installed: Vec<(PortagePackage, Version)> = if cross.active {
+    // What a `MergeRoot::Base` entry (the toolchain-sysroot DEPEND copy) checks "already installed"
+    // against: the sysroot's VDB, never the target root's.
+    let base_installed_cpvs: std::collections::HashSet<Cpv> = if cross.active {
         installed::load_sysroot_entries_with_cache(cross.sysroot.as_path(), &vdb_snapshots)
             .into_iter()
-            .map(|e| {
-                let pkg = match e.slot.filter(|s| !s.is_empty()) {
-                    Some(s) => PortagePackage::slotted(e.cpn, s),
-                    None => PortagePackage::unslotted(e.cpn),
-                };
-                (pkg, e.version)
-            })
+            .map(|e| Cpv::new(e.cpn, e.version))
             .collect()
     } else {
-        Vec::new()
+        Default::default()
     };
-    // `sysroot_installed` as `Cpv`s: what a `MergeRoot::Base` entry (the
-    // board-root topology's toolchain-sysroot DEPEND copy) checks "already
-    // installed" against — never `target_installed_cpvs`, the board root's
-    // own, unrelated VDB.
-    let base_installed_cpvs: std::collections::HashSet<Cpv> = sysroot_installed
-        .iter()
-        .map(|(pkg, v)| Cpv::new(*pkg.cpn(), v.clone()))
-        .collect();
 
     // Only names originally targeted (never a repair target added below) are
     // "explicit" for reinstall/tree-root/onlydeps purposes — computed once,
@@ -522,7 +505,6 @@ pub(super) async fn prepare<'a>(
         masked_root_targets,
         slot_map,
         widened_slot_map,
-        sysroot_installed,
         base_installed_cpvs,
         root_pkgs,
         pristine_package_use,

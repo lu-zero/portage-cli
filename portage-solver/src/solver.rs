@@ -68,11 +68,6 @@ pub trait Solver {
     /// ([`InstalledPackage::policy`] is ignored for host/sysroot registrations.)
     fn add_host_installed(&mut self, _pkg: InstalledPackage) {}
 
-    /// Register a package present in the cross sysroot (`ESYSROOT`) so a
-    /// sysroot-satisfied `DEPEND` is not rebuilt. Only meaningful under
-    /// [`set_cross_active`](Self::set_cross_active). Default no-op.
-    fn add_sysroot_installed(&mut self, _pkg: InstalledPackage) {}
-
     /// Run the resolve. All targets are solved together in one joint solve over
     /// a synthetic root, returning the owned [`Plan`] (selected packages,
     /// labelled graph, install order) and the advisory output (dropped deps,

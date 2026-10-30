@@ -1,7 +1,7 @@
 //! The PubGrub `DependencyProvider` implementation: version prioritisation,
 //! version choice (installed-preference heuristics), and dependency lookup
 
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::FxHashSet as HashSet;
 use std::cmp::Reverse;
 
 use portage_atom::{UseDefault, Version};
@@ -352,7 +352,6 @@ impl PortageDependencyProvider {
                 return Dependencies::Available(cross_target_runtime_deps(
                     self,
                     vd,
-                    &self.sysroot_installed,
                     target_drops_depend(self.root_deps_rdeps, package),
                     false,
                 ));
@@ -399,7 +398,6 @@ impl PortageDependencyProvider {
             return Dependencies::Available(cross_target_runtime_deps(
                 self,
                 vd,
-                &self.sysroot_installed,
                 target_drops_depend(self.root_deps_rdeps, package),
                 true,
             ));
@@ -522,7 +520,6 @@ fn stamped_deps(
 fn cross_target_runtime_deps(
     provider: &PortageDependencyProvider,
     vd: &VersionData,
-    _sysroot_installed: &HashMap<PortagePackage, Version>,
     root_deps_rdeps: bool,
     include_bdepend: bool,
 ) -> DependencyConstraints<PortagePackage, PortageVersionSet> {
