@@ -14,16 +14,17 @@ use crate::convert;
 use crate::package::PortagePackage;
 use crate::use_config::UseFlagState;
 
-use super::{PortageDependencyProvider, UseFlagRequirement};
+use super::{PortageDependencyProvider, UseDemand, UseFlagRequirement};
 
-/// Per-target accumulator in the post-solve fixpoint: the resolved version, the
-/// flags that must be enabled / disabled, and the requiring packages' CPNs
-type TargetAcc = (
-    Version,
-    BTreeSet<Interned<DefaultInterner>>,
-    BTreeSet<Interned<DefaultInterner>>,
-    BTreeSet<Interned<DefaultInterner>>,
-);
+/// Per-target accumulator in the post-solve fixpoint
+struct TargetAcc {
+    version: Version,
+    enable: BTreeSet<Interned<DefaultInterner>>,
+    disable: BTreeSet<Interned<DefaultInterner>>,
+    /// CPNs of the packages credited in `package.use` comments
+    requirers: BTreeSet<Interned<DefaultInterner>>,
+    demands: Vec<UseDemand>,
+}
 
 /// Requirements gathered so far, and the targets whose flag sets grew during this iteration
 #[derive(Default)]
@@ -122,7 +123,7 @@ impl PortageDependencyProvider {
                         .is_some_and(|u| u.contains(&ud.flag))
                         || by_target
                             .get(parent)
-                            .is_some_and(|(_, e, _, _)| e.contains(&ud.flag))
+                            .is_some_and(|t| t.enable.contains(&ud.flag))
                 } else {
                     self.effective_flag_new(parent, parent_ver, ud.flag, None)
                 };
@@ -161,32 +162,43 @@ impl PortageDependencyProvider {
                 // satisfied. This surfaces `dev/foo[bar]` vs `dev/foo[-bar]` as both
                 // sides recorded rather than one being lost.
                 let dep_effective_enabled = match by_target.get(target_pkg) {
-                    Some((_, en, _, _)) if en.contains(&ud.flag) => true,
-                    Some((_, _, di, _)) if di.contains(&ud.flag) => false,
+                    Some(t) if t.enable.contains(&ud.flag) => true,
+                    Some(t) if t.disable.contains(&ud.flag) => false,
                     _ => dep_effective_enabled,
                 };
 
                 if let Some(requires_enabled) =
                     eval_violated_use_dep(ud.kind, dep_effective_enabled, parent_flag_enabled)
                 {
-                    let entry = by_target.entry(target_pkg.clone()).or_insert_with(|| {
-                        (
-                            target_ver.clone(),
-                            BTreeSet::new(),
-                            BTreeSet::new(),
-                            BTreeSet::new(),
-                        )
-                    });
+                    let entry = by_target
+                        .entry(target_pkg.clone())
+                        .or_insert_with(|| TargetAcc {
+                            version: target_ver.clone(),
+                            enable: BTreeSet::new(),
+                            disable: BTreeSet::new(),
+                            requirers: BTreeSet::new(),
+                            demands: Vec::new(),
+                        });
                     let added = if requires_enabled {
-                        entry.1.insert(ud.flag)
+                        entry.enable.insert(ud.flag)
                     } else {
-                        entry.2.insert(ud.flag)
+                        entry.disable.insert(ud.flag)
                     };
                     if added {
                         acc.grown.insert(target_pkg.clone());
                     }
                     if credit_parent {
-                        entry.3.insert(constraint.parent_cpn_str);
+                        entry.requirers.insert(constraint.parent_cpn_str);
+                    }
+                    let demand = UseDemand {
+                        flag: ud.flag,
+                        enable: requires_enabled,
+                        parent: parent.clone(),
+                        parent_version: parent_ver.clone(),
+                        kind: ud.kind,
+                    };
+                    if !entry.demands.contains(&demand) {
+                        entry.demands.push(demand);
                     }
                 }
             }
@@ -266,20 +278,27 @@ impl PortageDependencyProvider {
                 .iter()
                 .filter(|(pkg, _)| self.installed.contains_key(pkg))
                 .filter(|(pkg, _)| !upgrade_to.contains_key(*pkg))
-                .filter_map(|(pkg, (inst_ver, _, _, _))| {
-                    self.package_data(pkg)
-                        .and_then(|d| {
-                            // Widened candidate supply: never auto-upgrade an
-                            // installed package onto a tagged version — that
-                            // would silently unmask it outside the autounmask
-                            // report path.
-                            d.versions
-                                .iter()
-                                .rfind(|(v, vd)| *v > inst_ver && !vd.needs_unmask)
-                                .map(|(v, _)| v.clone())
-                        })
-                        .map(|new_ver| (pkg.clone(), new_ver))
-                })
+                .filter_map(
+                    |(
+                        pkg,
+                        TargetAcc {
+                            version: inst_ver, ..
+                        },
+                    )| {
+                        self.package_data(pkg)
+                            .and_then(|d| {
+                                // Widened candidate supply: never auto-upgrade an
+                                // installed package onto a tagged version — that
+                                // would silently unmask it outside the autounmask
+                                // report path.
+                                d.versions
+                                    .iter()
+                                    .rfind(|(v, vd)| *v > inst_ver && !vd.needs_unmask)
+                                    .map(|(v, _)| v.clone())
+                            })
+                            .map(|new_ver| (pkg.clone(), new_ver))
+                    },
+                )
                 .collect();
 
             for (pkg, new_ver) in installed_with_violations {
@@ -321,17 +340,18 @@ impl PortageDependencyProvider {
         let mut reqs: Vec<UseFlagRequirement> = acc
             .by_target
             .into_iter()
-            .map(|(pkg, (ver, enable, disable, requirers))| {
+            .map(|(pkg, t)| {
                 let mut required_by: Vec<String> =
-                    requirers.iter().map(|s| s.to_string()).collect();
+                    t.requirers.iter().map(|s| s.to_string()).collect();
                 required_by.sort();
                 UseFlagRequirement {
                     package: pkg.clone(),
-                    version: ver,
+                    version: t.version,
                     upgrade_to: upgrade_to.remove(&pkg),
-                    required_enabled: by_name(enable),
-                    required_disabled: by_name(disable),
+                    required_enabled: by_name(t.enable),
+                    required_disabled: by_name(t.disable),
                     required_by,
+                    demands: t.demands,
                 }
             })
             .collect();

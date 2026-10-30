@@ -14,7 +14,9 @@ use portage_resolve::{effective_use, installed, repo};
 
 use super::RoundCtx;
 use crate::query::depgraph::package_needs_use_reinstall;
-use crate::query::depgraph::package_use::cosolve_use_deps;
+use crate::query::depgraph::package_use::{
+    CosolveOutcome, FlagPin, MatchedFlag, UseConflict, cosolve_use_deps,
+};
 use crate::query::depgraph::provider_cache::ProviderKey;
 
 type Solution = pubgrub::SelectedDependencies<PortagePackage, Version>;
@@ -28,6 +30,8 @@ pub(super) struct Solved {
     /// `package.use` plus the flags the co-solve fixpoint forced
     pub(super) package_use: Vec<(Dep, Vec<UseOverride>)>,
     pub(super) applied_reqs: Vec<UseFlagRequirement>,
+    pub(super) matched_flags: Vec<MatchedFlag>,
+    pub(super) use_conflicts: Vec<UseConflict>,
     /// Whether candidates outside keyword/mask/license acceptance were visible
     pub(super) widened: bool,
 }
@@ -82,7 +86,13 @@ impl RoundCtx<'_> {
         repairs: &Targets,
         widened: bool,
     ) -> anyhow::Result<Solved> {
-        let (package_use, applied_reqs, solved) = cosolve_use_deps(
+        let CosolveOutcome {
+            package_use,
+            applied: applied_reqs,
+            matched: matched_flags,
+            conflicts: use_conflicts,
+            solved,
+        } = cosolve_use_deps(
             self.package_use.clone(),
             self.data,
             |pu| {
@@ -97,6 +107,7 @@ impl RoundCtx<'_> {
                 }
             },
             |(_, provider, _)| provider.use_flag_requirements().to_vec(),
+            |pkg, ver, flag| self.profile_pin(pkg, ver, flag),
         );
 
         let (key, provider, solution) = match solved {
@@ -131,8 +142,34 @@ impl RoundCtx<'_> {
             solution,
             package_use,
             applied_reqs,
+            matched_flags,
+            use_conflicts,
             widened,
         })
+    }
+
+    /// Whether the profile's `use.force`/`use.mask` holds `flag` of `pkg-ver`
+    fn profile_pin(
+        &self,
+        pkg: &PortagePackage,
+        ver: &Version,
+        flag: Interned<DefaultInterner>,
+    ) -> Option<FlagPin> {
+        let cache = self.data.cache_entry(pkg.cpn(), ver)?;
+        let cpv = Cpv::new(*pkg.cpn(), ver.clone());
+        let stable = self
+            .accept_keywords
+            .is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
+        let iuse = effective_use::iuse_set(cache, &self.force_mask.iuse_injection);
+        let slot = pkg.slot().map(portage_atom::Slot::from_name);
+        let (forced, masked) = self
+            .force_mask
+            .effective(&cpv, slot.as_ref(), stable, &iuse);
+        if masked.contains(&flag) {
+            Some(FlagPin::Masked)
+        } else {
+            forced.contains(&flag).then_some(FlagPin::Forced)
+        }
     }
 
     /// One solve with the provider for `package_use`, reused from an earlier one when it matches

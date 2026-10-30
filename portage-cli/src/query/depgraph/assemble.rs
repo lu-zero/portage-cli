@@ -86,6 +86,8 @@ pub(super) fn assemble(
         closure_blockers,
         package_use,
         applied_reqs,
+        matched_flags,
+        use_conflicts,
         ceded,
         autounmask_candidates,
         widened_autounmask_candidates,
@@ -188,6 +190,8 @@ pub(super) fn assemble(
                     .map(effective_use::iuse_defaults)
                     .unwrap_or_default()
             },
+            &matched_flags,
+            &use_conflicts,
         );
         if autounmask_write && !entries.is_empty() {
             package_use::write(&entries, &portage_dir.join("package.use"))?;
@@ -402,6 +406,7 @@ pub(super) fn assemble(
             }
         }
 
+        package_use::report_conflicts(&use_conflicts, &portage_dir.join("package.use"));
         package_use::report(&use_change_entries);
 
         // Deliberate divergence from real emerge (which only ever writes
@@ -591,6 +596,7 @@ pub(super) fn assemble(
         // changes, unmask/keyword/license, a PMS 8.3.2 hard blocker conflict,
         // or a PMS 7.3.4 unsatisfied REQUIRED_USE.
         exit_code: if use_change_entries.is_empty()
+            && use_conflicts.is_empty()
             && dropped_autounmask.is_empty()
             && !hard_conflict
             && !required_use_unsatisfied

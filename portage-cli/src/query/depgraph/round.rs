@@ -93,6 +93,8 @@ pub(super) struct RoundOutcome {
     pub(super) closure_blockers: Vec<(PortagePackage, PortagePackage)>,
     pub(super) package_use: Vec<(Dep, Vec<UseOverride>)>,
     pub(super) applied_reqs: Vec<UseFlagRequirement>,
+    pub(super) matched_flags: Vec<super::package_use::MatchedFlag>,
+    pub(super) use_conflicts: Vec<super::package_use::UseConflict>,
     pub(super) ceded: Vec<CededFlag>,
     pub(super) autounmask_candidates: Vec<repo::AutounmaskCandidate>,
     /// Phase-2 widened selections (chosen versions outside acceptance);

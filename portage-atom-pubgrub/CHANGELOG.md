@@ -11,6 +11,7 @@
   recorded metadata of an installed version the repository no longer offers.
 - `PackageVersions` gains `empty_any_of_matches`, `needs_unmask` and `live`.
 - `package.provided` is modelled as `InstalledPolicy::Provided`; `set_provided` is removed.
+- `UseFlagRequirement` gains `demands`: each USE dependency behind it, as a `UseDemand` naming its parent.
 
 ### Features
 

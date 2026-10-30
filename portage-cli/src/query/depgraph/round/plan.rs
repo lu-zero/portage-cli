@@ -35,6 +35,8 @@ impl RoundCtx<'_> {
             solution,
             package_use,
             applied_reqs,
+            matched_flags,
+            use_conflicts,
             widened,
         } = solved;
         let mut metrics = ResolveMetrics::default();
@@ -124,6 +126,8 @@ impl RoundCtx<'_> {
             closure_blockers,
             package_use,
             applied_reqs,
+            matched_flags,
+            use_conflicts,
             ceded,
             autounmask_candidates,
             widened_autounmask_candidates: widened_candidates,

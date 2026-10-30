@@ -220,6 +220,39 @@ pub struct UseFlagRequirement {
     ///
     /// Used to generate `package.use` comments.
     pub required_by: Vec<String>,
+    /// Each USE dependency behind `required_enabled` and `required_disabled`
+    pub demands: Vec<UseDemand>,
+}
+
+/// One USE dependency's demand on a flag of the package it names (PMS 8.3.4)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseDemand {
+    /// The flag, on the package the dependency names
+    pub flag: Interned<DefaultInterner>,
+    /// Whether the flag must be enabled
+    pub enable: bool,
+    /// The package whose dependency it is
+    pub parent: PortagePackage,
+    /// That package's version
+    pub parent_version: Version,
+    /// The USE dependency's form: `[flag]`, `[flag=]`, `[!flag?]`, …
+    pub kind: portage_atom::UseDepKind,
+}
+
+impl UseDemand {
+    /// The value of the parent's own flag under which this demand would ask for the opposite
+    ///
+    /// `None` for a plain `[flag]` or `[-flag]`, which does not follow the parent.
+    pub fn parent_value_to_agree(&self) -> Option<bool> {
+        use portage_atom::UseDepKind;
+        match self.kind {
+            UseDepKind::Enabled | UseDepKind::Disabled => None,
+            UseDepKind::Equal => Some(!self.enable),
+            UseDepKind::EqualInverse => Some(self.enable),
+            UseDepKind::Conditional => Some(false),
+            UseDepKind::ConditionalInverse => Some(true),
+        }
+    }
 }
 
 /// A PubGrub `DependencyProvider` backed by a portage package repository

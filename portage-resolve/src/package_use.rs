@@ -8,8 +8,8 @@ use camino::Utf8Path;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
-    DepEdge, IUseDefault, UseFlagRequirement, UseFlagState, UseLayer, UseOverride,
-    resolve_effective_use,
+    DepEdge, IUseDefault, PortagePackage, UseDemand, UseFlagRequirement, UseFlagState, UseLayer,
+    UseOverride, resolve_effective_use,
 };
 
 /// Entries to write into `/etc/portage/package.use`
@@ -49,10 +49,23 @@ pub fn build_entries(
     profile_package_use: &[portage_atom_pubgrub::ProfileUseNode],
     conf: &UseLayer,
     iuse_defaults_of: &dyn Fn(&Cpv) -> HashMap<Interned<DefaultInterner>, IUseDefault>,
+    matched: &[MatchedFlag],
+    conflicts: &[UseConflict],
 ) -> Vec<PackageUseEntry> {
     // Pre-compute once for all requirements.
     let adj = build_adjacency(edges);
     let root_cpns = parse_root_cpns(root_atoms);
+    // The value each settled flag must keep; `None` for a conflict, which gets no line either way.
+    let mut settled: HashMap<(Cpn, Interned<DefaultInterner>), Option<bool>> = HashMap::new();
+    for m in matched {
+        settled.insert((*m.package.cpn(), m.flag), Some(m.enable));
+    }
+    for c in conflicts {
+        settled.insert((*c.package.cpn(), c.flag), None);
+    }
+    let keeps = |cpn: Cpn, flag: Interned<DefaultInterner>, enable: bool| {
+        settled.get(&(cpn, flag)).is_none_or(|v| *v == Some(enable))
+    };
 
     let mut by_cpn: HashMap<Cpn, Vec<PackageUseLine>> = HashMap::new();
 
@@ -90,12 +103,12 @@ pub fn build_entries(
         );
         let mut flags: Vec<String> = Vec::new();
         for f in &req.required_enabled {
-            if eff.get_opt(*f) != Some(UseFlagState::Enabled) {
+            if eff.get_opt(*f) != Some(UseFlagState::Enabled) && keeps(cpn, *f, true) {
                 flags.push(f.as_str().to_string());
             }
         }
         for f in &req.required_disabled {
-            if eff.get_opt(*f) != Some(UseFlagState::Disabled) {
+            if eff.get_opt(*f) != Some(UseFlagState::Disabled) && keeps(cpn, *f, false) {
                 flags.push(format!("-{}", f.as_str()));
             }
         }
@@ -105,20 +118,112 @@ pub fn build_entries(
 
         let comments = build_comments(req, root_labels, &root_cpns, &adj);
 
-        // `flag_reqs` merges the co-solve's applied requirements with the
-        // solver's own, so the same requirement can arrive twice.
-        let line = PackageUseLine {
-            comments,
-            atom,
-            flags,
-        };
-        let lines = by_cpn.entry(cpn).or_default();
-        if !lines.contains(&line) {
-            lines.push(line);
+        add_line(&mut by_cpn, cpn, atom, flags, comments);
+    }
+
+    // Parents flipped to agree with a settled flag, grouped per parent atom and target.
+    struct Flip {
+        parent: Cpn,
+        flags: Vec<String>,
+        wanted: Vec<String>,
+        spelled: Vec<String>,
+    }
+    let mut flips: BTreeMap<(String, String), Flip> = BTreeMap::new();
+    for m in matched {
+        let target = m.package.cpn();
+        for d in &m.flipped {
+            let Some(agree) = d.parent_value_to_agree() else {
+                continue;
+            };
+            let parent = *d.parent.cpn();
+            let slot = d
+                .parent
+                .slot()
+                .map(|s| format!(":{}", s.as_str()))
+                .unwrap_or_default();
+            let atom = format!(">={}-{}{}", parent, ver_str(&d.parent_version), slot);
+            let flip = flips
+                .entry((atom, target.to_string()))
+                .or_insert_with(|| Flip {
+                    parent,
+                    flags: Vec::new(),
+                    wanted: Vec::new(),
+                    spelled: Vec::new(),
+                });
+            push_new(&mut flip.flags, signed(d.flag, agree));
+            push_new(&mut flip.wanted, signed(m.flag, m.enable));
+            push_new(&mut flip.spelled, use_dep_spelling(d));
         }
+    }
+    for ((atom, target), flip) in flips {
+        let pn = target.rsplit('/').next().unwrap_or(&target);
+        let comment = format!(
+            "# to match {target}[{}]: {} needs {pn}[{}]",
+            flip.wanted.join(","),
+            flip.parent,
+            flip.spelled.join(",")
+        );
+        add_line(&mut by_cpn, flip.parent, atom, flip.flags, vec![comment]);
     }
 
     assign_filenames(by_cpn)
+}
+
+/// Add `flags` to the line for `atom`, starting one if there is none
+///
+/// `flag_reqs` merges the co-solve's applied requirements with the solver's own, so the same flags and
+/// comments can arrive twice.
+fn add_line(
+    by_cpn: &mut HashMap<Cpn, Vec<PackageUseLine>>,
+    cpn: Cpn,
+    atom: String,
+    flags: Vec<String>,
+    comments: Vec<String>,
+) {
+    let lines = by_cpn.entry(cpn).or_default();
+    match lines.iter_mut().find(|l| l.atom == atom) {
+        Some(line) => {
+            for c in comments {
+                push_new(&mut line.comments, c);
+            }
+            for f in flags {
+                push_new(&mut line.flags, f);
+            }
+        }
+        None => lines.push(PackageUseLine {
+            comments,
+            atom,
+            flags,
+        }),
+    }
+}
+
+fn push_new(list: &mut Vec<String>, item: String) {
+    if !list.contains(&item) {
+        list.push(item);
+    }
+}
+
+fn signed(flag: Interned<DefaultInterner>, enable: bool) -> String {
+    if enable {
+        flag.as_str().to_string()
+    } else {
+        format!("-{}", flag.as_str())
+    }
+}
+
+/// A USE dependency as written in an atom: `flag`, `-flag`, `flag=`, `!flag=`, `flag?` or `!flag?`
+pub fn use_dep_spelling(d: &UseDemand) -> String {
+    use portage_atom::UseDepKind;
+    let flag = d.flag.as_str();
+    match d.kind {
+        UseDepKind::Enabled => flag.to_string(),
+        UseDepKind::Disabled => format!("-{flag}"),
+        UseDepKind::Equal => format!("{flag}="),
+        UseDepKind::EqualInverse => format!("!{flag}="),
+        UseDepKind::Conditional => format!("{flag}?"),
+        UseDepKind::ConditionalInverse => format!("!{flag}?"),
+    }
 }
 
 /// Turn per-package line groups into [`PackageUseEntry`]s, choosing each one's filename
@@ -161,14 +266,60 @@ fn ver_str(v: &Version) -> String {
     v.to_string()
 }
 
-/// Result of [`cosolve_use_deps`]: the augmented `package.use`, the
-/// requirements that drove at least one applied flag, and the converged solve
-/// (if the fixpoint ended on a solve of the returned `package.use`)
-pub type CosolveOutcome<T> = (
-    Vec<(Dep, Vec<UseOverride>)>,
-    Vec<UseFlagRequirement>,
-    Option<T>,
-);
+/// Why a parent's flag cannot be flipped to settle a USE conflict
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlagPin {
+    /// Set by the user's `package.use`
+    Config,
+    /// `use.mask`ed by the profile
+    Masked,
+    /// `use.force`d by the profile
+    Forced,
+    /// Already changed the other way for another demand
+    Decided,
+}
+
+/// A flag demanded both ways, settled by flipping the parents whose `[flag=]`-style demand lost
+#[derive(PartialEq)]
+pub struct MatchedFlag {
+    /// The package whose flag was demanded
+    pub package: PortagePackage,
+    /// Its planned version
+    pub version: Version,
+    /// The flag
+    pub flag: Interned<DefaultInterner>,
+    /// The value the plain `[flag]`/`[-flag]` demands asked for
+    pub enable: bool,
+    /// The losing demands; each parent's own flag is set to [`UseDemand::parent_value_to_agree`]
+    pub flipped: Vec<UseDemand>,
+}
+
+/// Demands on one flag that cannot all hold
+#[derive(PartialEq)]
+pub struct UseConflict {
+    /// The package whose flag was demanded
+    pub package: PortagePackage,
+    /// Its planned version
+    pub version: Version,
+    /// The flag
+    pub flag: Interned<DefaultInterner>,
+    /// Every demand, with what keeps its parent's flag from changing, if anything
+    pub demands: Vec<(UseDemand, Option<FlagPin>)>,
+}
+
+/// Result of [`cosolve_use_deps`]
+pub struct CosolveOutcome<T> {
+    /// The caller's `package.use` plus the forced flags
+    pub package_use: Vec<(Dep, Vec<UseOverride>)>,
+    /// The requirements that drove at least one forced flag
+    pub applied: Vec<UseFlagRequirement>,
+    /// Flags demanded both ways and settled by flipping parents
+    pub matched: Vec<MatchedFlag>,
+    /// Flags demanded both ways that no change settles; none of them is forced
+    pub conflicts: Vec<UseConflict>,
+    /// The solve of `package_use`, when the fixpoint ended on one
+    pub solved: Option<T>,
+}
 
 /// Auto-apply cross-package `[flag]` USE-deps to a fixpoint (emerge's
 /// autounmask-preview dependency calculation)
@@ -180,50 +331,136 @@ pub type CosolveOutcome<T> = (
 /// sets either way are pins, never forced (emerge refuses to override
 /// explicit configuration; the demand is left to the advisory).
 ///
-/// Returns the augmented `package_use`, the requirements that drove at
-/// least one applied flag (for the mandatory "USE changes are necessary"
-/// report), and, when the fixpoint converged on a solve of that exact
-/// `package_use`, that final outcome so the caller can reuse it. `None`
-/// when a solve failed or the iteration bound was hit (the returned
-/// `package_use` then needs a fresh solve).
+/// A flag demanded both ways is settled when one side is plain `[flag]`/`[-flag]` and the other only
+/// follows its parents (`[flag=]`, `[flag?]`, …): the plain side wins and those parents' flags are set
+/// to agree, unless `fixed` or the caller's `package.use` holds one of them; then it is a conflict.
 ///
-/// `applied` (a flag forced once) is never re-forced, so a `[bar]` vs `[-bar]`
-/// contradiction resolves to first-wins + advisory for the loser rather than
-/// oscillating; the bound is a backstop.
-pub fn cosolve_use_deps<T, S, R>(
+/// [`CosolveOutcome::solved`] is `None` when a solve failed or the iteration bound was hit (the
+/// returned `package_use` then needs a fresh solve). A flag forced once is never re-forced, so the bound
+/// is a backstop.
+pub fn cosolve_use_deps<T, S, R, F>(
     mut package_use: Vec<(Dep, Vec<UseOverride>)>,
     data: &crate::repo::RepoData,
     solve: S,
     reqs_of: R,
+    fixed: F,
 ) -> CosolveOutcome<T>
 where
     S: Fn(&[(Dep, Vec<UseOverride>)]) -> Option<T>,
     R: Fn(&T) -> Vec<UseFlagRequirement>,
+    F: Fn(&PortagePackage, &Version, Interned<DefaultInterner>) -> Option<FlagPin>,
 {
-    use portage_atom::Cpn;
-    use portage_atom::interner::{DefaultInterner, Interned};
+    type Key = (Cpn, Interned<DefaultInterner>);
 
-    // Flags pinned by the caller's configuration (profile + user package.use):
-    // never forced, matching emerge's refusal to override explicit config.
-    let pinned: HashSet<(Cpn, Interned<DefaultInterner>)> = package_use
+    // Flags pinned by the caller's configuration: never forced, matching emerge's refusal to override
+    // explicit config.
+    let pinned: HashSet<Key> = package_use
         .iter()
         .flat_map(|(dep, overrides)| overrides.iter().map(|o| (dep.cpn, o.flag)))
         .collect();
+    let configured = package_use.len();
 
-    let mut applied: HashMap<(Cpn, Interned<DefaultInterner>), bool> = HashMap::new();
-    let mut applied_reqs: Vec<UseFlagRequirement> = Vec::new();
+    let mut applied: HashMap<Key, bool> = HashMap::new();
+    let mut applied_reqs = Vec::new();
+    // Every demand seen on a flag, across iterations: the two sides of a conflict can surface in different
+    // solves, as forcing one side is what violates the other.
+    let mut seen: HashMap<Key, (PortagePackage, Version, Vec<UseDemand>)> = HashMap::new();
+    let mut decisions: HashMap<Key, Settled> = HashMap::new();
+    let mut solved = None;
     for _ in 0..8 {
-        let Some(solved) = solve(&package_use) else {
-            return (package_use, applied_reqs, None); // solve failed — caller must re-solve / fall back
+        let Some(solution) = solve(&package_use) else {
+            break;
         };
+        let reqs = reqs_of(&solution);
+        for req in &reqs {
+            let targets = req_targets(req, data);
+            let ver = req.upgrade_to.as_ref().unwrap_or(&req.version);
+            for d in &req.demands {
+                let key = (*req.package.cpn(), d.flag);
+                if !targets.iter().any(|&(_, f, _)| f == d.flag) {
+                    continue;
+                }
+                let (_, _, demands) = seen
+                    .entry(key)
+                    .or_insert_with(|| (req.package.clone(), ver.clone(), Vec::new()));
+                if !demands.contains(d) {
+                    demands.push(d.clone());
+                }
+            }
+        }
+
+        // Re-decided every time: a demand arriving later, once its parent enters the plan, can flip
+        // another parent or turn the flag into a conflict.
+        let mut changed = false;
+        let mut contested: Vec<&Key> = seen
+            .iter()
+            .filter(|(key, (_, _, demands))| {
+                !pinned.contains(*key)
+                    && demands.iter().any(|d| d.enable)
+                    && demands.iter().any(|d| !d.enable)
+            })
+            .map(|(key, _)| key)
+            .collect();
+        contested
+            .sort_by(|a, b| (a.0.to_string(), a.1.as_str()).cmp(&(b.0.to_string(), b.1.as_str())));
+        for key in contested {
+            let (package, version, demands) = &seen[key];
+            let decision = settle(package, version, key.1, demands, |d, agree| {
+                let parent_key = (*d.parent.cpn(), d.flag);
+                if pinned.contains(&parent_key) {
+                    Some(FlagPin::Config)
+                } else if applied.get(&parent_key) == Some(&!agree) {
+                    Some(FlagPin::Decided)
+                } else {
+                    fixed(&d.parent, &d.parent_version, d.flag)
+                }
+            });
+            if decisions.get(key) == Some(&decision) {
+                continue;
+            }
+            changed = true;
+            if let Some(Settled::Matched(old)) = decisions.get(key) {
+                for d in &old.flipped {
+                    clear_override(&mut package_use, configured, (*d.parent.cpn(), d.flag));
+                    applied.remove(&(*d.parent.cpn(), d.flag));
+                }
+            }
+            match &decision {
+                Settled::Matched(m) => {
+                    set_override(&mut package_use, configured, &mut applied, *key, m.enable);
+                    for d in &m.flipped {
+                        if let Some(agree) = d.parent_value_to_agree() {
+                            let parent_key = (*d.parent.cpn(), d.flag);
+                            set_override(
+                                &mut package_use,
+                                configured,
+                                &mut applied,
+                                parent_key,
+                                agree,
+                            );
+                        }
+                    }
+                }
+                Settled::Conflict(_) => {
+                    clear_override(&mut package_use, configured, *key);
+                    applied.remove(key);
+                }
+            }
+            decisions.insert(*key, decision);
+        }
+
         let mut new_by_cpn: HashMap<Cpn, Vec<UseOverride>> = HashMap::new();
-        for req in reqs_of(&solved) {
+        for req in reqs {
             let mut contributed = false;
             for (cpn, flag, enable) in req_targets(&req, data) {
-                if pinned.contains(&(cpn, flag)) || applied.contains_key(&(cpn, flag)) {
-                    continue; // pinned, or already forced (same or opposite)
+                let key = (cpn, flag);
+                if pinned.contains(&key)
+                    || decisions.contains_key(&key)
+                    || applied.contains_key(&key)
+                {
+                    continue; // pinned, demanded both ways, or already forced
                 }
-                applied.insert((cpn, flag), enable);
+                applied.insert(key, enable);
                 contributed = true;
                 new_by_cpn
                     .entry(cpn)
@@ -234,9 +471,9 @@ where
                 applied_reqs.push(req);
             }
         }
-        if new_by_cpn.is_empty() {
-            // Fixpoint: `solved` is a solve of the current `package_use`.
-            return (package_use, applied_reqs, Some(solved));
+        if new_by_cpn.is_empty() && !changed {
+            solved = Some(solution);
+            break;
         }
         for (cpn, flags) in new_by_cpn {
             if let Ok(dep) = Dep::parse(&cpn.to_string()) {
@@ -244,7 +481,126 @@ where
             }
         }
     }
-    (package_use, applied_reqs, None) // bound hit — additions not yet solved
+
+    let mut decisions: Vec<(Key, Settled)> = decisions.into_iter().collect();
+    decisions.sort_by(|(a, _), (b, _)| {
+        (a.0.to_string(), a.1.as_str()).cmp(&(b.0.to_string(), b.1.as_str()))
+    });
+    let mut out = CosolveOutcome {
+        package_use,
+        applied: applied_reqs,
+        matched: Vec::new(),
+        conflicts: Vec::new(),
+        solved,
+    };
+    for (_, decision) in decisions {
+        match decision {
+            Settled::Matched(m) => out.matched.push(m),
+            Settled::Conflict(c) => out.conflicts.push(c),
+        }
+    }
+    out
+}
+
+/// How a flag demanded both ways was settled
+#[derive(PartialEq)]
+enum Settled {
+    Matched(MatchedFlag),
+    Conflict(UseConflict),
+}
+
+/// Settle a flag demanded both ways; `pin_of` says what holds a losing demand's parent flag
+///
+/// The plain `[flag]`/`[-flag]` side wins when all of them agree and every parent on the other side can
+/// be set to agree.
+fn settle(
+    package: &PortagePackage,
+    version: &Version,
+    flag: Interned<DefaultInterner>,
+    demands: &[UseDemand],
+    pin_of: impl Fn(&UseDemand, bool) -> Option<FlagPin>,
+) -> Settled {
+    let plain: HashSet<bool> = demands
+        .iter()
+        .filter(|d| d.parent_value_to_agree().is_none())
+        .map(|d| d.enable)
+        .collect();
+    let winner = (plain.len() == 1)
+        .then(|| plain.into_iter().next())
+        .flatten();
+    let pins: Vec<Option<FlagPin>> = demands
+        .iter()
+        .map(|d| {
+            let agree = d.parent_value_to_agree()?;
+            (winner == Some(!d.enable))
+                .then(|| pin_of(d, agree))
+                .flatten()
+        })
+        .collect();
+    match winner {
+        Some(enable) if pins.iter().all(Option::is_none) => Settled::Matched(MatchedFlag {
+            package: package.clone(),
+            version: version.clone(),
+            flag,
+            enable,
+            flipped: demands
+                .iter()
+                .filter(|d| d.enable != enable)
+                .cloned()
+                .collect(),
+        }),
+        _ => {
+            let mut demands: Vec<_> = demands.iter().cloned().zip(pins).collect();
+            demands.sort_by_cached_key(|(d, pin)| {
+                (!d.enable, pin.is_none(), d.parent.cpn().to_string())
+            });
+            Settled::Conflict(UseConflict {
+                package: package.clone(),
+                version: version.clone(),
+                flag,
+                demands,
+            })
+        }
+    }
+}
+
+/// Drop any flag the co-solve forced for `key`, leaving the caller's first `configured` entries alone
+fn clear_override(
+    package_use: &mut Vec<(Dep, Vec<UseOverride>)>,
+    configured: usize,
+    (cpn, flag): (Cpn, Interned<DefaultInterner>),
+) {
+    for (dep, overrides) in &mut package_use[configured..] {
+        if dep.cpn == cpn {
+            overrides.retain(|o| o.flag != flag);
+        }
+    }
+    let mut i = 0;
+    package_use.retain(|(_, overrides)| {
+        i += 1;
+        i <= configured || !overrides.is_empty()
+    });
+}
+
+/// Force `key` to `enable`, replacing an earlier forced value
+fn set_override(
+    package_use: &mut Vec<(Dep, Vec<UseOverride>)>,
+    configured: usize,
+    applied: &mut HashMap<(Cpn, Interned<DefaultInterner>), bool>,
+    key: (Cpn, Interned<DefaultInterner>),
+    enable: bool,
+) {
+    clear_override(package_use, configured, key);
+    applied.insert(key, enable);
+    if let Ok(dep) = Dep::parse(&key.0.to_string()) {
+        package_use.push((
+            dep,
+            vec![UseOverride {
+                flag: key.1,
+                enable,
+            }],
+        ));
+    }
 }
 
 /// The `(target cpn, flag, enable)` triples one requirement demands
@@ -549,6 +905,7 @@ mod tests {
             required_enabled: Vec::new(),
             required_disabled: Vec::new(),
             required_by: required_by.iter().map(|r| r.to_string()).collect(),
+            demands: Vec::new(),
         }
     }
 
@@ -571,6 +928,8 @@ mod tests {
                 &[],
                 &empty,
                 &move |_| defaults.clone(),
+                &[],
+                &[],
             )
         };
         assert_eq!(build(HashMap::new()).len(), 1, "no default: change needed");

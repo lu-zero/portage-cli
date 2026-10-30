@@ -773,6 +773,7 @@ fn apply_order_filters_reappends_a_reinstall_missing_from_the_order() {
         required_enabled: Vec::new(),
         required_disabled: Vec::new(),
         required_by: Vec::new(),
+        demands: Vec::new(),
     };
     let (order, excluded, resumed) =
         apply_order_filters(Vec::new(), &[&req], &[], &HashSet::new(), false);

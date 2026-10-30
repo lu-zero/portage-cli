@@ -165,11 +165,16 @@ fn solve(data: &RepoData, targets: &[&str]) -> Outcome {
 /// Run the C7 co-solve fixpoint (as `depgraph` does under `--autosolve-use`):
 /// returns the augmented `package_use` and the final outcome
 fn cosolve(data: &RepoData, targets: &[&str]) -> (Vec<(Dep, Vec<UseOverride>)>, Outcome) {
-    let (pu, _applied, solved) = crate::package_use::cosolve_use_deps(
+    let crate::package_use::CosolveOutcome {
+        package_use: pu,
+        solved,
+        ..
+    } = crate::package_use::cosolve_use_deps(
         Vec::new(),
         data,
         |pu| solve_with(data, targets, pu),
         |o: &Outcome| o.reqs.clone(),
+        |_, _, _| None,
     );
     // Reuse the converged solve when the fixpoint returned one; otherwise solve.
     let out = solved.unwrap_or_else(|| solve_with(data, targets, &pu).expect("final solve"));
@@ -318,8 +323,7 @@ fn cc5_dep_interacts_with_target_required_use() {
 }
 
 // ---------------------------------------------------------------------------
-// CC6 — two parents demand opposite values of the same flag. C7 must terminate
-// (no oscillation): first-seen wins, the loser stays a Tier-2 advisory.
+// CC6 — two parents demand opposite values of the same flag: a conflict, and neither is applied.
 // ---------------------------------------------------------------------------
 #[test]
 fn cc6_conflicting_parents_terminate() {
@@ -339,14 +343,14 @@ fn cc6_conflicting_parents_terminate() {
         "p2's [-bar] recorded too — conflict surfaced, not lost"
     );
 
-    // Co-solve must terminate and apply exactly one direction (it does not loop).
-    let (pu, _co) = cosolve(&data, &["app/p1", "app/p2"]);
-    let forces_on = pu_forces(&pu, "dev/foo", "bar");
-    let forces_off = pu_forces(&pu, "dev/foo", "-bar");
-    assert!(
-        forces_on ^ forces_off,
-        "exactly one side is applied, never both, never looping"
-    );
+    let (out, _) = cosolve_from(&data, &["app/p1", "app/p2"], Vec::new());
+    assert!(!pu_forces(&out.package_use, "dev/foo", "bar"));
+    assert!(!pu_forces(&out.package_use, "dev/foo", "-bar"));
+    assert!(out.matched.is_empty());
+    let [conflict] = out.conflicts.as_slice() else {
+        panic!("one conflict expected");
+    };
+    assert!(conflict.demands.iter().all(|(_, pin)| pin.is_none()));
 }
 
 // ---------------------------------------------------------------------------
@@ -363,5 +367,140 @@ fn cc7_flag_absent_from_target_iuse() {
     assert!(
         !pu_forces(&pu, "dev/foo", "bar"),
         "C7 never forces a non-IUSE flag"
+    );
+}
+
+/// The co-solve from `package_use`, with every requirement left after it
+fn cosolve_from(
+    data: &RepoData,
+    targets: &[&str],
+    package_use: Vec<(Dep, Vec<UseOverride>)>,
+) -> (
+    crate::package_use::CosolveOutcome<Outcome>,
+    Vec<UseFlagRequirement>,
+) {
+    let out = crate::package_use::cosolve_use_deps(
+        package_use,
+        data,
+        |pu| solve_with(data, targets, pu),
+        |o: &Outcome| o.reqs.clone(),
+        |_, _, _| None,
+    );
+    let left = solve_with(data, targets, &out.package_use)
+        .expect("final solve")
+        .reqs;
+    (out, left)
+}
+
+/// `plain` needs foo's bar on; `mirror` (bar off) needs foo's bar to follow its own
+fn plain_against_mirror() -> RepoData {
+    repo_from(&[
+        ("app/plain-1", &parent("", "dev/foo[bar]")),
+        ("app/mirror-1", &parent("bar", "dev/foo[bar=]")),
+        ("dev/foo-1", &leaf("bar", "")),
+    ])
+}
+
+#[test]
+fn a_plain_demand_wins_over_a_mirror_one_by_flipping_its_parent() {
+    let data = plain_against_mirror();
+    let (out, left) = cosolve_from(&data, &["app/plain", "app/mirror"], Vec::new());
+    assert!(pu_forces(&out.package_use, "dev/foo", "bar"));
+    assert!(
+        pu_forces(&out.package_use, "app/mirror", "bar"),
+        "the mirror's parent follows"
+    );
+    assert!(!pu_forces(&out.package_use, "dev/foo", "-bar"));
+    assert_eq!(out.matched.len(), 1);
+    assert!(out.conflicts.is_empty());
+    assert!(
+        left.iter()
+            .all(|r| r.required_enabled.is_empty() && r.required_disabled.is_empty())
+    );
+
+    let empty = portage_atom_pubgrub::UseLayer::empty();
+    let entries = crate::package_use::build_entries(
+        &out.applied,
+        &[],
+        &[],
+        &[],
+        &empty,
+        &empty,
+        &[],
+        &[],
+        &empty,
+        &|_| HashMap::new(),
+        &out.matched,
+        &out.conflicts,
+    );
+    let lines: Vec<(String, Vec<String>, Vec<String>)> = entries
+        .into_iter()
+        .flat_map(|e| e.lines)
+        .map(|l| (l.atom, l.flags, l.comments))
+        .collect();
+    assert!(lines.contains(&(
+        ">=app/mirror-1:0".into(),
+        vec!["bar".into()],
+        vec!["# to match dev/foo[bar]: app/mirror needs foo[bar=]".into()],
+    )));
+    assert!(
+        lines
+            .iter()
+            .all(|(_, flags, _)| !flags.contains(&"-bar".to_string())),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_mirror_parent_held_by_package_use_is_a_conflict() {
+    let data = plain_against_mirror();
+    let held = vec![(
+        Dep::parse("app/mirror").unwrap(),
+        vec![UseOverride::parse("-bar")],
+    )];
+    let (out, _) = cosolve_from(&data, &["app/plain", "app/mirror"], held);
+    assert!(out.matched.is_empty());
+    let [conflict] = out.conflicts.as_slice() else {
+        panic!("one conflict expected");
+    };
+    let pins: Vec<_> = conflict
+        .demands
+        .iter()
+        .map(|(d, pin)| (d.parent.cpn().to_string(), *pin))
+        .collect();
+    assert!(pins.contains(&("app/plain".into(), None)));
+    assert!(pins.contains(&(
+        "app/mirror".into(),
+        Some(crate::package_use::FlagPin::Config)
+    )));
+    assert!(
+        !pu_forces(&out.package_use, "dev/foo", "bar"),
+        "neither side is forced"
+    );
+    assert!(!pu_forces(&out.package_use, "dev/foo", "-bar"));
+}
+
+#[test]
+fn a_mirror_parent_pulled_in_by_a_flip_is_flipped_too() {
+    let data = repo_from(&[
+        ("app/plain-1", &parent("", "dev/foo[bar]")),
+        (
+            "app/mirror-1",
+            &parent("bar", "dev/foo[bar=] bar? ( app/late )"),
+        ),
+        ("app/late-1", &parent("bar", "dev/foo[bar=]")),
+        ("dev/foo-1", &leaf("bar", "")),
+    ]);
+    let (out, left) = cosolve_from(&data, &["app/plain", "app/mirror"], Vec::new());
+    assert!(out.solved.as_ref().is_some_and(|o| o.has("app/late-1")));
+    assert!(
+        pu_forces(&out.package_use, "app/late", "bar"),
+        "{:?}",
+        out.package_use
+    );
+    assert!(out.conflicts.is_empty());
+    assert!(
+        left.iter()
+            .all(|r| r.required_enabled.is_empty() && r.required_disabled.is_empty())
     );
 }
