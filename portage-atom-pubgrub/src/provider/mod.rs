@@ -1421,15 +1421,11 @@ impl PortageDependencyProvider {
     /// the caller falls back to the default `max()` (= first-listed) pick.
     pub(crate) fn newest_installed_choice_branch<'a>(
         &self,
-        data: &PackageData,
-        candidates: &[&'a Version],
+        candidates: &[(&'a Version, &'a VersionData)],
     ) -> Option<&'a Version> {
         let mut best: Option<&'a Version> = None;
         let mut best_inst_ver: Option<Version> = None;
-        for &ver in candidates {
-            let Some(vd) = data.versions.get(ver) else {
-                continue;
-            };
+        for &(ver, vd) in candidates {
             if let Some(iv) = self.branch_installed_ver(vd, Self::BRANCH_DEPTH_LIMIT) {
                 // Prefer a strictly-newer reachable installed version; on a tie
                 // keep the higher choice version (= first-listed alternative),

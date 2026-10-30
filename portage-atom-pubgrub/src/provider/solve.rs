@@ -74,8 +74,12 @@ impl DependencyProvider for PortageDependencyProvider {
             return Ok(None);
         };
 
-        let candidates: Vec<&Version> =
-            data.versions.keys().filter(|v| range.contains(v)).collect();
+        // In ascending version order throughout, so the newest candidate is the last one.
+        let candidates: Vec<(&Version, &VersionData)> = data
+            .versions
+            .iter()
+            .filter(|(v, _)| range.contains(v))
+            .collect();
 
         if candidates.is_empty() {
             return Ok(None);
@@ -94,7 +98,7 @@ impl DependencyProvider for PortageDependencyProvider {
         // root target (naming `=pkg-9999`, or a range admitting only lives).
         let allow_live =
             self.root_targets.contains_key(package) && !self.repair_targets.contains(package);
-        let candidates = filter_to_preferred_tier(data, candidates, allow_live);
+        let candidates = filter_to_preferred_tier(candidates, allow_live);
 
         // A prior iteration pinned this package (`upgrade_to`, or a root target
         // below its newest version). Soft pins fall through when the version is
@@ -123,10 +127,10 @@ impl DependencyProvider for PortageDependencyProvider {
 
         // An installed version the repository does not offer gives way to an
         // offered one wherever something is being picked to build.
-        let offered: Vec<&Version> = candidates
+        let offered: Vec<(&Version, &VersionData)> = candidates
             .iter()
             .copied()
-            .filter(|v| !data.versions[*v].installed_only)
+            .filter(|(_, vd)| !vd.installed_only)
             .collect();
         let replaceable = !offered.is_empty() && offered.len() < candidates.len();
 
@@ -201,14 +205,12 @@ impl DependencyProvider for PortageDependencyProvider {
             // back to the default max() pick.
             let direct_installed: Vec<bool> = candidates
                 .iter()
-                .map(|&ver| {
-                    data.versions.get(ver).is_some_and(|vd| {
-                        if let Dependencies::Available(ref cs) = vd.merged {
-                            cs.iter().any(|(pkg, _)| self.installed.contains_key(pkg))
-                        } else {
-                            false
-                        }
-                    })
+                .map(|(_, vd)| {
+                    if let Dependencies::Available(ref cs) = vd.merged {
+                        cs.iter().any(|(pkg, _)| self.installed.contains_key(pkg))
+                    } else {
+                        false
+                    }
                 })
                 .collect();
             let directly_installed_count = direct_installed.iter().filter(|&&x| x).count();
@@ -227,13 +229,7 @@ impl DependencyProvider for PortageDependencyProvider {
                     let installed_and_use_sat: Vec<bool> = candidates
                         .iter()
                         .zip(direct_installed.iter())
-                        .map(|(&ver, &inst)| {
-                            inst && data
-                                .versions
-                                .get(ver)
-                                .map(|vd| self.use_dep_branch_satisfied(&vd.use_deps))
-                                .unwrap_or(true)
-                        })
+                        .map(|((_, vd), &inst)| inst && self.use_dep_branch_satisfied(&vd.use_deps))
                         .collect();
                     let sat_count = installed_and_use_sat.iter().filter(|&&s| s).count();
                     // Only intervene when some (not all) installed branches satisfy USE
@@ -241,13 +237,11 @@ impl DependencyProvider for PortageDependencyProvider {
                     if sat_count > 0 && sat_count < candidates.len() {
                         let best = candidates
                             .iter()
-                            .copied()
-                            .zip(installed_and_use_sat.iter().copied())
+                            .zip(installed_and_use_sat)
                             .filter(|(_, s)| *s)
-                            .map(|(v, _)| v)
-                            .max()
-                            .cloned();
-                        return Ok(best);
+                            .map(|((v, _), _)| v)
+                            .next_back();
+                        return Ok(best.map(|v| (*v).clone()));
                     }
                 }
 
@@ -255,19 +249,18 @@ impl DependencyProvider for PortageDependencyProvider {
                     // OR group with some (not all) branches installed: prefer
                     // the highest-version installed branch (= first listed).
                     let best = candidates
-                        .into_iter()
+                        .iter()
                         .zip(direct_installed)
                         .filter(|(_, has)| *has)
-                        .map(|(v, _)| v)
-                        .max()
-                        .cloned();
-                    return Ok(best);
+                        .map(|((v, _), _)| v)
+                        .next_back();
+                    return Ok(best.map(|v| (*v).clone()));
                 }
                 // All direct (non-virtual) branches installed: prefer the branch
                 // whose installed version is newest (emerge `dep_zapdeps`
                 // tie-break) before falling to the default max() (= first listed).
                 if matches!(package, PortagePackage::Choice { .. })
-                    && let Some(ver) = self.newest_installed_choice_branch(data, &candidates)
+                    && let Some(ver) = self.newest_installed_choice_branch(&candidates)
                 {
                     return Ok(Some(ver.clone()));
                 }
@@ -278,24 +271,18 @@ impl DependencyProvider for PortageDependencyProvider {
             // heuristic for nested OR groups with non-direct install paths.
             let has_installed: Vec<bool> = candidates
                 .iter()
-                .map(|&ver| {
-                    data.versions
-                        .get(ver)
-                        .is_some_and(|vd| self.deps_reach_installed(vd, 2))
-                })
+                .map(|(_, vd)| self.deps_reach_installed(vd, 2))
                 .collect();
             let installed_count = has_installed.iter().filter(|&&x| x).count();
             if installed_count > 0 {
                 if installed_count < candidates.len() {
                     let best = candidates
                         .iter()
-                        .copied()
                         .zip(has_installed)
                         .filter(|(_, has)| *has)
-                        .map(|(v, _)| v)
-                        .max()
-                        .cloned();
-                    return Ok(best);
+                        .map(|((v, _), _)| v)
+                        .next_back();
+                    return Ok(best.map(|v| (*v).clone()));
                 }
                 // All branches reach an installed package (e.g. the host has both
                 // rust and rust-bin, so `|| ( rust-bin:* rust:* )` — a Choice over
@@ -304,7 +291,7 @@ impl DependencyProvider for PortageDependencyProvider {
                 // emerge's `dep_zapdeps` version-aware tie-break and keep the
                 // branch reaching the newer installed version (source rust-1.95.0).
                 if matches!(package, PortagePackage::Choice { .. })
-                    && let Some(ver) = self.newest_installed_choice_branch(data, &candidates)
+                    && let Some(ver) = self.newest_installed_choice_branch(&candidates)
                 {
                     return Ok(Some(ver.clone()));
                 }
@@ -317,14 +304,12 @@ impl DependencyProvider for PortageDependencyProvider {
         {
             let nearest = candidates
                 .iter()
-                .copied()
-                .filter(|v| *v >= installed_ver)
-                .min();
-            return Ok(nearest.or_else(|| candidates.into_iter().max()).cloned());
+                .find(|(v, _)| *v >= installed_ver)
+                .or(candidates.last());
+            return Ok(nearest.map(|(v, _)| (*v).clone()));
         }
 
-        let version = candidates.into_iter().max().cloned();
-        Ok(version)
+        Ok(candidates.last().map(|(v, _)| (*v).clone()))
     }
 
     fn get_dependencies(
@@ -759,14 +744,13 @@ fn append_unsatisfied_broot(
 /// `choose_version`): untagged versions when any exist, else tagged release
 /// versions over tagged live ones.
 fn filter_to_preferred_tier<'a>(
-    data: &super::PackageData,
-    candidates: Vec<&'a Version>,
+    candidates: Vec<(&'a Version, &'a VersionData)>,
     allow_live: bool,
-) -> Vec<&'a Version> {
-    let untagged: Vec<&Version> = candidates
+) -> Vec<(&'a Version, &'a VersionData)> {
+    let untagged: Vec<_> = candidates
         .iter()
         .copied()
-        .filter(|v| !data.versions[*v].needs_unmask)
+        .filter(|(_, vd)| !vd.needs_unmask)
         .collect();
     if !untagged.is_empty() {
         return if untagged.len() == candidates.len() {
@@ -778,20 +762,12 @@ fn filter_to_preferred_tier<'a>(
     // Tagged-live ebuilds are never selected transitively: drop them even
     // when nothing else remains (the solve then fails, pointing at the need
     // to name `=pkg-9999` explicitly).
-    if !allow_live {
-        let no_live: Vec<&Version> = candidates
-            .iter()
-            .copied()
-            .filter(|v| !data.versions[*v].live)
-            .collect();
-        return no_live;
-    }
-    let release_only: Vec<&Version> = candidates
+    let release_only: Vec<_> = candidates
         .iter()
         .copied()
-        .filter(|v| !data.versions[*v].live)
+        .filter(|(_, vd)| !vd.live)
         .collect();
-    if release_only.is_empty() || release_only.len() == candidates.len() {
+    if allow_live && release_only.is_empty() {
         candidates
     } else {
         release_only
