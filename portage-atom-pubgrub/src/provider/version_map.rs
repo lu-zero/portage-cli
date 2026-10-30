@@ -1,34 +1,34 @@
-use crate::solver_version::SolverVersion;
+use portage_atom::VersionKey;
 
 /// A package's versions in ascending order, stored as one sorted `Vec`
 ///
 /// Most provider packages are virtual choice nodes with two or three
 /// branches; a `BTreeMap` would allocate an eleven-slot leaf for each.
-pub(crate) struct VersionMap<V>(Vec<(SolverVersion, V)>);
+pub(crate) struct VersionMap<V>(Vec<(VersionKey, V)>);
 
 impl<V> VersionMap<V> {
     pub(crate) const fn new() -> Self {
         Self(Vec::new())
     }
 
-    fn position(&self, version: &SolverVersion) -> Result<usize, usize> {
+    fn position(&self, version: &VersionKey) -> Result<usize, usize> {
         self.0.binary_search_by(|(v, _)| v.cmp(version))
     }
 
-    pub(crate) fn get(&self, version: &SolverVersion) -> Option<&V> {
+    pub(crate) fn get(&self, version: &VersionKey) -> Option<&V> {
         self.position(version).ok().map(|i| &self.0[i].1)
     }
 
-    pub(crate) fn get_mut(&mut self, version: &SolverVersion) -> Option<&mut V> {
+    pub(crate) fn get_mut(&mut self, version: &VersionKey) -> Option<&mut V> {
         self.position(version).ok().map(|i| &mut self.0[i].1)
     }
 
-    pub(crate) fn contains_key(&self, version: &SolverVersion) -> bool {
+    pub(crate) fn contains_key(&self, version: &VersionKey) -> bool {
         self.position(version).is_ok()
     }
 
     /// Insert or replace, returning the replaced value
-    pub(crate) fn insert(&mut self, version: SolverVersion, value: V) -> Option<V> {
+    pub(crate) fn insert(&mut self, version: VersionKey, value: V) -> Option<V> {
         match self.position(&version) {
             Ok(i) => Some(std::mem::replace(&mut self.0[i].1, value)),
             Err(i) => {
@@ -38,15 +38,15 @@ impl<V> VersionMap<V> {
         }
     }
 
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (&SolverVersion, &V)> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (&VersionKey, &V)> {
         self.0.iter().map(|(v, d)| (v, d))
     }
 
-    pub(crate) fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (&SolverVersion, &mut V)> {
+    pub(crate) fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (&VersionKey, &mut V)> {
         self.0.iter_mut().map(|(v, d)| (&*v, d))
     }
 
-    pub(crate) fn keys(&self) -> impl DoubleEndedIterator<Item = &SolverVersion> {
+    pub(crate) fn keys(&self) -> impl DoubleEndedIterator<Item = &VersionKey> {
         self.0.iter().map(|(v, _)| v)
     }
 
@@ -60,8 +60,8 @@ mod tests {
     use super::*;
     use portage_atom::Version;
 
-    fn v(s: &str) -> SolverVersion {
-        SolverVersion::new(&Version::parse(s).unwrap())
+    fn v(s: &str) -> VersionKey {
+        VersionKey::new(&Version::parse(s).unwrap())
     }
 
     #[test]

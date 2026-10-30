@@ -1263,6 +1263,6 @@ fn package_needs_use_reinstall(
 /// the tree are cut from a version prefix (`python` → `3.14`, `gcc` → `14`), so
 /// a shared prefix is a good proxy without hard-coding any package's slot rule.
 fn same_slot_series(a: &Version, b: &Version) -> bool {
-    let n = a.numbers.len().min(b.numbers.len()).min(2);
-    n > 0 && a.numbers[..n] == b.numbers[..n]
+    let n = a.component_count().min(b.component_count()).min(2);
+    n > 0 && a.components().take(n).eq(b.components().take(n))
 }

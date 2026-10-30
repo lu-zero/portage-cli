@@ -12,8 +12,8 @@ use pubgrub::SelectedDependencies;
 
 use crate::convert;
 use crate::package::PortagePackage;
-use crate::solver_version::SolverVersion;
 use crate::use_config::UseFlagState;
+use portage_atom::VersionKey;
 
 use super::{PortageDependencyProvider, UseFlagRequirement};
 
@@ -274,7 +274,7 @@ impl PortageDependencyProvider {
                             // installed package onto a tagged version — that
                             // would silently unmask it outside the autounmask
                             // report path.
-                            let inst_ver = SolverVersion::new(inst_ver);
+                            let inst_ver = VersionKey::new(inst_ver);
                             d.versions
                                 .iter()
                                 .rfind(|(v, vd)| **v > inst_ver && !vd.needs_unmask)

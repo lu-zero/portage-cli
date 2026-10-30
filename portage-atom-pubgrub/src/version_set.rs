@@ -1,10 +1,10 @@
 use std::fmt;
 
-use portage_atom::{Operator, Revision, Suffix, SuffixKind, Version};
+use portage_atom::{Operator, Version};
 use pubgrub::VersionSet;
 use version_ranges::Ranges;
 
-use crate::solver_version::SolverVersion;
+use portage_atom::VersionKey;
 
 /// A PubGrub `VersionSet` backed by PMS version ranges
 ///
@@ -13,7 +13,7 @@ use crate::solver_version::SolverVersion;
 ///
 /// See [PMS 8.3.1](https://projects.gentoo.org/pms/9/pms.html#version_specs).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct PortageVersionSet(Ranges<SolverVersion>);
+pub struct PortageVersionSet(Ranges<VersionKey>);
 
 impl PortageVersionSet {
     /// Create a version set matching all versions
@@ -29,10 +29,10 @@ impl PortageVersionSet {
     /// Returns the inner ranges
     /// Returns `true` if the given version is in this set
     pub fn contains(&self, v: &Version) -> bool {
-        self.0.contains(&SolverVersion::new(v))
+        self.0.contains(&VersionKey::new(v))
     }
 
-    pub(crate) fn contains_key(&self, key: &SolverVersion) -> bool {
+    pub(crate) fn contains_key(&self, key: &VersionKey) -> bool {
         self.0.contains(key)
     }
 
@@ -40,7 +40,7 @@ impl PortageVersionSet {
     ///
     /// See [PMS 8.3.1](https://projects.gentoo.org/pms/9/pms.html#version_specs).
     pub fn from_operator(op: Operator, glob: bool, v: Version) -> Self {
-        let key = SolverVersion::new;
+        let key = VersionKey::new;
         match op {
             Operator::GreaterOrEqual => Self(Ranges::higher_than(key(&v))),
             Operator::Greater => Self(Ranges::strictly_higher_than(key(&v))),
@@ -55,7 +55,7 @@ impl PortageVersionSet {
             }
             Operator::Equal => Self(Ranges::singleton(key(&v))),
             Operator::Approximate => {
-                let (base, bumped) = approximate_bounds(&v);
+                let (base, bumped) = v.approximate_bounds();
                 Self(Ranges::between(key(&base), key(&bumped)))
             }
         }
@@ -81,7 +81,7 @@ impl PortageVersionSet {
         let mut set = Self::from_operator(op, glob, v.clone());
         for candidate in known() {
             if set.contains(&candidate) && !candidate.glob_matches(&v) {
-                let cut = Ranges::singleton(SolverVersion::new(&candidate)).complement();
+                let cut = Ranges::singleton(VersionKey::new(&candidate)).complement();
                 set = Self(set.0.intersection(&cut));
             }
         }
@@ -90,7 +90,7 @@ impl PortageVersionSet {
 }
 
 impl VersionSet for PortageVersionSet {
-    type V = SolverVersion;
+    type V = VersionKey;
 
     fn empty() -> Self {
         Self(Ranges::empty())
@@ -133,37 +133,6 @@ impl fmt::Display for PortageVersionSet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
     }
-}
-
-/// Compute the lower and upper bounds for the `~` (approximate) operator
-///
-/// PMS 8.3.1: "~ V" matches versions identical to V when revision is ignored.
-///
-/// PMS version ordering (Algorithm 3.1): numeric → letter → suffixes → revision.
-/// Suffix ordering: _alpha < _beta < _pre < _rc < (none) < _p.
-///
-/// So `_p` sorts after all revisions of the base version:
-/// `1.2.3 < 1.2.3-r1 < ... < 1.2.3_p < 1.2.3_p-r1 < ... < 1.2.4`
-///
-/// The range `[V_rev0, V_p)` captures exactly the base version and all its
-/// revisions, excluding `_p` patchlevels and other suffix variants.
-///
-/// For suffixed versions the same trick works by appending `_p`:
-/// `~1.2.3_alpha1` → `[1.2.3_alpha1, 1.2.3_alpha1_p)` — the appended `_p`
-/// sorts after all revisions of `1.2.3_alpha1` but before any version whose
-/// suffixes differ from `_alpha1`.
-fn approximate_bounds(v: &Version) -> (Version, Version) {
-    let mut base = v.clone();
-    base.revision = Revision::default();
-
-    let mut upper = base.clone();
-    upper.revision = Revision::default();
-    upper.suffixes.push(Suffix {
-        kind: SuffixKind::P,
-        version: None,
-    });
-
-    (base, upper)
 }
 
 #[cfg(test)]

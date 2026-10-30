@@ -100,15 +100,11 @@ fn range_matches(range: &VersionRange, cpv: &Cpv, slot: SlotName) -> bool {
         RangeOp::Gt => cpv.version > range.version,
         RangeOp::Ge => cpv.version >= range.version,
         RangeOp::RLe | RangeOp::RLt | RangeOp::RGe | RangeOp::RGt => {
-            let mut base_cand = cpv.version.clone();
-            base_cand.revision = Default::default();
-            let mut base_want = range.version.clone();
-            base_want.revision = Default::default();
-            if base_cand != base_want {
+            if cpv.version.base() != range.version.base() {
                 return false;
             }
-            let cand_rev = cpv.version.revision.0;
-            let want_rev = range.version.revision.0;
+            let cand_rev = cpv.version.revision();
+            let want_rev = range.version.revision();
             match range.op {
                 RangeOp::RLe => cand_rev <= want_rev,
                 RangeOp::RLt => cand_rev < want_rev,

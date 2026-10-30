@@ -258,13 +258,7 @@ fn dep_matches_cpv(dep: &Dep, cpv: &Cpv, pkg_slot: &Slot) -> bool {
                         cand == ver
                     }
                 }
-                Operator::Approximate => {
-                    let mut bc = cand.clone();
-                    bc.revision = portage_atom::Revision::default();
-                    let mut bv = ver.clone();
-                    bv.revision = portage_atom::Revision::default();
-                    bc == bv
-                }
+                Operator::Approximate => cand.base() == ver.base(),
             }
         }
         _ => false,

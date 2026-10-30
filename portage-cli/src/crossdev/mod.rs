@@ -1899,8 +1899,8 @@ fn ebuild_versions(gentoo: &Utf8Path, cat: &str, pkg: &str) -> Vec<Version> {
 /// `X.Y.9999`) but excludes the branch's own live/rolling `X.Y.9999` ebuild
 /// and any newer branch or slot.
 fn branch_bound(version: &Version) -> Version {
-    let major = version.numbers.first().copied().unwrap_or(0);
-    let minor = version.numbers.get(1).copied().unwrap_or(0);
+    let major = version.component(0).unwrap_or(0);
+    let minor = version.component(1).unwrap_or(0);
     Version::new(&[major, minor, 9999])
 }
 
@@ -1928,7 +1928,7 @@ fn llvm_slot(repo: &Repository) -> Option<u64> {
                 .is_some_and(|entry| !entry.metadata.keywords.is_empty())
         })
         .max()
-        .and_then(|version| version.numbers.first().copied())
+        .and_then(|version| version.component(0))
 }
 
 /// `package.accept_keywords` for a host-arch cross-category package: mirror

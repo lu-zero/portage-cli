@@ -51,7 +51,7 @@ Versions below are the **workspace** package versions in each crate's
 |-------|---------|---------|
 | `gentoo-interner` | 0.4.1 | String interning |
 | `gentoo-core` | 0.6.2 | Architecture types, variants |
-| `portage-atom` | 0.12.0 | PMS atom parsing |
+| `portage-atom` | 0.13.0 | PMS atom parsing |
 | `portage-metadata` | 0.11.0 | md5-cache entry parsing, EAPI, keywords |
 | `portage-atom-pubgrub` | 0.9.0 | PubGrub solver bridge (default in `em`) |
 | `portage-atom-resolvo` | 0.9.0 | SAT dependency solver (resolvo bridge) |
@@ -103,7 +103,8 @@ PMS atom parser — the vocabulary every other crate speaks.
 - `struct Dep` — Full dependency atom with blocker, operator, version, slot, USE, repo
 - `enum Blocker` — `Weak` (!) or `Strong` (!!)
 - `enum DepEntry` — Dependency tree node: `Atom`, `UseConditional`, `AllOf`, `AnyOf`, `ExactlyOneOf`, `AtMostOneOf`
-- `struct Version` — PMS version with suffixes and revision: `glob_matches()`, `glob_bounds()`, `matches_operator()`, `base()`
+- `struct Version` — PMS version, fields read through accessors (`components()`, `letter()`, `suffixes()`, `revision()`): `glob_matches()`, `glob_bounds()`, `approximate_bounds()`, `matches_operator()`, `base()`
+- `struct VersionKey` — 24-byte byte key that orders, hashes and tests equal like its `Version`; `to_version()` gives back the written version
 - `struct Revision(u64)` — Package revision (`-rN`)
 - `enum Operator` — `<`, `<=`, `=`, `~`, `>=`, `>`
 - `struct Suffix` / `enum SuffixKind` — Version suffix segment (`Alpha`, `Beta`, `Pre`, `Rc`, `Post`)
@@ -161,8 +162,7 @@ SAT-based dependency solver bridge using resolvo.
 PubGrub-based dependency solver bridge — the solver `em` uses by default.
 
 - `struct PortagePackage` — Solver package identity: `Unslotted`, `Slotted`
-- `struct PortageVersionSet` — Wraps `Ranges<SolverVersion>` for pubgrub's `VersionSet` trait
-- `struct SolverVersion` — Opaque 24-byte byte key ordered like `Version`; solutions convert back with `to_version()`
+- `struct PortageVersionSet` — Wraps `Ranges<VersionKey>` for pubgrub's `VersionSet` trait; solutions convert back to `Version`
 - `struct PortageDependencyProvider` — Main solver bridge: `new_for_targets()`, `resolve_targets()`, `dependency_graph()`, `install_order()`, `set_selective_no_update()`
 - `enum InstalledPolicy`, `struct InstalledPackage`, `struct DroppedDep` — Installed package handling
 - `struct UseConfig`, `enum UseFlagState`, `struct UseLayer` — Per-package USE configuration

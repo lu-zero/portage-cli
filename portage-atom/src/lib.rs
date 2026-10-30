@@ -21,7 +21,7 @@
 //! use portage_atom::Cpv;
 //!
 //! let cpv = Cpv::parse("dev-lang/rust-1.75.0").unwrap();
-//! assert_eq!(cpv.version.numbers[0], 1);
+//! assert_eq!(cpv.version.component(0), Some(1));
 //! ```
 //!
 //! Parse a full dependency:
@@ -47,6 +47,7 @@ mod slot;
 mod use_dep;
 mod use_flag_lookup;
 mod version;
+mod version_key;
 
 pub use gentoo_interner as interner;
 
@@ -62,6 +63,7 @@ pub use slot::{Slot, SlotDep, SlotOperator};
 pub use use_dep::{UseDefault, UseDep, UseDepKind};
 pub use use_flag_lookup::UseFlagLookup;
 pub use version::{Operator, Revision, Suffix, SuffixKind, Version};
+pub use version_key::VersionKey;
 
 // Re-export bon-derived builders when the feature is enabled
 #[cfg(feature = "builder")]

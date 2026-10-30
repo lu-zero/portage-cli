@@ -18,9 +18,8 @@ PubGrub version solver that understands Gentoo Portage dependency semantics:
 
 - **`PortagePackage`** — a PubGrub `Package` backed by a `Cpn` + optional slot
 - **`PortageVersionSet`** — a PubGrub `VersionSet` mapping PMS operators (`>=`,
-  `~`, `=*`, etc.) to ranges of `SolverVersion`
-- **`SolverVersion`** — the solver's 24-byte version: a byte key that orders like
-  `Version`, converted back to the written `Version` in solutions
+  `~`, `=*`, etc.) to ranges of `portage_atom::VersionKey`, the 24-byte key
+  the solver runs on; solutions convert back to the written `Version`
 - **`PortageDependencyProvider`** — a PubGrub `DependencyProvider` over a
   package repository, with support for:
   - All five PMS dependency classes (DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND)

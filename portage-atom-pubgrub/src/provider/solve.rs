@@ -11,9 +11,9 @@ use pubgrub::{
 
 use crate::error::Error;
 use crate::package::{MergeRoot, PortagePackage};
-use crate::solver_version::SolverVersion;
 use crate::use_config::UseFlagState;
 use crate::version_set::PortageVersionSet;
+use portage_atom::VersionKey;
 
 use super::post_solve::eval_violated_use_dep;
 use super::{HostEntry, InstalledPolicy, PortageDependencyProvider, VersionData};
@@ -35,7 +35,7 @@ fn installed_follower(
 
 impl DependencyProvider for PortageDependencyProvider {
     type P = PortagePackage;
-    type V = SolverVersion;
+    type V = VersionKey;
     type VS = PortageVersionSet;
     type M = String;
     type Err = Error;
@@ -76,7 +76,7 @@ impl DependencyProvider for PortageDependencyProvider {
         };
 
         // In ascending version order throughout, so the newest candidate is the last one.
-        let candidates: Vec<(&SolverVersion, &VersionData)> = data
+        let candidates: Vec<(&VersionKey, &VersionData)> = data
             .versions
             .iter()
             .filter(|(v, _)| range.contains_key(v))
@@ -107,7 +107,7 @@ impl DependencyProvider for PortageDependencyProvider {
         // acceptable, so the conflict can move an earlier decision.
         if let Some(pin) = self.upgrade_pins.get(package) {
             if range.contains(pin) {
-                return Ok(Some(SolverVersion::new(pin)));
+                return Ok(Some(VersionKey::new(pin)));
             }
             if self.hard_pins.contains(package) {
                 return Ok(None);
@@ -123,12 +123,12 @@ impl DependencyProvider for PortageDependencyProvider {
             && let Some(pref) = self.use_decision_prefer.get(package)
             && range.contains(pref)
         {
-            return Ok(Some(SolverVersion::new(pref)));
+            return Ok(Some(VersionKey::new(pref)));
         }
 
         // An installed version the repository does not offer gives way to an
         // offered one wherever something is being picked to build.
-        let offered: Vec<(&SolverVersion, &VersionData)> = candidates
+        let offered: Vec<(&VersionKey, &VersionData)> = candidates
             .iter()
             .copied()
             .filter(|(_, vd)| !vd.installed_only)
@@ -139,7 +139,7 @@ impl DependencyProvider for PortageDependencyProvider {
             match policy {
                 InstalledPolicy::Lock => {
                     if range.contains(installed_ver) {
-                        return Ok(Some(SolverVersion::new(installed_ver)));
+                        return Ok(Some(VersionKey::new(installed_ver)));
                     }
                     return Ok(None);
                 }
@@ -162,7 +162,7 @@ impl DependencyProvider for PortageDependencyProvider {
                     // provided the repository still offers it.
                     let moves_root = replaceable && self.root_targets.contains_key(package);
                     if installed_follower(self, package, range) && !moves_root {
-                        return Ok(Some(SolverVersion::new(installed_ver)));
+                        return Ok(Some(VersionKey::new(installed_ver)));
                     }
                 }
                 InstalledPolicy::Rebuild => {
@@ -175,7 +175,7 @@ impl DependencyProvider for PortageDependencyProvider {
                         && !replaceable
                         && range.contains(installed_ver)
                     {
-                        return Ok(Some(SolverVersion::new(installed_ver)));
+                        return Ok(Some(VersionKey::new(installed_ver)));
                     }
                 }
             }
@@ -300,7 +300,7 @@ impl DependencyProvider for PortageDependencyProvider {
             && self.repair_targets.contains(package)
             && let Some((installed_ver, _)) = self.installed.get(package)
         {
-            let installed_ver = SolverVersion::new(installed_ver);
+            let installed_ver = VersionKey::new(installed_ver);
             let nearest = candidates
                 .iter()
                 .find(|(v, _)| **v >= installed_ver)
@@ -324,7 +324,7 @@ impl PortageDependencyProvider {
     fn compute_dependencies(
         &self,
         package: &PortagePackage,
-        version: &SolverVersion,
+        version: &VersionKey,
     ) -> Dependencies<PortagePackage, PortageVersionSet, String> {
         let Some(data) = self.package_data(package) else {
             return Dependencies::Unavailable(format!("package not found: {}", package));
@@ -348,7 +348,7 @@ impl PortageDependencyProvider {
         // (`InstalledPolicy::Rebuild`) expands the full build-time closure instead.
         if let Some((inst, policy)) = self.installed.get(package)
             && !matches!(policy, InstalledPolicy::Rebuild)
-            && SolverVersion::new(inst) == *version
+            && VersionKey::new(inst) == *version
         {
             // `package.provided`: no real VDB record backs this, so unlike a
             // genuinely installed package there is nothing to trust past "the
@@ -743,9 +743,9 @@ fn append_unsatisfied_broot(
 /// `choose_version`): untagged versions when any exist, else tagged release
 /// versions over tagged live ones.
 fn filter_to_preferred_tier<'a>(
-    candidates: Vec<(&'a SolverVersion, &'a VersionData)>,
+    candidates: Vec<(&'a VersionKey, &'a VersionData)>,
     allow_live: bool,
-) -> Vec<(&'a SolverVersion, &'a VersionData)> {
+) -> Vec<(&'a VersionKey, &'a VersionData)> {
     let untagged: Vec<_> = candidates
         .iter()
         .copied()

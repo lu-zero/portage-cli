@@ -1303,8 +1303,9 @@ impl EbuildShell {
         // Use the raw filename version string to preserve leading zeros per PMS §7.2.
         // Version::to_string() normalises numeric components (26.04.0 → 26.4.0).
         let pvr = version.to_string();
-        let pr = format!("r{}", version.revision.0);
-        let pv = if version.revision.0 > 0 {
+        let revision = version.revision().0;
+        let pr = format!("r{revision}");
+        let pv = if revision > 0 {
             pvr.strip_suffix(&format!("-{pr}"))
                 .unwrap_or(&pvr)
                 .to_owned()

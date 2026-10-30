@@ -26,7 +26,7 @@ fn main() {
     println!("3. Cpv with revision:");
     let cpv = Cpv::parse("dev-lang/rust-1.75.0-r1").expect("Failed to parse cpv with revision");
     println!("   Input: dev-lang/rust-1.75.0-r1");
-    println!("   Revision: r{}", cpv.version.revision.0);
+    println!("   Revision: r{}", cpv.version.revision().0);
     println!("   Output: {}\n", cpv);
 
     // Full dependency with version operator
@@ -79,8 +79,8 @@ fn main() {
     let cpv = Cpv::parse("dev-lang/python-3.11.0_rc2_p1-r1")
         .expect("Failed to parse version with suffixes");
     println!("   Input: dev-lang/python-3.11.0_rc2_p1-r1");
-    println!("   Suffixes: {} suffixes", cpv.version.suffixes.len());
-    for suffix in &cpv.version.suffixes {
+    println!("   Suffixes: {} suffixes", cpv.version.suffixes().count());
+    for suffix in cpv.version.suffixes() {
         println!("     - {}", suffix);
     }
     println!("   Output: {}\n", cpv);

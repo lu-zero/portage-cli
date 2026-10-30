@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.0
+
+### Breaking changes
+
+- `Version`'s fields are private. Read them through `components`, `component`, `component_count`,
+  `letter`, `suffixes` and `revision`; `base` drops the revision.
+- `Revision` and `Suffix` are `Copy`.
+
+### Features
+
+- `VersionKey`, a 24-byte byte key that orders, hashes and tests equal like its `Version`.
+- `Version::approximate_bounds` for the `~` operator's range.
+
 ## 0.12.0
 
 ### Breaking changes

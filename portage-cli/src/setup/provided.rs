@@ -300,8 +300,8 @@ fn tree_versions(repo: &Repository, category: &str, package: &str) -> Vec<Versio
 /// compare would skip past. No current Tier-1 entry is multi-SLOT.
 fn pick_version(versions: &[Version], host: Option<&Version>) -> Option<Version> {
     if let Some(host) = host {
-        let n = host.numbers.len().min(2);
-        let same_line = Version::new(&host.numbers[..n]);
+        let line: Vec<u64> = host.components().take(2).collect();
+        let same_line = Version::new(&line);
         if let Some(best) = versions.iter().filter(|v| v.glob_matches(&same_line)).max() {
             return Some(best.clone());
         }

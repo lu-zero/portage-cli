@@ -1,20 +1,20 @@
-//! The solver's compact version: an order-preserving byte key
+//! An order-preserving byte key for a version
 
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-use portage_atom::{Revision, Suffix, SuffixKind, Version};
+use crate::version::{Revision, Suffix, SuffixKind, Version};
 
 const INLINE: usize = 21;
 
 /// A [`Version`] as bytes that compare, hash and test equal the way the version does
 ///
-/// Ordered per [PMS 3.3](https://projects.gentoo.org/pms/9/pms.html#version-comparison). The
-/// solver's version type: a 24-byte value where [`Version`] is 208, since pubgrub copies and
-/// compares versions constantly. [`Self::to_version`] gives back what was written.
+/// Ordered per [PMS 3.3](https://projects.gentoo.org/pms/9/pms.html#version-comparison). A
+/// 24-byte value where [`Version`] is 208, for code that copies and compares versions
+/// constantly, such as a solver. [`Self::to_version`] gives back what was written.
 #[derive(Clone)]
-pub struct SolverVersion(Repr);
+pub struct VersionKey(Repr);
 
 // The first `order_len` bytes are the order key. The rest, present only when the version's
 // spelling can't be rebuilt from the key (`003.03`, `1.00`, `_p01`), is its written form.
@@ -130,8 +130,9 @@ impl Reader<'_> {
     }
 }
 
-impl SolverVersion {
-    pub(crate) fn new(v: &Version) -> Self {
+impl VersionKey {
+    /// The key of `v`
+    pub fn new(v: &Version) -> Self {
         let mut bytes = Vec::with_capacity(INLINE);
         order_key(v, &mut bytes);
         let order_len = bytes.len();
@@ -213,39 +214,39 @@ impl SolverVersion {
     }
 }
 
-impl From<&Version> for SolverVersion {
+impl From<&Version> for VersionKey {
     fn from(v: &Version) -> Self {
         Self::new(v)
     }
 }
 
-impl PartialEq for SolverVersion {
+impl PartialEq for VersionKey {
     fn eq(&self, other: &Self) -> bool {
         self.order() == other.order()
     }
 }
 
-impl Eq for SolverVersion {}
+impl Eq for VersionKey {}
 
-impl PartialOrd for SolverVersion {
+impl PartialOrd for VersionKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for SolverVersion {
+impl Ord for VersionKey {
     fn cmp(&self, other: &Self) -> Ordering {
         self.order().cmp(other.order())
     }
 }
 
-impl Hash for SolverVersion {
+impl Hash for VersionKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.order().hash(state);
     }
 }
 
-impl fmt::Display for SolverVersion {
+impl fmt::Display for VersionKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.spelling() {
             Some(s) => f.write_str(s),
@@ -254,9 +255,9 @@ impl fmt::Display for SolverVersion {
     }
 }
 
-impl fmt::Debug for SolverVersion {
+impl fmt::Debug for VersionKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SolverVersion({self})")
+        write!(f, "VersionKey({self})")
     }
 }
 
@@ -327,7 +328,7 @@ mod tests {
     #[test]
     fn key_order_and_equality_match_version_for_every_pair() {
         let versions = edges();
-        let keys: Vec<_> = versions.iter().map(SolverVersion::new).collect();
+        let keys: Vec<_> = versions.iter().map(VersionKey::new).collect();
         for (a, ka) in versions.iter().zip(&keys) {
             for (b, kb) in versions.iter().zip(&keys) {
                 assert_eq!(ka.cmp(kb), a.cmp(b), "{a} vs {b}");
@@ -338,7 +339,7 @@ mod tests {
     #[test]
     fn every_version_displays_and_rebuilds_as_written() {
         for v in edges() {
-            let key = SolverVersion::new(&v);
+            let key = VersionKey::new(&v);
             assert_eq!(key.to_string(), v.to_string());
             let back = key.to_version();
             assert_eq!(back.to_string(), v.to_string());
@@ -357,7 +358,7 @@ mod tests {
             ("1-r1", "1-r01"),
         ] {
             let (a, b) = (Version::parse(a).unwrap(), Version::parse(b).unwrap());
-            let (ka, kb) = (SolverVersion::new(&a), SolverVersion::new(&b));
+            let (ka, kb) = (VersionKey::new(&a), VersionKey::new(&b));
             assert_eq!(a, b);
             assert_eq!(ka, kb);
             assert_eq!(state.hash_one(&ka), state.hash_one(&kb));
@@ -374,16 +375,16 @@ mod tests {
             version: Some(2),
         });
         v.revision = Revision(4);
-        let back = SolverVersion::new(&v).to_version();
+        let back = VersionKey::new(&v).to_version();
         assert_eq!(back.numbers, v.numbers);
         assert_eq!(back.to_string(), "1.0.3b_rc2-r4");
     }
 
     #[test]
     fn common_versions_stay_inline() {
-        assert_eq!(std::mem::size_of::<SolverVersion>(), 24);
+        assert_eq!(std::mem::size_of::<VersionKey>(), 24);
         for s in ["1.2.3", "5.15.2-r3", "2.0_pre20240101", "1.2.3_rc1-r1"] {
-            let key = SolverVersion::new(&Version::parse(s).unwrap());
+            let key = VersionKey::new(&Version::parse(s).unwrap());
             assert!(matches!(key.0, Repr::Inline { .. }), "{s}");
         }
     }

@@ -42,7 +42,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-portage-atom = "0.12"
+portage-atom = "0.13"
 ```
 
 ## Usage
@@ -64,9 +64,7 @@ println!("{}", cpn);  // dev-lang/rust
 use portage_atom::Cpv;
 
 let cpv = Cpv::parse("dev-lang/rust-1.75.0")?;
-assert_eq!(cpv.version.numbers[0], 1);
-assert_eq!(cpv.version.numbers[1], 75);
-assert_eq!(cpv.version.numbers[2], 0);
+assert_eq!(cpv.version.components().collect::<Vec<_>>(), [1, 75, 0]);
 ```
 
 ### Parse Full Dependencies (Dep)

@@ -20,7 +20,7 @@ use crate::error::{Error, Result};
 /// A revision of `0` is the implicit default and is omitted from display.
 ///
 /// See [PMS 3.2](https://projects.gentoo.org/pms/9/pms.html#version-specifications).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Revision(
     /// The revision number (e.g. `1` for `-r1`, `2` for `-r2`)
     ///
@@ -120,7 +120,7 @@ impl FromStr for SuffixKind {
 /// See [PMS 3.2](https://projects.gentoo.org/pms/9/pms.html#version-specifications)
 /// and [Algorithm 3.1](https://projects.gentoo.org/pms/9/pms.html#version-comparison)
 /// for the ordering rules.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "builder", derive(bon::Builder))]
 pub struct Suffix {
     /// The suffix kind (`_alpha`, `_beta`, `_pre`, `_rc`, or `_p`)
@@ -262,21 +262,21 @@ pub struct Version {
     /// rather than a truncation, since a silently shortened component would
     /// mis-compare against a package that spells it in full.
     #[cfg_attr(feature = "builder", builder(start_fn))]
-    pub numbers: Numbers,
+    pub(crate) numbers: Numbers,
     /// Written decimal digit strings for each component (same length as [`Self::numbers`])
     ///
     /// Kept only when some component is written with a leading zero, which Algorithm 3.3 can
     /// compare differently (`1.01` is not `1.1`); empty otherwise, where each `u64` says it all.
     #[cfg_attr(feature = "builder", builder(skip))]
-    pub digits: SmallVec<[SmolStr; 4]>,
+    pub(crate) digits: SmallVec<[SmolStr; 4]>,
     /// Optional single lowercase letter after the numeric components
-    pub letter: Option<char>,
+    pub(crate) letter: Option<char>,
     /// Zero or more version suffixes (`_alpha`, `_beta`, `_pre`, `_rc`, `_p`)
     #[cfg_attr(feature = "builder", builder(default))]
-    pub suffixes: Vec<Suffix>,
+    pub(crate) suffixes: Vec<Suffix>,
     /// Package revision; defaults to `0` (omitted from display)
     #[cfg_attr(feature = "builder", builder(default))]
-    pub revision: Revision,
+    pub(crate) revision: Revision,
     /// The version string exactly as parsed, preserving leading zeros
     /// (e.g. `"26.04.0"` instead of the reconstructed `"26.4.0"`)
     ///
@@ -296,7 +296,7 @@ pub struct Version {
     /// first component numerically) yet they render as `01.1` and `1.1`. Key a
     /// map or dedupe a set on the fields, never on the rendered string.
     #[cfg_attr(feature = "builder", builder(skip))]
-    pub raw: Option<SmolStr>,
+    pub(crate) raw: Option<SmolStr>,
 }
 
 /// Digit string for component `i`, preferring the original parse text
@@ -428,6 +428,36 @@ impl Version {
         }
     }
 
+    /// Number of dot-separated numeric components (`3` for `1.2.3`)
+    pub fn component_count(&self) -> usize {
+        self.numbers.len()
+    }
+
+    /// Numeric component `i`, from the left (`component(1)` of `1.2.3` is `Some(2)`)
+    pub fn component(&self, i: usize) -> Option<u64> {
+        self.numbers.get(i).copied()
+    }
+
+    /// The numeric components, from the left
+    pub fn components(&self) -> impl Iterator<Item = u64> + '_ {
+        self.numbers.iter().copied()
+    }
+
+    /// The letter after the numeric components (`Some('a')` for `1.2a`)
+    pub fn letter(&self) -> Option<char> {
+        self.letter
+    }
+
+    /// The suffixes in order (`_alpha1`, then `_p2` for `1_alpha1_p2`)
+    pub fn suffixes(&self) -> impl Iterator<Item = Suffix> + '_ {
+        self.suffixes.iter().copied()
+    }
+
+    /// The revision; `0` when none was written
+    pub fn revision(&self) -> Revision {
+        self.revision
+    }
+
     /// Parse a version string (without a leading operator)
     ///
     /// Accepts forms like `1.2.3`, `1.2.3a_rc1_p2-r5`.
@@ -531,6 +561,21 @@ impl Version {
         }
         let n = self.numbers.len().max(self.digits.len());
         n < 2 || !component_digits(self, n - 1).is_some_and(|d| d.starts_with('0'))
+    }
+
+    /// Bounds of `~V`: `[V, V_p)` with any revision dropped, per
+    /// [PMS 8.3.1](https://projects.gentoo.org/pms/9/pms.html#operators)
+    ///
+    /// `_p` sorts above every revision of `V` and below any other suffix change, so the range
+    /// holds exactly `V` and its revisions (`~1.2.3_alpha1` ends at `1.2.3_alpha1_p`).
+    pub fn approximate_bounds(&self) -> (Version, Version) {
+        let lower = self.base();
+        let mut upper = lower.clone();
+        upper.suffixes.push(Suffix {
+            kind: SuffixKind::P,
+            version: None,
+        });
+        (lower, upper)
     }
 
     /// Whether this is a live (VCS/snapshot-tracking) version per Gentoo's

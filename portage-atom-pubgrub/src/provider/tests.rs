@@ -1,6 +1,6 @@
 use super::*;
 use crate::repository::{InMemoryRepository, PackageDeps, PackageVersions};
-use crate::solver_version::SolverVersion;
+use portage_atom::VersionKey;
 use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Dep, DepEntry, DepList};
 use pubgrub::DependencyProvider as _;
@@ -91,7 +91,7 @@ fn resolve_simple() {
     let result = pubgrub::resolve(
         &provider,
         root,
-        SolverVersion::from(&Version::parse("1.75.0").unwrap()),
+        VersionKey::from(&Version::parse("1.75.0").unwrap()),
     );
     assert!(result.is_ok());
     let solution = result.unwrap();
@@ -144,7 +144,7 @@ fn multi_slot_installs_both_when_required() {
     let result = pubgrub::resolve(
         &provider,
         root,
-        SolverVersion::from(&Version::parse("1.0").unwrap()),
+        VersionKey::from(&Version::parse("1.0").unwrap()),
     );
     assert!(result.is_ok());
     let solution = result.unwrap();
@@ -197,7 +197,7 @@ fn resolve_slot_operator_equal() {
     let result = pubgrub::resolve(
         &provider,
         root,
-        SolverVersion::from(&Version::parse("1.0").unwrap()),
+        VersionKey::from(&Version::parse("1.0").unwrap()),
     );
     assert!(result.is_ok());
     let solution = result.unwrap();
@@ -240,7 +240,7 @@ fn resolve_slot_operator_star() {
     let result = pubgrub::resolve(
         &provider,
         root,
-        SolverVersion::from(&Version::parse("1.0").unwrap()),
+        VersionKey::from(&Version::parse("1.0").unwrap()),
     );
     assert!(result.is_ok());
 }
