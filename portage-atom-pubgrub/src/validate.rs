@@ -105,7 +105,7 @@ impl PortageDependencyProvider {
     ) -> Vec<Error> {
         let mut errors = Vec::new();
         for (pkg, version) in solution.iter() {
-            let Some(vd) = self.package_data(pkg).and_then(|d| d.version(version)) else {
+            let Some(vd) = self.package_data(pkg).and_then(|d| d.versions.get(version)) else {
                 continue;
             };
             for constraint in &vd.use_deps {
@@ -119,7 +119,7 @@ impl PortageDependencyProvider {
 
                 let target_iuse = self
                     .package_data(target_pkg)
-                    .and_then(|d| d.version(target_ver))
+                    .and_then(|d| d.versions.get(target_ver))
                     .map(|v| v.iuse.as_slice())
                     .unwrap_or(&[]);
 
@@ -204,7 +204,7 @@ impl PortageDependencyProvider {
     ) -> Vec<Error> {
         let mut errors = Vec::new();
         for (pkg, version) in solution.iter() {
-            let Some(vd) = self.package_data(pkg).and_then(|d| d.version(version)) else {
+            let Some(vd) = self.package_data(pkg).and_then(|d| d.versions.get(version)) else {
                 continue;
             };
             for constraint in &vd.repo_constraints {
@@ -217,7 +217,7 @@ impl PortageDependencyProvider {
                 };
                 let target_repo = self
                     .package_data(target_pkg_key)
-                    .and_then(|d| d.version(target_ver))
+                    .and_then(|d| d.versions.get(target_ver))
                     .and_then(|v| v.repo.as_ref());
                 match target_repo {
                     Some(r) if *r == constraint.repo => {}
@@ -275,10 +275,8 @@ impl PortageDependencyProvider {
             let Some(newest) = data
                 .versions
                 .iter()
-                .rfind(|(v, vd)| {
-                    requested.contains_key(v) && !vd.needs_unmask && !vd.installed_only
-                })
-                .map(|(v, vd)| (v.to_version(), vd))
+                .rfind(|(v, vd)| requested.contains(v) && !vd.needs_unmask && !vd.installed_only)
+                .map(|(v, vd)| (v.clone(), vd))
             else {
                 continue;
             };
@@ -362,7 +360,7 @@ impl PortageDependencyProvider {
         // side matters for e.g. `systemd[resolvconf]` blocking an installed
         // net-dns/openresolv that nothing pulls into the solve.
         for (pkg, version) in solution.iter() {
-            let Some(vd) = self.package_data(pkg).and_then(|d| d.version(version)) else {
+            let Some(vd) = self.package_data(pkg).and_then(|d| d.versions.get(version)) else {
                 continue;
             };
             for blocker in &vd.blockers {
@@ -511,7 +509,7 @@ impl PortageDependencyProvider {
     ) -> Vec<SlotOperatorBinding> {
         let mut bindings = Vec::new();
         for (pkg, version) in solution.iter() {
-            let Some(vd) = self.package_data(pkg).and_then(|d| d.version(version)) else {
+            let Some(vd) = self.package_data(pkg).and_then(|d| d.versions.get(version)) else {
                 continue;
             };
             for op_dep in &vd.slot_operator_deps {

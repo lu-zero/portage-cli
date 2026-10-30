@@ -13,7 +13,6 @@ use pubgrub::SelectedDependencies;
 use crate::convert;
 use crate::package::PortagePackage;
 use crate::use_config::UseFlagState;
-use portage_atom::VersionKey;
 
 use super::{PortageDependencyProvider, UseFlagRequirement};
 
@@ -137,7 +136,7 @@ impl PortageDependencyProvider {
                     let iuse = self
                         .packages
                         .get(target_pkg)
-                        .and_then(|d| d.version(target_ver))
+                        .and_then(|d| d.versions.get(target_ver))
                         .map(|vd| vd.iuse.as_slice())
                         // Empty == absent: a synthetic installed entry (or a repo
                         // version with no IUSE) must fall back to the VDB-recorded
@@ -227,7 +226,7 @@ impl PortageDependencyProvider {
 
             // -- main solution packages --
             for (pkg, ver) in solution.iter() {
-                let Some(vd) = self.package_data(pkg).and_then(|d| d.version(ver)) else {
+                let Some(vd) = self.package_data(pkg).and_then(|d| d.versions.get(ver)) else {
                     continue;
                 };
                 // "Installed" for parent-flag evaluation means *selected at its
@@ -274,11 +273,10 @@ impl PortageDependencyProvider {
                             // installed package onto a tagged version — that
                             // would silently unmask it outside the autounmask
                             // report path.
-                            let inst_ver = VersionKey::new(inst_ver);
                             d.versions
                                 .iter()
-                                .rfind(|(v, vd)| **v > inst_ver && !vd.needs_unmask)
-                                .map(|(v, _)| v.to_version())
+                                .rfind(|(v, vd)| *v > inst_ver && !vd.needs_unmask)
+                                .map(|(v, _)| v.clone())
                         })
                         .map(|new_ver| (pkg.clone(), new_ver))
                 })
@@ -289,7 +287,10 @@ impl PortageDependencyProvider {
 
                 // Expand the newer version's USE dep constraints. The "parent" is
                 // the upgraded package itself at its new version.
-                let Some(vd) = self.package_data(&pkg).and_then(|d| d.version(&new_ver)) else {
+                let Some(vd) = self
+                    .package_data(&pkg)
+                    .and_then(|d| d.versions.get(&new_ver))
+                else {
                     continue;
                 };
                 // The upgraded version is by definition not the installed build, and
@@ -373,7 +374,7 @@ impl PortageDependencyProvider {
         flag: Interned<DefaultInterner>,
         dep_default: Option<UseDefault>,
     ) -> bool {
-        let vd = self.package_data(pkg).and_then(|d| d.version(ver));
+        let vd = self.package_data(pkg).and_then(|d| d.versions.get(ver));
         let in_iuse = vd.is_some_and(|v| v.iuse.contains(&flag));
         if in_iuse {
             // `desired` already folds package.use, global USE, and IUSE

@@ -162,7 +162,7 @@ SAT-based dependency solver bridge using resolvo.
 PubGrub-based dependency solver bridge — the solver `em` uses by default.
 
 - `struct PortagePackage` — Solver package identity: `Unslotted`, `Slotted`
-- `struct PortageVersionSet` — Wraps `Ranges<VersionKey>` for pubgrub's `VersionSet` trait; solutions convert back to `Version`
+- `struct PortageVersionSet` — Wraps `Ranges<Version>` for pubgrub's `VersionSet` trait
 - `struct PortageDependencyProvider` — Main solver bridge: `new_for_targets()`, `resolve_targets()`, `dependency_graph()`, `install_order()`, `set_selective_no_update()`
 - `enum InstalledPolicy`, `struct InstalledPackage`, `struct DroppedDep` — Installed package handling
 - `struct UseConfig`, `enum UseFlagState`, `struct UseLayer` — Per-package USE configuration

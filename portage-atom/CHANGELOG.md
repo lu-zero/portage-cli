@@ -13,7 +13,6 @@
 
 ### Features
 
-- `VersionKey`, the solver's handle on a `Version`.
 - `Version::approximate_bounds` for the `~` operator's range.
 
 ## 0.12.0
