@@ -105,7 +105,8 @@ pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
     // rejects the order of. `roots.broot() == None` means "trivially equals
     // merge_root", so that case reads as "doesn't differ" correctly too.
     let broot_differs = roots.broot().is_some_and(|b| b.as_str() != target.as_str());
-    let (chost, cbuild) = read_chost_cbuild(roots.config().unwrap_or(&sysroot));
+    // Like everything else in make.conf, CHOST comes from the config root (`/` unless given), never from ROOT.
+    let (chost, cbuild) = read_chost_cbuild(roots.config().unwrap_or(Utf8Path::new("/")));
     let cross_arch = match (chost.as_deref(), cbuild.as_deref()) {
         (Some(c), Some(b)) => c != b,
         _ => false,
@@ -287,6 +288,25 @@ mod tests {
         let cross = detect(&offset, Utf8Path::new("/"));
         assert!(cross.active, "--root: BROOT differs from the target");
         assert_eq!(cross.sysroot.as_str(), "/srv/x");
+    }
+
+    // `--root A` reads its configuration from `/`, so a make.conf inside A does not make it a cross build
+    #[test]
+    fn a_make_conf_inside_root_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/make.conf"),
+            "CHOST=riscv64-unknown-linux-gnu\nCBUILD=aarch64-unknown-linux-gnu\n",
+        )
+        .unwrap();
+        let offset = crate::Roots::for_test_root_with_broot(root.as_str(), "/");
+        let cross = detect(&offset, Utf8Path::new("/"));
+        assert_eq!(
+            (cross.chost, cross.cbuild),
+            read_chost_cbuild(Utf8Path::new("/"))
+        );
     }
 
     // The combined `--prefix --target` case: `roots` here would be
