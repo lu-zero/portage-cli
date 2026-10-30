@@ -545,7 +545,7 @@ mod tests {
         let built = Dep::builder(original.cpn)
             .op(Operator::GreaterOrEqual)
             .version(original.version.clone().unwrap())
-            .slot_dep(original.slot_dep.clone().unwrap())
+            .slot_dep(original.slot_dep.unwrap())
             .use_deps(original.use_deps.clone().unwrap())
             .repo("gentoo")
             .build();
