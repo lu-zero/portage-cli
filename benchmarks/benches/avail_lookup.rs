@@ -6,7 +6,7 @@ fn make_avail(size: usize) -> (Avail, Dep) {
     let entries = (0..size)
         .map(|i| (Cpv::parse(&format!("app-misc/pkg{i}-1.0")).unwrap(), None))
         .collect();
-    let dep = Dep::parse(&format!("app-misc/pkg{}-1.0", size - 1)).unwrap();
+    let dep = Dep::parse(&format!("=app-misc/pkg{}-1.0", size - 1)).unwrap();
     (Avail::from_cpvs(entries), dep)
 }
 
