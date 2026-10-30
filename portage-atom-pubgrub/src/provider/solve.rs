@@ -206,11 +206,8 @@ impl DependencyProvider for PortageDependencyProvider {
             let direct_installed: Vec<bool> = candidates
                 .iter()
                 .map(|(_, vd)| {
-                    if let Dependencies::Available(ref cs) = vd.merged {
-                        cs.iter().any(|(pkg, _)| self.installed.contains_key(pkg))
-                    } else {
-                        false
-                    }
+                    vd.constraints()
+                        .any(|(pkg, _)| self.installed.contains_key(pkg))
                 })
                 .collect();
             let directly_installed_count = direct_installed.iter().filter(|&&x| x).count();
@@ -389,7 +386,7 @@ impl PortageDependencyProvider {
         // and action tags, never for membership. `emptytree_native` is `!cross.active`,
         // so this precedes the cross paths.
         if self.rebuild_tree {
-            return vd.merged.clone();
+            return vd.dependencies();
         }
 
         // A package being *built* (not at its installed version):
@@ -436,7 +433,7 @@ impl PortageDependencyProvider {
         if !package.is_virtual() && !self.host_installed.is_empty() {
             return Dependencies::Available(broot_filtered(self, vd));
         }
-        vd.merged.clone()
+        vd.dependencies()
     }
 }
 

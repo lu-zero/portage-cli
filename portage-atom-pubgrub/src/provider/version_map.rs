@@ -53,10 +53,6 @@ impl<V> VersionMap<V> {
     pub(crate) fn values(&self) -> impl DoubleEndedIterator<Item = &V> {
         self.0.iter().map(|(_, d)| d)
     }
-
-    pub(crate) fn values_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut V> {
-        self.0.iter_mut().map(|(_, d)| d)
-    }
 }
 
 #[cfg(test)]

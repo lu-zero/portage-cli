@@ -42,13 +42,7 @@ pub enum InstalledPolicy {
 }
 
 /// All solver-relevant data for one package version
-///
-/// Previously this was eight parallel `BTreeMap<Version, _>` fields on
-/// `PackageData`; collapsing them into one struct keeps a version's data
-/// cohesive and removes the hand-synced map inserts.
 pub(crate) struct VersionData {
-    /// Merged deps for PubGrub's DependencyProvider trait
-    pub(crate) merged: Dependencies<PortagePackage, PortageVersionSet, String>,
     /// Per-class converted deps with optional gating USE flag
     ///
     /// Index: 0=DEPEND, 1=RDEPEND, 2=BDEPEND, 3=PDEPEND, 4=IDEPEND
@@ -111,20 +105,25 @@ impl VersionData {
         &self.by_class[4]
     }
 
+    /// Every class's deps without the gating flag, as PubGrub sees them
+    pub(crate) fn constraints(
+        &self,
+    ) -> impl Iterator<Item = (&PortagePackage, &PortageVersionSet)> {
+        self.by_class.iter().flatten().map(|(p, vs, _)| (p, vs))
+    }
+
+    pub(crate) fn dependencies(&self) -> Dependencies<PortagePackage, PortageVersionSet, String> {
+        Dependencies::Available(
+            self.constraints()
+                .map(|(p, vs)| (p.clone(), vs.clone()))
+                .collect(),
+        )
+    }
+
     /// Build a deps-only version (no blockers/use-deps/etc.), used for synthetic
     /// solver nodes: the root target set and OR-group / USE-decision branches
-    ///
-    /// `merged` is collected from a flattened view of `by_class` (flag stripped).
     fn from_by_class(by_class: Vec<Vec<convert::Req>>) -> Self {
-        let merged = Dependencies::Available(
-            by_class
-                .iter()
-                .flatten()
-                .map(|(p, vs, _)| (p.clone(), vs.clone()))
-                .collect(),
-        );
         Self {
-            merged,
             by_class,
             blockers: Vec::new(),
             use_deps: Vec::new(),
@@ -694,44 +693,25 @@ impl PortageDependencyProvider {
         // `NoVersions` for any missing package and immediately declare the
         // problem unsolvable.
         let known: HashSet<PortagePackage> = packages.keys().cloned().collect();
-        let missing_merged = packages.values().any(|data| {
-            data.versions.values().any(|vd| {
-                matches!(
-                    &vd.merged,
-                    Dependencies::Available(constraints)
-                        if constraints.iter().any(|(pkg, _)| !known.contains(pkg))
-                )
-            })
+        let needs_filtering = packages.values().any(|data| {
+            data.versions
+                .values()
+                .any(|vd| vd.constraints().any(|(pkg, _)| !known.contains(pkg)))
         });
-        let needs_filtering = missing_merged
-            || packages.values().any(|data| {
-                data.versions.values().any(|vd| {
-                    vd.by_class
-                        .iter()
-                        .flatten()
-                        .any(|(pkg, _, _)| !known.contains(pkg))
-                })
-            });
 
         // Build alternatives before filtering so a missing branch still sees its
         // siblings. Complete repositories do not need this materialization.
         let mut or_alternatives: HashMap<PortagePackage, Vec<PortagePackage>> = HashMap::default();
-        if missing_merged {
-            for (pkg, data) in packages.iter_mut() {
+        if needs_filtering {
+            for (pkg, data) in packages.iter() {
                 if !matches!(pkg, PortagePackage::Choice { .. }) {
                     continue;
                 }
-                let mut branch_deps: Vec<PortagePackage> = Vec::new();
-                for vd in data.versions.values_mut() {
-                    if let Dependencies::Available(constraints) = &mut vd.merged {
-                        let taken = std::mem::take(constraints);
-                        let items: Vec<_> = taken.into_iter().collect();
-                        for (dep, _) in &items {
-                            branch_deps.push(dep.clone());
-                        }
-                        *constraints = items.into_iter().collect();
-                    }
-                }
+                let branch_deps: Vec<PortagePackage> = data
+                    .versions
+                    .values()
+                    .flat_map(|vd| vd.constraints().map(|(dep, _)| dep.clone()))
+                    .collect();
                 for i in 0..branch_deps.len() {
                     let others: Vec<_> = branch_deps
                         .iter()
@@ -752,31 +732,22 @@ impl PortageDependencyProvider {
         if needs_filtering {
             for (parent, data) in packages.iter_mut() {
                 for (parent_ver, vd) in data.versions.iter_mut() {
-                    if let Dependencies::Available(constraints) = &mut vd.merged
-                        && constraints.iter().any(|(pkg, _)| !known.contains(pkg))
-                    {
-                        let taken = std::mem::take(constraints);
-                        let (kept, dropped): (Vec<_>, Vec<_>) =
-                            taken.into_iter().partition(|(pkg, _)| known.contains(pkg));
-                        dropped_parents
-                            .extend(dropped.iter().map(|_| (parent.clone(), parent_ver.clone())));
-                        dropped_deps.extend(dropped.into_iter().map(|(pkg, vs)| {
+                    for class in &mut vd.by_class {
+                        for (pkg, vs, _) in class.extract_if(.., |(pkg, _, _)| !known.contains(pkg))
+                        {
                             let alternatives = or_alternatives
                                 .get(&pkg)
                                 .map(|alts| {
                                     alts.iter().filter(|a| known.contains(a)).cloned().collect()
                                 })
                                 .unwrap_or_default();
-                            DroppedDep {
+                            dropped_parents.push((parent.clone(), parent_ver.clone()));
+                            dropped_deps.push(DroppedDep {
                                 package: pkg,
                                 version_set: vs,
                                 alternatives,
-                            }
-                        }));
-                        *constraints = kept.into_iter().collect();
-                    }
-                    for class in &mut vd.by_class {
-                        class.retain(|(pkg, _, _)| known.contains(pkg));
+                            });
+                        }
                     }
                 }
             }
@@ -1135,11 +1106,11 @@ impl PortageDependencyProvider {
     ) -> Option<Vec<(PortagePackage, PortageVersionSet)>> {
         let data = self.package_data(pkg)?;
         let vd = data.versions.get(ver)?;
-        if let Dependencies::Available(reqs) = &vd.merged {
-            Some(reqs.iter().cloned().collect::<Vec<_>>())
-        } else {
-            None
-        }
+        Some(
+            vd.constraints()
+                .map(|(p, vs)| (p.clone(), vs.clone()))
+                .collect(),
+        )
     }
 
     /// Resolve a set of target packages using PubGrub
@@ -1184,7 +1155,6 @@ impl PortageDependencyProvider {
         targets.extend(repairs);
         self.root_targets = targets.iter().cloned().collect();
 
-        // Root targets have no gating flag; merged is derived from by_class.
         let targets_with_flag: Vec<(
             PortagePackage,
             PortageVersionSet,
@@ -1325,10 +1295,7 @@ impl PortageDependencyProvider {
     /// Returns true if the deps of `vd` transitively reach any installed CPN,
     /// descending up to `depth` levels through `__internal__/*` virtual packages
     pub(crate) fn deps_reach_installed(&self, vd: &VersionData, depth: u8) -> bool {
-        let Dependencies::Available(ref constraints) = vd.merged else {
-            return false;
-        };
-        for (dep_pkg, _) in constraints.iter() {
+        for (dep_pkg, _) in vd.constraints() {
             if dep_pkg.is_virtual() {
                 if depth > 0
                     && let Some(dep_data) = self.packages.get(dep_pkg)
@@ -1361,10 +1328,7 @@ impl PortageDependencyProvider {
     /// `depth` bounds recursion (see [`Self::branch_best_installed`]) so an
     /// unexpected deep/cyclic shape degrades to "no preference".
     fn branch_installed_ver(&self, vd: &VersionData, depth: u8) -> Option<Version> {
-        let Dependencies::Available(ref cs) = vd.merged else {
-            return None;
-        };
-        cs.iter()
+        vd.constraints()
             .filter_map(|(p, _)| {
                 if matches!(
                     p,
@@ -1465,14 +1429,6 @@ fn register_virtual_choices(
             match entry.versions.get_mut(&ver) {
                 Some(existing) => {
                     existing.by_class[0].extend(deps);
-                    existing.merged = Dependencies::Available(
-                        existing
-                            .by_class
-                            .iter()
-                            .flatten()
-                            .map(|(p, vs, _)| (p.clone(), vs.clone()))
-                            .collect(),
-                    );
                 }
                 None => {
                     let vd = VersionData::from_by_class(vec![deps, vec![], vec![], vec![], vec![]]);
@@ -1527,12 +1483,13 @@ fn propagate_needs_unmask(packages: &mut HashMap<PortagePackage, PackageData>) {
             continue;
         }
         for (ver, vd) in data.versions.iter() {
-            if let Dependencies::Available(cs) = &vd.merged {
-                let targets: Vec<_> = cs.iter().map(|(p, vs)| (p.clone(), vs.clone())).collect();
-                // The allow-none branch (no deps) always stays untagged.
-                if !targets.is_empty() {
-                    branches.push((pkg.clone(), ver.clone(), targets));
-                }
+            let targets: Vec<_> = vd
+                .constraints()
+                .map(|(p, vs)| (p.clone(), vs.clone()))
+                .collect();
+            // The allow-none branch (no deps) always stays untagged.
+            if !targets.is_empty() {
+                branches.push((pkg.clone(), ver.clone(), targets));
             }
         }
     }

@@ -296,10 +296,7 @@ impl PortageDependencyProvider {
                 continue;
             }
             let blocked_by = data.versions.get(newest).and_then(|vd| {
-                let pubgrub::Dependencies::Available(ref cs) = vd.merged else {
-                    return None;
-                };
-                cs.iter().find_map(|(dep_pkg, dep_vs)| {
+                vd.constraints().find_map(|(dep_pkg, dep_vs)| {
                     let sol_ver = solution.get(dep_pkg)?;
                     (!dep_vs.contains(sol_ver)).then(|| (dep_pkg.clone(), sol_ver.clone()))
                 })
