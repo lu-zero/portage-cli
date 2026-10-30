@@ -742,6 +742,21 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_config_root_overrides_the_sysroot_config_under_target() {
+        let cli = emerge([
+            "--config-root",
+            "/srv/cfg",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let r = cli.roots();
+        assert_eq!(r.config().unwrap().as_str(), "/srv/cfg");
+        assert_eq!(r.base().unwrap().as_str(), "/usr/riscv64-unknown-linux-gnu");
+    }
+
+    #[test]
     fn target_takes_a_spec_file_and_reads_its_tuple() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("board.toml");

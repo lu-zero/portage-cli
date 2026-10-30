@@ -296,7 +296,7 @@ impl Topology {
     ///
     /// `--target <tuple>` layers on top of the base model: it targets the crossdev
     /// sysroot `<EROOT>/usr/<tuple>` as both config-root and root (crossdev's
-    /// `PORTAGE_CONFIGROOT == ROOT == SYSROOT`). The `<EROOT>` it sits under still
+    /// `PORTAGE_CONFIGROOT == ROOT == SYSROOT`), unless `--config-root` names another. The `<EROOT>` it sits under still
     /// comes from `--local`/`--prefix`/`--root`, so `em --local --target <t>`
     /// targets `~/.gentoo/usr/<t>`.
     ///
@@ -336,6 +336,11 @@ impl Topology {
         let merge_target = resolved_root(root)
             .map(Utf8PathBuf::from)
             .unwrap_or_else(|| sysroot.clone());
+        // An explicit `--config-root` still wins, as crossdev's wrapper keeps a set `PORTAGE_CONFIGROOT`.
+        let config = outer
+            .config_root_explicit()
+            .map(|p| p.to_owned())
+            .unwrap_or_else(|| sysroot.clone());
         // `base` stays the sysroot unconditionally — never `merge_target`.
         // `build_sysroot()` returns `None` when `base == target`, which
         // would drop the toolchain from the compiler's context (confirmed
@@ -343,7 +348,7 @@ impl Topology {
         // RDEPEND is satisfied in ROOT alone, so a board root never counts the
         // sysroot's packages as its own; a no-op when the target is the sysroot.
         Roots::default()
-            .with_config(Some(sysroot.clone()))
+            .with_config(Some(config))
             .with_base(Some(sysroot))
             .with_target(Some(merge_target))
             .with_target_only_installed_view()

@@ -61,6 +61,7 @@ knob overrides — no more, no less:
 | `--prefix P` | P | **`/`** *(host seeds plan)* | `/` | P/etc/portage | P |
 | `--local` | ~/.gentoo | **~/.gentoo** *(self-contained)* | ~/.gentoo/etc/portage | ~/.gentoo | ~/.gentoo |
 | `--target T` (on EROOT) | EROOT/usr/T | EROOT/usr/T | EROOT/usr/T | — | — |
+| `--target T --config-root C` | EROOT/usr/T | EROOT/usr/T | C | — | — |
 
 - **`--root` vs `--prefix` differ in two cells: base and EPREFIX.** `--root`
   moves base to R (empty R → full closure → stage build) and leaves EPREFIX
@@ -86,7 +87,8 @@ knob overrides — no more, no less:
   vs host-tool workarounds): see [`em-prefix-experiment.md`](./em-prefix-experiment.md).
 - **`--target` points config at the sysroot** because crossdev physically writes
   the target profile + `make.conf` there; the host's `etc/portage` remains
-  BROOT's config.
+  BROOT's config. An explicit `--config-root` still wins, as a set
+  `PORTAGE_CONFIGROOT` does with crossdev's `<tuple>-emerge` wrapper.
 
 The dep-class → role map is fixed by PMS table 8.2:
 

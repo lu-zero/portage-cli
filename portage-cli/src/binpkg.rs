@@ -743,7 +743,8 @@ mod tests {
     async fn desired_build_env_host_vs_target() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_str().unwrap();
-        std::fs::create_dir_all(dir.path().join("etc/portage")).unwrap();
+        // A `make.profile` makes the `--local` prefix its own config root.
+        std::fs::create_dir_all(dir.path().join("etc/portage/make.profile")).unwrap();
         std::fs::write(
             dir.path().join("etc/portage/make.conf"),
             "CFLAGS=\"-O2 -march=armv8-a\"\n",
@@ -766,8 +767,6 @@ mod tests {
             "em",
             "emerge",
             "--local",
-            root,
-            "--config-root",
             root,
             "--target",
             "riscv64-unknown-linux-gnu",
