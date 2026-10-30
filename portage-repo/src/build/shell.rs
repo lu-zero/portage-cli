@@ -2607,6 +2607,9 @@ impl EbuildShell {
         for entry in &entries {
             entry.collect_filenames(&|flag| use_flags.contains(flag), &mut files);
         }
+        // Mirrors of one distfile share its name, and `A` names each distfile once.
+        let mut seen = HashSet::new();
+        files.retain(|f| seen.insert(f.clone()));
         self.set_var("A", &files.join(" "));
     }
 

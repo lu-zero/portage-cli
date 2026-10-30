@@ -2537,3 +2537,29 @@ async fn a_restored_phase_keeps_s_and_fills_it_when_unset() {
         Some(expected.to_str().unwrap())
     );
 }
+
+#[tokio::test]
+async fn a_names_a_distfile_offered_by_several_uris_once() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().to_path_buf();
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(
+        repo_path.join("metadata").join("layout.conf"),
+        "masters = \ncache-formats = md5-dict\n",
+    )
+    .unwrap();
+    std::fs::write(repo_path.join("profiles").join("repo_name"), "test-repo\n").unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    shell.set_var(
+        "SRC_URI",
+        "https://a/z-1.tar.xz https://b/z-1.tar.xz https://a/p.patch https://b/z-1.tar.xz",
+    );
+    shell.set_a_from_src_uri();
+    assert_eq!(shell.get_var("A").as_deref(), Some("z-1.tar.xz p.patch"));
+}
