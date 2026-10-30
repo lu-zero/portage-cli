@@ -42,7 +42,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-portage-atom = "0.13"
+portage-atom = "0.12"
 ```
 
 ## Usage

@@ -1,20 +1,5 @@
 # Changelog
 
-## 0.13.0
-
-### Breaking changes
-
-- `Version`'s fields are gone: it is a 24-byte order-preserving byte key that displays as written.
-  Read it through `components`, `component`, `component_count`, `letter`, `suffixes` and `revision`;
-  `base` drops the revision. Build or edit one as `VersionParts` (`to_parts`, `From<VersionParts>`).
-- The `builder` feature builds `VersionParts` (`VersionPartsBuilder`) instead of `Version`.
-- `Version`'s `Debug` prints `Version(1.2.3)`.
-- `Revision` and `Suffix` are `Copy`.
-
-### Features
-
-- `Version::approximate_bounds` for the `~` operator's range.
-
 ## 0.12.0
 
 ### Breaking changes
@@ -24,18 +9,28 @@
 - `SlotDep` is now `Copy`.
 - `matches_cpv` takes a typed `Slot` and honours a sub-slot constraint.
 - A version component wider than `u64` is rejected in every atom form.
+- `Version`'s fields are gone: it is a 24-byte order-preserving byte key that displays as written.
+  Read it through `components`, `component`, `component_count`, `letter`, `suffixes` and `revision`;
+  `base` drops the revision. Build or edit one as `VersionParts` (`to_parts`, `From<VersionParts>`).
+- The `builder` feature builds `VersionParts` (`VersionPartsBuilder`) instead of `Version`.
+- `Version`'s `Debug` prints `Version(1.2.3)`.
+- `Revision` and `Suffix` are `Copy`.
 
 ### Features
 
 - `Dep` serialises as its atom string.
 - `Version::is_live` for the `*9999` live convention.
 - `Lazy<T>`, the lazily parsed field shared by the dependency and `SRC_URI` lists.
+- `Version::approximate_bounds` for the `~` operator's range.
+- `Version::glob_bounds_exact` tells whether the `=V*` bounds hold only glob matches.
 
 ### Bug fixes
 
 - A dependency's version keeps its leading zeros when written back (`24.09`, not `24.9`).
 - Empty `||` and `^^` groups do not match on EAPI 7 and later.
 - `Version`'s `Hash` agrees with its `Eq`; a bare slot operator parses as one atom however spelled.
+- `=V*` matches components in their written positions: a pattern letter, suffix or non-zero revision ends
+  its numeric part. `glob_bounds` keeps written zeros (`=26.04*` ends at `26.05_alpha`).
 
 ## 0.11.1
 

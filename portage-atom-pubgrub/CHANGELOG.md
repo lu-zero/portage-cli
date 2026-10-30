@@ -5,6 +5,10 @@
 ### Breaking changes
 
 - Depends on `portage-atom` 0.12 and `portage-solver` 0.4.
+- `PortageVersionSet::ranges` is removed.
+- `PackageRepository::kept_installed_use` and `WithKeptInstalledUse` are replaced by
+  `PackageRepository::installed_for`, `InstalledVersion` and `WithInstalled`, which also carry the
+  recorded metadata of an installed version the repository no longer offers.
 - `PackageVersions` gains `empty_any_of_matches`, `needs_unmask` and `live`.
 - `package.provided` is modelled as `InstalledPolicy::Provided`; `set_provided` is removed.
 
@@ -14,6 +18,11 @@
 - Root targets held back below their newest version are surfaced.
 - `set_kept_build_deps`: an installed package kept at its version lists its build dependencies, as emerge
   does with `--with-bdeps` and `--deep`.
+- `PortageDependencyProvider::resolve_with_repairs` solves with installed packages kept satisfied; each
+  moves to the oldest offered version at or above its installed one. `offers` tells whether the solve used the
+  repository's ebuild for a version.
+- `=V*` ranges that are not exact cut the known versions that are no glob match
+  (`PortageVersionSet::from_operator_among`).
 
 ### Bug fixes
 
