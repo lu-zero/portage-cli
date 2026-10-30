@@ -583,8 +583,8 @@ mod tests {
             DepEntry::Atom(dep) => {
                 assert!(dep.version.is_some());
                 let v = dep.version.as_ref().unwrap();
-                assert_eq!(v.numbers[0], 1);
-                assert_eq!(v.numbers[1], 75);
+                assert_eq!(v.component(0).unwrap(), 1);
+                assert_eq!(v.component(1).unwrap(), 75);
             }
             _ => panic!("expected Atom"),
         }

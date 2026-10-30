@@ -62,7 +62,7 @@ pub use pf::Pf;
 pub use slot::{Slot, SlotDep, SlotOperator};
 pub use use_dep::{UseDefault, UseDep, UseDepKind};
 pub use use_flag_lookup::UseFlagLookup;
-pub use version::{Operator, Revision, Suffix, SuffixKind, Version};
+pub use version::{Operator, Revision, Suffix, SuffixKind, Version, VersionParts};
 pub use version_key::VersionKey;
 
 // Re-export bon-derived builders when the feature is enabled
@@ -77,4 +77,4 @@ pub use slot::SlotBuilder;
 #[cfg(feature = "builder")]
 pub use use_dep::UseDepBuilder;
 #[cfg(feature = "builder")]
-pub use version::{SuffixBuilder, VersionBuilder};
+pub use version::{SuffixBuilder, VersionPartsBuilder};

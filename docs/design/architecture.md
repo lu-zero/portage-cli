@@ -103,8 +103,8 @@ PMS atom parser — the vocabulary every other crate speaks.
 - `struct Dep` — Full dependency atom with blocker, operator, version, slot, USE, repo
 - `enum Blocker` — `Weak` (!) or `Strong` (!!)
 - `enum DepEntry` — Dependency tree node: `Atom`, `UseConditional`, `AllOf`, `AnyOf`, `ExactlyOneOf`, `AtMostOneOf`
-- `struct Version` — PMS version, fields read through accessors (`components()`, `letter()`, `suffixes()`, `revision()`): `glob_matches()`, `glob_bounds()`, `approximate_bounds()`, `matches_operator()`, `base()`
-- `struct VersionKey` — 24-byte byte key that orders, hashes and tests equal like its `Version`; `to_version()` gives back the written version
+- `struct Version` — PMS version stored as a 24-byte order-preserving byte key (byte order is version order) plus its spelling when needed; read through accessors (`components()`, `letter()`, `suffixes()`, `revision()`): `glob_matches()`, `glob_bounds()`, `approximate_bounds()`, `matches_operator()`, `base()`
+- `struct VersionParts` — the editable fields of a `Version` (`to_parts()`, `From<VersionParts>`)
 - `struct Revision(u64)` — Package revision (`-rN`)
 - `enum Operator` — `<`, `<=`, `=`, `~`, `>=`, `>`
 - `struct Suffix` / `enum SuffixKind` — Version suffix segment (`Alpha`, `Beta`, `Pre`, `Rc`, `Post`)

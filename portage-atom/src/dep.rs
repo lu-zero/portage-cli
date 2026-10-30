@@ -396,8 +396,8 @@ mod tests {
         let dep = Dep::parse(">=dev-lang/rust-1.75.0").unwrap();
         assert!(dep.version.is_some());
         let version = dep.version.as_ref().unwrap();
-        assert_eq!(version.numbers[0], 1);
-        assert_eq!(version.numbers[1], 75);
+        assert_eq!(version.component(0).unwrap(), 1);
+        assert_eq!(version.component(1).unwrap(), 75);
         assert_eq!(dep.to_string(), ">=dev-lang/rust-1.75.0");
     }
 
@@ -475,8 +475,8 @@ mod tests {
         assert_eq!(dep.op, Some(Operator::GreaterOrEqual));
         assert!(dep.version.is_some());
         let version = dep.version.as_ref().unwrap();
-        assert_eq!(version.numbers[0], 1);
-        assert_eq!(version.suffixes[0].kind, SuffixKind::Rc);
+        assert_eq!(version.component(0).unwrap(), 1);
+        assert_eq!(version.suffixes().next().unwrap().kind, SuffixKind::Rc);
 
         assert!(dep.slot_dep.is_some());
         let slot_dep = dep.slot_dep.as_ref().unwrap();
@@ -577,7 +577,12 @@ mod tests {
         let dep = Dep::parse("~dev-lang/rust-1.75.0").unwrap();
         assert_eq!(dep.op, Some(Operator::Approximate));
         assert_eq!(
-            dep.version.as_ref().unwrap().numbers.as_slice(),
+            dep.version
+                .as_ref()
+                .unwrap()
+                .components()
+                .collect::<Vec<_>>()
+                .as_slice(),
             vec![1, 75, 0].as_slice()
         );
     }

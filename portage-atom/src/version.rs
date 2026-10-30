@@ -4,7 +4,6 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use smallvec::SmallVec;
-use smol_str::SmolStr;
 use winnow::Parser;
 use winnow::ascii::digit1;
 use winnow::combinator::{alt, cut_err, fail, opt, preceded, repeat, separated};
@@ -13,6 +12,10 @@ use winnow::prelude::*;
 use winnow::token::one_of;
 
 use crate::error::{Error, Result};
+
+mod encoding;
+
+use encoding::{Layout, Repr, render};
 
 /// Package revision (`-r1`, `-r2`, etc.)
 ///
@@ -237,6 +240,10 @@ pub type Numbers = SmallVec<[u64; 4]>;
 /// See [PMS 3.2](https://projects.gentoo.org/pms/9/pms.html#version-specifications)
 /// for the full version syntax.
 ///
+/// A 24-byte value: a byte string whose byte order is the version order, so comparing,
+/// hashing and cloning are cheap. Read it through the accessors; build or edit one as
+/// [`VersionParts`]. It displays as written: `003.03` and `3.03` are equal yet print apart.
+///
 /// # Differences from semver
 ///
 /// - **Variable component count** — `1`, `1.2`, `1.2.3.4` are all valid
@@ -249,139 +256,44 @@ pub type Numbers = SmallVec<[u64; 4]>;
 /// - **Revision** — a dedicated `-rN` component for distribution-level changes.
 /// - **Ordering** — `_p` sorts *above* the base version; semver pre-releases
 ///   always sort below.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+pub struct Version(Repr);
+
+/// The fields of a [`Version`], for building or editing one
+///
+/// See [PMS 3.2](https://projects.gentoo.org/pms/9/pms.html#version-specifications).
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "builder", derive(bon::Builder))]
-pub struct Version {
+pub struct VersionParts {
     /// Dot-separated numeric components (e.g. `[1, 2, 3]` for `1.2.3`)
     ///
-    /// Integer form used by callers that need major/minor extraction or
-    /// range algebra. Leading zeros are preserved separately in
-    /// [`Self::digits`] for PMS Algorithm 3.3.
-    ///
-    /// Each component must fit in a `u64`; a longer one is a parse error
-    /// rather than a truncation, since a silently shortened component would
-    /// mis-compare against a package that spells it in full.
+    /// Each must fit in a `u64`; a longer one is a parse error rather than a truncation.
     #[cfg_attr(feature = "builder", builder(start_fn))]
-    pub(crate) numbers: Numbers,
-    /// Written decimal digit strings for each component (same length as [`Self::numbers`])
+    pub numbers: Numbers,
+    /// Zeros written before each component's value (`[2, 1]` for `003.03`); empty when none are
     ///
-    /// Kept only when some component is written with a leading zero, which Algorithm 3.3 can
-    /// compare differently (`1.01` is not `1.1`); empty otherwise, where each `u64` says it all.
-    #[cfg_attr(feature = "builder", builder(skip))]
-    pub(crate) digits: SmallVec<[SmolStr; 4]>,
+    /// Algorithm 3.3 compares a later component written with one as a string (`1.01` is not `1.1`).
+    #[cfg_attr(feature = "builder", builder(default))]
+    pub leading_zeros: Vec<u32>,
     /// Optional single lowercase letter after the numeric components
-    pub(crate) letter: Option<char>,
+    pub letter: Option<char>,
     /// Zero or more version suffixes (`_alpha`, `_beta`, `_pre`, `_rc`, `_p`)
     #[cfg_attr(feature = "builder", builder(default))]
-    pub(crate) suffixes: Vec<Suffix>,
+    pub suffixes: Vec<Suffix>,
     /// Package revision; defaults to `0` (omitted from display)
     #[cfg_attr(feature = "builder", builder(default))]
-    pub(crate) revision: Revision,
-    /// The version string exactly as parsed, preserving leading zeros
-    /// (e.g. `"26.04.0"` instead of the reconstructed `"26.4.0"`)
-    ///
-    /// `SmolStr` rather than `String`: cheap to clone (inline for short
-    /// strings, `Arc<str>` refcount bump otherwise) without touching the
-    /// process-global string interner, which is meant for a small,
-    /// heavily-reused vocabulary — version strings are the opposite (tens
-    /// of thousands of one-shot values per scan the interner never frees).
-    ///
-    /// `None` when constructed programmatically via [`Version::new`] or the builder.
-    ///
-    /// [`Display`](fmt::Display) echoes this verbatim, which is deliberate —
-    /// an ebuild's version should print as it spells it, and the Gentoo tree
-    /// has 13 versions whose *first* component carries leading zeros
-    /// (`003.03`, `019`, `073`). The consequence is that rendering is **not** a
-    /// faithful inverse of `Eq`: `01.1 == 1.1` (Algorithm 3.2 compares the
-    /// first component numerically) yet they render as `01.1` and `1.1`. Key a
-    /// map or dedupe a set on the fields, never on the rendered string.
-    #[cfg_attr(feature = "builder", builder(skip))]
-    pub(crate) raw: Option<SmolStr>,
+    pub revision: Revision,
 }
 
-/// Digit string for component `i`, preferring the original parse text
-fn component_digits<'a>(v: &'a Version, i: usize) -> Option<std::borrow::Cow<'a, str>> {
-    if let Some(d) = v.digits.get(i) {
-        return Some(std::borrow::Cow::Borrowed(d.as_str()));
-    }
-    v.numbers
-        .get(i)
-        .map(|n| std::borrow::Cow::Owned(n.to_string()))
-}
-
-/// PMS Algorithm 3.2 / 3.3 integer compare on digit strings (no fixed-width limit)
-fn cmp_int_digits(a: &str, b: &str) -> Ordering {
-    let a = a.trim_start_matches('0');
-    let b = b.trim_start_matches('0');
-    let a = if a.is_empty() { "0" } else { a };
-    let b = if b.is_empty() { "0" } else { b };
-    match a.len().cmp(&b.len()) {
-        Ordering::Equal => a.cmp(b),
-        o => o,
-    }
-}
-
-/// Compare one numeric component pair
-///
-/// * First component (index 0): always Algorithm 3.2 integer compare.
-/// * Later components: Algorithm 3.3 — if either side has a leading `0`,
-///   strip trailing zeros and compare as strings; otherwise integer compare.
-/// * Missing component (one side exhausted): caller handles length rule.
-fn cmp_component(i: usize, a: &str, b: &str) -> Ordering {
-    if i == 0 {
-        return cmp_int_digits(a, b);
-    }
-    if a.starts_with('0') || b.starts_with('0') {
-        let a = a.trim_end_matches('0');
-        let b = b.trim_end_matches('0');
-        a.cmp(b)
-    } else {
-        cmp_int_digits(a, b)
-    }
-}
-
-/// Whether component `i` compares as a digit string: a later component written with a leading zero
-///
-/// Every other component compares as its integer, which [`cmp_component`] agrees with.
-fn compares_as_digits(v: &Version, i: usize) -> bool {
-    i > 0
-        && v.digits
-            .get(i)
-            .is_some_and(|d| d.len() > 1 && d.starts_with('0'))
-}
-
-/// [`cmp_component`] for component `i` of two versions, without touching digit strings when it can
-fn cmp_component_at(a: &Version, b: &Version, i: usize) -> Ordering {
-    if let (Some(x), Some(y)) = (a.numbers.get(i), b.numbers.get(i))
-        && !compares_as_digits(a, i)
-        && !compares_as_digits(b, i)
-    {
-        return x.cmp(y);
-    }
-    let a = component_digits(a, i).expect("component in range");
-    let b = component_digits(b, i).expect("component in range");
-    cmp_component(i, a.as_ref(), b.as_ref())
-}
-
-/// Hash component `i` consistently with [`cmp_component_at`] equality
-///
-/// An all-zero digit string equals the integer `0`, so it hashes as one.
-fn hash_component<H: Hasher>(v: &Version, i: usize, state: &mut H) {
-    if compares_as_digits(v, i) {
-        let trimmed = v.digits[i].trim_end_matches('0');
-        if !trimmed.is_empty() {
-            return trimmed.hash(state);
-        }
-    }
-    if let Some(n) = v.numbers.get(i) {
-        n.hash(state);
+impl From<VersionParts> for Version {
+    fn from(parts: VersionParts) -> Self {
+        Version(Repr::encode(&parts, None))
     }
 }
 
 impl PartialEq for Version {
     fn eq(&self, other: &Self) -> bool {
-        // Keep Eq consistent with Ord (PMS Algorithm 3.1 Equal).
-        self.cmp(other) == Ordering::Equal
+        self.0.order() == other.0.order()
     }
 }
 
@@ -389,17 +301,7 @@ impl Eq for Version {}
 
 impl Hash for Version {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Component count is part of identity: 1.0 != 1.0.0.
-        let n = self.numbers.len().max(self.digits.len());
-        n.hash(state);
-        for i in 0..n {
-            hash_component(self, i, state);
-        }
-        // `Ord` treats a missing letter as `'\0'`. Hash the same value so
-        // `None` and `Some('\0')` stay one key.
-        self.letter.unwrap_or('\0').hash(state);
-        self.suffixes.hash(state);
-        self.revision.hash(state);
+        self.0.order().hash(state);
     }
 }
 
@@ -418,44 +320,68 @@ impl Version {
             !numbers.is_empty(),
             "Version must have at least one numeric component per PMS 3.2"
         );
-        Version {
+        VersionParts {
             numbers: Numbers::from_slice(numbers),
-            digits: SmallVec::new(),
+            leading_zeros: Vec::new(),
             letter: None,
             suffixes: Vec::new(),
             revision: Revision::default(),
-            raw: None,
         }
+        .into()
+    }
+
+    fn layout(&self) -> Layout<'_> {
+        Layout::of(self.0.order())
+    }
+
+    /// The fields of this version, including the zeros written before its components
+    pub fn to_parts(&self) -> VersionParts {
+        if let Some(parts) = self.0.spelling().and_then(|s| parse_parts.parse(s).ok()) {
+            return parts;
+        }
+        self.layout().parts(self.0.order().len())
     }
 
     /// Number of dot-separated numeric components (`3` for `1.2.3`)
     pub fn component_count(&self) -> usize {
-        self.numbers.len()
+        self.layout().components.len()
     }
 
     /// Numeric component `i`, from the left (`component(1)` of `1.2.3` is `Some(2)`)
     pub fn component(&self, i: usize) -> Option<u64> {
-        self.numbers.get(i).copied()
+        self.components().nth(i)
     }
 
     /// The numeric components, from the left
     pub fn components(&self) -> impl Iterator<Item = u64> + '_ {
-        self.numbers.iter().copied()
+        let numbers: Numbers = match self.0.spelling() {
+            Some(_) => self.to_parts().numbers,
+            None => {
+                let layout = self.layout();
+                layout
+                    .components
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| Layout::component(s, i == 0).0)
+                    .collect()
+            }
+        };
+        numbers.into_iter()
     }
 
     /// The letter after the numeric components (`Some('a')` for `1.2a`)
     pub fn letter(&self) -> Option<char> {
-        self.letter
+        self.layout().tail(self.0.order().len()).0
     }
 
     /// The suffixes in order (`_alpha1`, then `_p2` for `1_alpha1_p2`)
     pub fn suffixes(&self) -> impl Iterator<Item = Suffix> + '_ {
-        self.suffixes.iter().copied()
+        self.to_parts().suffixes.into_iter()
     }
 
     /// The revision; `0` when none was written
     pub fn revision(&self) -> Revision {
-        self.revision
+        self.layout().tail(self.0.order().len()).2
     }
 
     /// Parse a version string (without a leading operator)
@@ -474,38 +400,31 @@ impl Version {
     /// the last one. A letter, suffix, or non-zero revision ends the numeric part,
     /// so `1.0.1-r1` is not a `1.0-r1*` match.
     pub fn glob_matches(&self, pattern: &Version) -> bool {
-        let n = pattern.numbers.len().max(pattern.digits.len());
-        let cand_n = self.numbers.len().max(self.digits.len());
-        let has_rev = pattern.revision.0 != 0;
-        let has_tail = pattern.letter.is_some() || !pattern.suffixes.is_empty() || has_rev;
+        let (cand, pat) = (self.layout(), pattern.layout());
+        let (letter, suffixes, revision, _) = pat.tail(pattern.0.order().len());
+        let has_rev = revision.0 != 0;
+        let has_tail = letter.is_some() || !suffixes.is_empty() || has_rev;
+        let n = pat.components.len();
+        let cand_n = cand.components.len();
         if cand_n < n || (has_tail && cand_n != n) {
             return false;
         }
-        for i in 0..n {
-            let Some(a) = component_digits(self, i) else {
-                return false;
-            };
-            let Some(b) = component_digits(pattern, i) else {
-                return false;
-            };
-            if cmp_component(i, a.as_ref(), b.as_ref()) != Ordering::Equal {
-                return false;
-            }
-        }
-        if has_tail && self.letter != pattern.letter {
+        if cand.components[..n] != pat.components[..] {
             return false;
         }
-        if pattern.suffixes.len() > self.suffixes.len()
-            || (has_rev && pattern.suffixes.len() != self.suffixes.len())
+        let (cand_letter, cand_suffixes, cand_revision, _) = cand.tail(self.0.order().len());
+        if has_tail && cand_letter != letter {
+            return false;
+        }
+        if suffixes.len() > cand_suffixes.len()
+            || (has_rev && suffixes.len() != cand_suffixes.len())
         {
             return false;
         }
-        for (cand, pat) in self.suffixes.iter().zip(&pattern.suffixes) {
-            if cand != pat {
-                return false;
-            }
+        if cand_suffixes.iter().zip(&suffixes).any(|(c, p)| c != p) {
+            return false;
         }
-        pattern.revision.0 == 0 || self.revision == pattern.revision
+        !has_rev || cand_revision == revision
     }
 
     /// Half-open bounds of `=V*`. A revision pattern is `[V, V-r(N+1))`. Otherwise
@@ -516,31 +435,29 @@ impl Version {
     /// `None` means that bump does not fit in `u64`. See [`Self::glob_bounds_exact`]
     /// for when the range holds versions that are no match.
     pub fn glob_bounds(&self) -> (Version, Option<Version>) {
-        if self.revision.0 != 0 {
-            let mut lower = self.clone();
-            lower.raw = None;
-            let upper = match self.revision.0.checked_add(1) {
+        let parts = self.to_parts();
+        if parts.revision.0 != 0 {
+            let upper = match parts.revision.0.checked_add(1) {
                 Some(next) => {
-                    let mut upper = lower.clone();
+                    let mut upper = parts.clone();
                     upper.revision = Revision(next);
-                    Some(upper)
+                    Some(upper.into())
                 }
-                None => bumped_numeric(self),
+                None => bumped_numeric(&parts),
             };
-            return (lower, upper);
+            return (parts.into(), upper);
         }
-        let mut lower = self.clone();
-        clear_endpoint(&mut lower);
+        let mut lower = parts.clone();
         lower.suffixes.push(alpha_suffix());
 
-        let upper = if !self.suffixes.is_empty() {
-            bumped_suffix(self).or_else(|| bumped_numeric(self))
-        } else if self.letter.is_some() {
-            Some(bumped_letter(self))
+        let upper = if !parts.suffixes.is_empty() {
+            bumped_suffix(&parts).or_else(|| bumped_numeric(&parts))
+        } else if parts.letter.is_some() {
+            Some(bumped_letter(&parts))
         } else {
-            bumped_numeric(self)
+            bumped_numeric(&parts)
         };
-        (lower, upper)
+        (lower.into(), upper)
     }
 
     /// Whether [`Self::glob_bounds`] holds only [`Self::glob_matches`] matches,
@@ -550,17 +467,19 @@ impl Version {
     /// or starts with one: `26.041` sorts inside `=26.04*`, and `04` has no least
     /// successor. Nor when a suffix or revision bump overflows.
     pub fn glob_bounds_exact(&self) -> bool {
-        if self.revision.0 != 0 {
-            return self.revision.0 != u64::MAX;
+        let layout = self.layout();
+        let (letter, suffixes, revision, _) = layout.tail(self.0.order().len());
+        if revision.0 != 0 {
+            return revision.0 != u64::MAX;
         }
-        if let Some(last) = self.suffixes.last() {
+        if let Some(last) = suffixes.last() {
             return last.version != Some(u64::MAX);
         }
-        if self.letter.is_some() {
+        if letter.is_some() {
             return true;
         }
-        let n = self.numbers.len().max(self.digits.len());
-        n < 2 || !component_digits(self, n - 1).is_some_and(|d| d.starts_with('0'))
+        let n = layout.components.len();
+        n < 2 || layout.components[n - 1].first() != Some(&encoding::ZERO_LED)
     }
 
     /// Bounds of `~V`: `[V, V_p)` with any revision dropped, per
@@ -569,20 +488,21 @@ impl Version {
     /// `_p` sorts above every revision of `V` and below any other suffix change, so the range
     /// holds exactly `V` and its revisions (`~1.2.3_alpha1` ends at `1.2.3_alpha1_p`).
     pub fn approximate_bounds(&self) -> (Version, Version) {
-        let lower = self.base();
-        let mut upper = lower.clone();
-        upper.suffixes.push(Suffix {
+        let mut parts = self.to_parts();
+        parts.revision = Revision::default();
+        let lower = Version::from(parts.clone());
+        parts.suffixes.push(Suffix {
             kind: SuffixKind::P,
             version: None,
         });
-        (lower, upper)
+        (lower, parts.into())
     }
 
     /// Whether this is a live (VCS/snapshot-tracking) version per Gentoo's
     /// `*9999` naming convention — not a PMS concept, but every repo treats
     /// the trailing `.9999` component as "track upstream HEAD"
     pub fn is_live(&self) -> bool {
-        self.numbers.last() == Some(&9999)
+        self.components().last() == Some(9999)
     }
 
     /// Return the version without its revision, for `~` (approximate)
@@ -590,14 +510,9 @@ impl Version {
     ///
     /// [PMS 8.3.1]: https://projects.gentoo.org/pms/9/pms.html#operators
     pub fn base(&self) -> Self {
-        Version {
-            numbers: self.numbers.clone(),
-            digits: self.digits.clone(),
-            letter: self.letter,
-            suffixes: self.suffixes.clone(),
-            revision: Revision::default(),
-            raw: None,
-        }
+        let mut parts = self.to_parts();
+        parts.revision = Revision::default();
+        parts.into()
     }
 
     /// Whether this version satisfies a PMS dependency operator
@@ -613,61 +528,17 @@ impl Version {
             Operator::Equal => self == constraint,
             Operator::GreaterOrEqual => self >= constraint,
             Operator::Greater => self > constraint,
-            Operator::Approximate => self.cmp_without_revision(constraint) == Ordering::Equal,
+            Operator::Approximate => {
+                self.order_without_revision() == constraint.order_without_revision()
+            }
         }
     }
 
-    fn cmp_without_revision(&self, other: &Self) -> Ordering {
-        // Algorithms 3.2–3.3: pairwise component compare; when one side runs
-        // out of components first, the longer version is greater (no zero-pad).
-        let a_len = self.numbers.len().max(self.digits.len());
-        let b_len = other.numbers.len().max(other.digits.len());
-        let shared = a_len.min(b_len);
-        for i in 0..shared {
-            match cmp_component_at(self, other, i) {
-                Ordering::Equal => continue,
-                o => return o,
-            }
-        }
-        match a_len.cmp(&b_len) {
-            Ordering::Equal => {}
-            o => return o,
-        }
-
-        // Algorithm 3.4: letter (absent sorts before any letter)
-        let a_letter = self.letter.unwrap_or('\0');
-        let b_letter = other.letter.unwrap_or('\0');
-        match a_letter.cmp(&b_letter) {
-            Ordering::Equal => {}
-            o => return o,
-        }
-
-        // Algorithms 3.5–3.6: suffixes (_p above base; others below)
-        let max_suffixes = self.suffixes.len().max(other.suffixes.len());
-        for i in 0..max_suffixes {
-            match (self.suffixes.get(i), other.suffixes.get(i)) {
-                (Some(a), Some(b)) => match a.cmp(b) {
-                    Ordering::Equal => continue,
-                    o => return o,
-                },
-                (Some(s), None) => {
-                    return if s.kind == SuffixKind::P {
-                        Ordering::Greater
-                    } else {
-                        Ordering::Less
-                    };
-                }
-                (None, Some(s)) => {
-                    return if s.kind == SuffixKind::P {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    };
-                }
-                (None, None) => break,
-            }
-        }
-        Ordering::Equal
+    // Algorithm 3.7 compares the revision last, so it is the key's last field.
+    fn order_without_revision(&self) -> &[u8] {
+        let order = self.0.order();
+        let before_revision = self.layout().tail(order.len()).3;
+        &order[..before_revision]
     }
 
     /// Version with suffixes and revision removed.
@@ -676,41 +547,17 @@ impl Version {
     /// [`Self::glob_matches`], including a pattern suffix prefix and a non-zero
     /// revision.
     pub fn without_suffix(&self) -> Self {
-        Version {
-            numbers: self.numbers.clone(),
-            digits: self.digits.clone(),
-            letter: self.letter,
-            suffixes: Vec::new(),
-            revision: Revision::default(),
-            raw: None,
-        }
+        let mut parts = self.to_parts();
+        parts.suffixes.clear();
+        parts.revision = Revision::default();
+        parts.into()
     }
 
-    /// Format the version portion (numbers, letter, suffixes, revision,
-    /// glob) without the operator
-    ///
-    /// Numeric components keep their written digits: a leading zero can change the comparison.
+    /// Format the version as written
     pub(crate) fn fmt_version(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(ref raw) = self.raw {
-            write!(f, "{raw}")
-        } else {
-            // `digits` is empty on a builder value; fall back to each `u64`.
-            let n = self.numbers.len().max(self.digits.len());
-            for i in 0..n {
-                if i > 0 {
-                    write!(f, ".")?;
-                }
-                let digits = component_digits(self, i).expect("component in range");
-                write!(f, "{digits}")?;
-            }
-            if let Some(letter) = self.letter {
-                write!(f, "{letter}")?;
-            }
-            for suffix in &self.suffixes {
-                write!(f, "{suffix}")?;
-            }
-            write!(f, "{}", self.revision)?;
-            Ok(())
+        match self.0.spelling() {
+            Some(s) => f.write_str(s),
+            None => f.write_str(&render(&self.layout().parts(self.0.order().len()))),
         }
     }
 }
@@ -721,6 +568,12 @@ impl fmt::Display for Version {
     }
 }
 
+impl fmt::Debug for Version {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Version({self})")
+    }
+}
+
 fn alpha_suffix() -> Suffix {
     Suffix {
         kind: SuffixKind::Alpha,
@@ -728,88 +581,68 @@ fn alpha_suffix() -> Suffix {
     }
 }
 
-fn clear_endpoint(v: &mut Version) {
-    v.raw = None;
-    v.revision = Revision::default();
-}
-
-fn bumped_numeric(v: &Version) -> Option<Version> {
+fn bumped_numeric(v: &VersionParts) -> Option<Version> {
     let mut upper = v.clone();
-    clear_endpoint(&mut upper);
+    upper.revision = Revision::default();
     upper.letter = None;
     upper.suffixes.clear();
     if !bump_last_numeric(&mut upper) {
         return None;
     }
     upper.suffixes.push(alpha_suffix());
-    Some(upper)
+    Some(upper.into())
 }
 
-fn bumped_suffix(v: &Version) -> Option<Version> {
+fn bumped_suffix(v: &VersionParts) -> Option<Version> {
     let mut upper = v.clone();
-    clear_endpoint(&mut upper);
+    upper.revision = Revision::default();
     let last = upper.suffixes.last_mut()?;
     let next = last.version.unwrap_or(0).checked_add(1)?;
     last.version = Some(next);
     upper.suffixes.push(alpha_suffix());
-    Some(upper)
+    Some(upper.into())
 }
 
 // After `z` comes the same numbers plus `.0`, the smallest longer version.
-fn bumped_letter(v: &Version) -> Version {
+fn bumped_letter(v: &VersionParts) -> Version {
     let mut upper = v.clone();
-    clear_endpoint(&mut upper);
+    upper.revision = Revision::default();
     match upper.letter {
         Some(c) if c < 'z' => upper.letter = Some((c as u8 + 1) as char),
         _ => {
             upper.letter = None;
-            fill_digits(&mut upper);
             upper.numbers.push(0);
-            upper.digits.push(SmolStr::new("0"));
         }
     }
     upper.suffixes.push(alpha_suffix());
-    upper
+    upper.into()
 }
 
-fn fill_digits(v: &mut Version) {
-    if v.digits.len() < v.numbers.len() {
-        for n in &v.numbers[v.digits.len()..] {
-            v.digits.push(SmolStr::new(n.to_string()));
-        }
-    }
-    debug_assert_eq!(v.digits.len(), v.numbers.len());
+fn decimal_len(n: u64) -> u32 {
+    n.checked_ilog10().map_or(1, |l| l + 1)
 }
 
-// Width-preserving successor. Overflow drops the component: `2.0_alpha` still
-// sorts above `2_alpha`, so the carry must not leave a trailing zero.
-fn bump_last_numeric(v: &mut Version) -> bool {
-    fill_digits(v);
+// Width-preserving successor (`04` -> `05`, `009` -> `010`). Overflow drops the component:
+// `2.0_alpha` still sorts above `2_alpha`, so the carry must not leave a trailing zero.
+fn bump_last_numeric(v: &mut VersionParts) -> bool {
     while let Some(&current) = v.numbers.last() {
+        let i = v.numbers.len() - 1;
         match current.checked_add(1) {
             Some(next) => {
-                let i = v.numbers.len() - 1;
-                let written = widened_digits(v.digits[i].as_str(), next);
                 v.numbers[i] = next;
-                v.digits[i] = SmolStr::new(written);
+                if let Some(zeros) = v.leading_zeros.get_mut(i) {
+                    let width = *zeros + decimal_len(current);
+                    *zeros = width.saturating_sub(decimal_len(next));
+                }
                 return true;
             }
             None => {
                 v.numbers.pop();
-                v.digits.pop();
+                v.leading_zeros.truncate(i);
             }
         }
     }
     false
-}
-
-fn widened_digits(digits: &str, next: u64) -> String {
-    let text = next.to_string();
-    if digits.len() > 1 && digits.starts_with('0') && text.len() < digits.len() {
-        format!("{text:0>width$}", width = digits.len())
-    } else {
-        text
-    }
 }
 
 /// PMS version comparison (Algorithm 3.1)
@@ -821,11 +654,7 @@ impl PartialOrd for Version {
 
 impl Ord for Version {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Algorithm 3.7: revision is compared after every other component.
-        match self.cmp_without_revision(other) {
-            Ordering::Equal => self.revision.cmp(&other.revision),
-            ordering => ordering,
-        }
+        self.0.order().cmp(other.0.order())
     }
 }
 
@@ -850,11 +679,14 @@ fn parse_number(input: &mut &str) -> ModalResult<u64> {
     }
 }
 
-/// Parse one version component, keeping the original digit text for PMS 3.3
-fn parse_component(input: &mut &str) -> ModalResult<(SmolStr, u64)> {
+/// Parse one version component: the zeros written before its value, and the value
+fn parse_component(input: &mut &str) -> ModalResult<(u32, u64)> {
     let digits = digit1.parse_next(input)?;
     match digits.parse::<u64>() {
-        Ok(n) => Ok((SmolStr::new(digits), n)),
+        Ok(n) => {
+            let significant = digits.trim_start_matches('0').len().max(1);
+            Ok(((digits.len() - significant) as u32, n))
+        }
         Err(_) => overflow_number(input),
     }
 }
@@ -886,78 +718,44 @@ fn parse_revision(input: &mut &str) -> ModalResult<Revision> {
         .parse_next(input)
 }
 
-/// Numeric components, plus their written digits only when one is written with a leading zero
-fn split_components(components: Vec<(SmolStr, u64)>) -> (Numbers, SmallVec<[SmolStr; 4]>) {
-    let numbers = components.iter().map(|(_, n)| *n).collect();
-    let zero_led = components
-        .iter()
-        .any(|(d, _)| d.len() > 1 && d.starts_with('0'));
-    let digits = if zero_led {
-        components.into_iter().map(|(d, _)| d).collect()
-    } else {
-        SmallVec::new()
-    };
-    (numbers, digits)
-}
-
-pub(crate) fn parse_version(input: &mut &str) -> ModalResult<Version> {
+fn parse_parts(input: &mut &str) -> ModalResult<VersionParts> {
     (
         separated(1.., parse_component, '.'),
         opt(parse_letter),
         repeat(0.., parse_suffix),
         opt(parse_revision),
     )
-        .with_taken()
         .map(
-            |((components, letter, suffixes, revision), raw): (
-                (Vec<(SmolStr, u64)>, _, _, _),
-                _,
-            )| {
-                let (numbers, digits) = split_components(components);
-                Version {
+            |(components, letter, suffixes, revision): (Vec<(u32, u64)>, _, _, _)| {
+                let numbers = components.iter().map(|&(_, n)| n).collect();
+                let leading_zeros = if components.iter().any(|&(z, _)| z > 0) {
+                    components.iter().map(|&(z, _)| z).collect()
+                } else {
+                    Vec::new()
+                };
+                VersionParts {
                     numbers,
-                    digits,
+                    leading_zeros,
                     letter,
                     suffixes,
                     revision: revision.unwrap_or_default(),
-                    raw: Some(SmolStr::new(raw)),
                 }
             },
         )
+        .parse_next(input)
+}
+
+pub(crate) fn parse_version(input: &mut &str) -> ModalResult<Version> {
+    parse_parts
+        .with_taken()
+        .map(|(parts, raw)| Version(Repr::encode(&parts, Some(raw))))
         .context(StrContext::Label("version"))
         .parse_next(input)
 }
 
 pub(crate) fn parse_version_no_raw(input: &mut &str) -> ModalResult<(Version, bool)> {
-    (
-        separated(1.., parse_component, '.'),
-        opt(parse_letter),
-        repeat(0.., parse_suffix),
-        opt(parse_revision),
-        opt('*'),
-    )
-        .map(
-            |(components, letter, suffixes, revision, has_glob): (
-                Vec<(SmolStr, u64)>,
-                _,
-                _,
-                _,
-                _,
-            )| {
-                let (numbers, digits) = split_components(components);
-                (
-                    Version {
-                        numbers,
-                        digits,
-                        letter,
-                        suffixes,
-                        revision: revision.unwrap_or_default(),
-                        raw: None,
-                    },
-                    has_glob.is_some(),
-                )
-            },
-        )
+    (parse_parts, opt('*'))
+        .map(|(parts, glob)| (Version::from(parts), glob.is_some()))
         .context(StrContext::Label("version"))
         .parse_next(input)
 }
@@ -990,35 +788,35 @@ mod tests {
     #[test]
     fn test_version_parsing() {
         let v = Version::parse("1.2.3").unwrap();
-        assert_eq!(v.numbers.len(), 3);
-        assert_eq!(v.numbers[0], 1);
-        assert_eq!(v.numbers[1], 2);
-        assert_eq!(v.numbers[2], 3);
-        assert_eq!(v.letter, None);
-        assert!(v.suffixes.is_empty());
-        assert_eq!(v.revision.0, 0);
+        assert_eq!(v.component_count(), 3);
+        assert_eq!(v.component(0).unwrap(), 1);
+        assert_eq!(v.component(1).unwrap(), 2);
+        assert_eq!(v.component(2).unwrap(), 3);
+        assert_eq!(v.letter(), None);
+        assert!(v.suffixes().next().is_none());
+        assert_eq!(v.revision().0, 0);
     }
 
     #[test]
     fn test_version_with_letter() {
         let v = Version::parse("1.2.3a").unwrap();
-        assert_eq!(v.letter, Some('a'));
+        assert_eq!(v.letter(), Some('a'));
     }
 
     #[test]
     fn test_version_with_suffixes() {
         let v = Version::parse("1.2.3_alpha4_beta5").unwrap();
-        assert_eq!(v.suffixes.len(), 2);
-        assert_eq!(v.suffixes[0].kind, SuffixKind::Alpha);
-        assert_eq!(v.suffixes[0].version.unwrap(), 4);
-        assert_eq!(v.suffixes[1].kind, SuffixKind::Beta);
-        assert_eq!(v.suffixes[1].version.unwrap(), 5);
+        assert_eq!(v.suffixes().count(), 2);
+        assert_eq!(v.suffixes().next().unwrap().kind, SuffixKind::Alpha);
+        assert_eq!(v.suffixes().next().unwrap().version.unwrap(), 4);
+        assert_eq!(v.suffixes().nth(1).unwrap().kind, SuffixKind::Beta);
+        assert_eq!(v.suffixes().nth(1).unwrap().version.unwrap(), 5);
     }
 
     #[test]
     fn test_version_with_revision() {
         let v = Version::parse("1.2.3-r1").unwrap();
-        assert_eq!(v.revision.0, 1);
+        assert_eq!(v.revision().0, 1);
     }
 
     #[test]
@@ -1045,45 +843,53 @@ mod tests {
         // Test many components
         let many_components = "1.2.3.4.5.6.7.8.9.10.11.12.13.14.15";
         let version = Version::parse(many_components).unwrap();
-        assert_eq!(version.numbers.len(), 15);
+        assert_eq!(version.component_count(), 15);
 
         // Test long component values
         let long_component = "12345678901234567890"; // 20 digits
         let version = Version::parse(long_component).unwrap();
-        assert_eq!(version.numbers[0], 12345678901234567890u64);
+        assert_eq!(version.component(0).unwrap(), 12345678901234567890u64);
     }
 
     #[test]
     fn test_version_new_simple() {
         let v = Version::new(&[1, 75, 0]);
-        assert_eq!(v.numbers.as_slice(), vec![1, 75, 0].as_slice());
-        assert_eq!(v.letter, None);
-        assert!(v.suffixes.is_empty());
-        assert_eq!(v.revision.0, 0);
+        assert_eq!(
+            v.components().collect::<Vec<_>>().as_slice(),
+            vec![1, 75, 0].as_slice()
+        );
+        assert_eq!(v.letter(), None);
+        assert!(v.suffixes().next().is_none());
+        assert_eq!(v.revision().0, 0);
         assert_eq!(v.to_string(), "1.75.0");
     }
 
     #[test]
     #[cfg(feature = "builder")]
     fn test_version_builder_full() {
-        let v = Version::builder(vec![1, 75, 0].into())
-            .letter('a')
-            .suffixes(vec![
-                Suffix {
-                    kind: SuffixKind::Rc,
-                    version: Some(1),
-                },
-                Suffix {
-                    kind: SuffixKind::P,
-                    version: Some(2),
-                },
-            ])
-            .revision(Revision(3))
-            .build();
-        assert_eq!(v.numbers.as_slice(), vec![1, 75, 0].as_slice());
-        assert_eq!(v.letter, Some('a'));
-        assert_eq!(v.suffixes.len(), 2);
-        assert_eq!(v.revision.0, 3);
+        let v = Version::from(
+            VersionParts::builder(vec![1, 75, 0].into())
+                .letter('a')
+                .suffixes(vec![
+                    Suffix {
+                        kind: SuffixKind::Rc,
+                        version: Some(1),
+                    },
+                    Suffix {
+                        kind: SuffixKind::P,
+                        version: Some(2),
+                    },
+                ])
+                .revision(Revision(3))
+                .build(),
+        );
+        assert_eq!(
+            v.components().collect::<Vec<_>>().as_slice(),
+            vec![1, 75, 0].as_slice()
+        );
+        assert_eq!(v.letter(), Some('a'));
+        assert_eq!(v.suffixes().count(), 2);
+        assert_eq!(v.revision().0, 3);
         assert_eq!(v.to_string(), "1.75.0a_rc1_p2-r3");
     }
 
@@ -1091,28 +897,32 @@ mod tests {
     #[cfg(feature = "builder")]
     fn test_version_builder_roundtrip() {
         let original = Version::parse("1.2.3a_rc1_p2-r5").unwrap();
-        let built = Version::builder(vec![1, 2, 3].into())
-            .letter('a')
-            .suffixes(vec![
-                Suffix {
-                    kind: SuffixKind::Rc,
-                    version: Some(1),
-                },
-                Suffix {
-                    kind: SuffixKind::P,
-                    version: Some(2),
-                },
-            ])
-            .revision(Revision(5))
-            .build();
+        let built = Version::from(
+            VersionParts::builder(vec![1, 2, 3].into())
+                .letter('a')
+                .suffixes(vec![
+                    Suffix {
+                        kind: SuffixKind::Rc,
+                        version: Some(1),
+                    },
+                    Suffix {
+                        kind: SuffixKind::P,
+                        version: Some(2),
+                    },
+                ])
+                .revision(Revision(5))
+                .build(),
+        );
         assert_eq!(original, built);
     }
 
     #[test]
     fn test_raw_preserves_leading_zeros() {
         let v = Version::parse("26.04.0").unwrap();
-        assert_eq!(v.numbers.as_slice(), vec![26, 4, 0].as_slice());
-        assert_eq!(v.raw.as_deref(), Some("26.04.0"));
+        assert_eq!(
+            v.components().collect::<Vec<_>>().as_slice(),
+            vec![26, 4, 0].as_slice()
+        );
         assert_eq!(v.to_string(), "26.04.0");
     }
 
@@ -1171,14 +981,12 @@ mod tests {
     #[test]
     fn test_raw_none_for_programmatic() {
         let v = Version::new(&[1, 2, 3]);
-        assert!(v.raw.is_none());
         assert_eq!(v.to_string(), "1.2.3");
     }
 
     #[test]
     fn test_raw_with_suffix_and_revision() {
         let v = Version::parse("1.2.3a_rc1_p2-r5").unwrap();
-        assert_eq!(v.raw.as_deref(), Some("1.2.3a_rc1_p2-r5"));
         assert_eq!(v.to_string(), "1.2.3a_rc1_p2-r5");
     }
 
@@ -1196,7 +1004,10 @@ mod tests {
     fn test_version_single_component() {
         // PMS 3.2: "an unsigned integer, followed by zero or more dot-prefixed unsigned integers"
         let v = Version::parse("1").unwrap();
-        assert_eq!(v.numbers.as_slice(), vec![1].as_slice());
+        assert_eq!(
+            v.components().collect::<Vec<_>>().as_slice(),
+            vec![1].as_slice()
+        );
         assert_eq!(v.to_string(), "1");
     }
 
@@ -1676,8 +1487,47 @@ mod tests {
     }
 
     #[test]
-    fn component_fast_path_agrees_with_the_digit_string_rule() {
+    fn common_versions_fit_inline_in_24_bytes() {
+        assert_eq!(std::mem::size_of::<Version>(), 24);
+        for s in ["1.2.3", "5.15.2-r3", "2.0_pre20240101", "1.2.3_rc1-r1"] {
+            let v = Version::parse(s).unwrap();
+            assert!(matches!(v.0, Repr::Inline { .. }), "{s}");
+        }
+    }
+
+    #[test]
+    fn spelling_stays_out_of_equality_and_hash() {
         use std::hash::{BuildHasher, RandomState};
+        let state = RandomState::new();
+        for (a, b) in [
+            ("1.0", "1.00"),
+            ("3.03", "003.03"),
+            ("1.2_p", "1.2_p0"),
+            ("1-r1", "1-r01"),
+        ] {
+            let (va, vb) = (Version::parse(a).unwrap(), Version::parse(b).unwrap());
+            assert_eq!(va, vb);
+            assert_eq!(state.hash_one(&va), state.hash_one(&vb));
+            assert_eq!(
+                (va.to_string(), vb.to_string()),
+                (a.to_string(), b.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn component_order_follows_algorithms_3_2_and_3_3() {
+        use std::hash::{BuildHasher, RandomState};
+        // The first component compares as an integer; a later one starting with `0` compares as
+        // a string with trailing zeros dropped, against either kind.
+        let pms = |i: usize, a: &str, b: &str| {
+            let int = |s: &str| s.parse::<u64>().unwrap();
+            if i > 0 && (a.starts_with('0') || b.starts_with('0')) {
+                a.trim_end_matches('0').cmp(b.trim_end_matches('0'))
+            } else {
+                int(a).cmp(&int(b))
+            }
+        };
         let written = [
             "0", "00", "000", "1", "01", "001", "10", "010", "100", "5", "50", "05",
         ];
@@ -1694,7 +1544,7 @@ mod tests {
             for a in written {
                 for b in written {
                     let (va, vb) = (at(a), at(b));
-                    assert_eq!(va.cmp(&vb), cmp_component(i, a, b), "{va} vs {vb}");
+                    assert_eq!(va.cmp(&vb), pms(i, a, b), "{va} vs {vb}");
                     if va == vb {
                         assert_eq!(hasher.hash_one(&va), hasher.hash_one(&vb), "{va} vs {vb}");
                     }

@@ -91,7 +91,7 @@ mod tests {
     fn parse_with_revision() {
         let pf = Pf::parse("bash-5.3_p9-r2").unwrap();
         assert_eq!(pf.package.as_ref(), "bash");
-        assert_eq!(pf.version.revision.0, 2);
+        assert_eq!(pf.version.revision().0, 2);
         assert_eq!(pf.to_string(), "bash-5.3_p9-r2");
     }
 

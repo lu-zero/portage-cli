@@ -220,16 +220,16 @@ mod tests {
         let cpv = Cpv::parse("dev-lang/rust-1.75.0").unwrap();
         assert_eq!(cpv.cpn.category, "dev-lang");
         assert_eq!(cpv.cpn.package, "rust");
-        assert_eq!(cpv.version.numbers[0], 1);
-        assert_eq!(cpv.version.numbers[1], 75);
-        assert_eq!(cpv.version.numbers[2], 0);
+        assert_eq!(cpv.version.component(0).unwrap(), 1);
+        assert_eq!(cpv.version.component(1).unwrap(), 75);
+        assert_eq!(cpv.version.component(2).unwrap(), 0);
         assert_eq!(cpv.to_string(), "dev-lang/rust-1.75.0");
     }
 
     #[test]
     fn test_cpv_with_revision() {
         let cpv = Cpv::parse("dev-lang/rust-1.75.0-r1").unwrap();
-        assert_eq!(cpv.version.revision.0, 1);
+        assert_eq!(cpv.version.revision().0, 1);
         assert_eq!(cpv.to_string(), "dev-lang/rust-1.75.0-r1");
     }
 
@@ -267,7 +267,10 @@ mod tests {
         let cpv = Cpv::builder().cpn(cpn).version(version).build();
         assert_eq!(cpv.cpn.category, "dev-lang");
         assert_eq!(cpv.cpn.package, "rust");
-        assert_eq!(cpv.version.numbers.as_slice(), vec![1, 75, 0].as_slice());
+        assert_eq!(
+            cpv.version.components().collect::<Vec<_>>().as_slice(),
+            vec![1, 75, 0].as_slice()
+        );
         assert_eq!(cpv.to_string(), "dev-lang/rust-1.75.0");
     }
 }

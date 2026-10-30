@@ -4,13 +4,16 @@
 
 ### Breaking changes
 
-- `Version`'s fields are private. Read them through `components`, `component`, `component_count`,
-  `letter`, `suffixes` and `revision`; `base` drops the revision.
+- `Version`'s fields are gone: it is a 24-byte order-preserving byte key that displays as written.
+  Read it through `components`, `component`, `component_count`, `letter`, `suffixes` and `revision`;
+  `base` drops the revision. Build or edit one as `VersionParts` (`to_parts`, `From<VersionParts>`).
+- The `builder` feature builds `VersionParts` (`VersionPartsBuilder`) instead of `Version`.
+- `Version`'s `Debug` prints `Version(1.2.3)`.
 - `Revision` and `Suffix` are `Copy`.
 
 ### Features
 
-- `VersionKey`, a 24-byte byte key that orders, hashes and tests equal like its `Version`.
+- `VersionKey`, the solver's handle on a `Version`.
 - `Version::approximate_bounds` for the `~` operator's range.
 
 ## 0.12.0
