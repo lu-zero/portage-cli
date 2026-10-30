@@ -395,7 +395,8 @@ impl Version {
     /// The pattern's components must equal the candidate's in the same positions,
     /// compared as components, so `1.010.5` matches `1.01*`. Anything may follow
     /// the last one. A letter, suffix, or non-zero revision ends the numeric part,
-    /// so `1.0.1-r1` is not a `1.0-r1*` match.
+    /// so `1.0.1-r1` is not a `1.0-r1*` match. A last suffix written without a number
+    /// takes any number of its kind, as in Portage: `5.3_p12` is a `5.3_p*` match.
     pub fn glob_matches(&self, pattern: &Version) -> bool {
         let (cand, pat) = (self.layout(), pattern.layout());
         let (letter, suffixes, revision, _) = pat.tail(pattern.0.order().len());
@@ -418,16 +419,38 @@ impl Version {
         {
             return false;
         }
-        if cand_suffixes.iter().zip(&suffixes).any(|(c, p)| c != p) {
+        let open = !has_rev && pattern.last_suffix_unnumbered();
+        let last = suffixes.len().saturating_sub(1);
+        let differs = |(i, (c, p)): (usize, (&Suffix, &Suffix))| {
+            if open && i == last {
+                c.kind != p.kind
+            } else {
+                c != p
+            }
+        };
+        if cand_suffixes.iter().zip(&suffixes).enumerate().any(differs) {
             return false;
         }
         !has_rev || cand_revision == revision
+    }
+
+    /// Whether the last suffix is written without a number (`_p`, not `_p0`)
+    fn last_suffix_unnumbered(&self) -> bool {
+        let (_, suffixes, _, _) = self.layout().tail(self.0.order().len());
+        // A written `0` decodes like no number; only the spelling tells them apart.
+        suffixes.last().is_some_and(|s| s.version.is_none())
+            && self
+                .to_parts()
+                .suffixes
+                .last()
+                .is_some_and(|s| s.version.is_none())
     }
 
     /// Half-open bounds of `=V*`. A revision pattern is `[V, V-r(N+1))`. Otherwise
     /// lower adds one `_alpha` (a further suffix under it sorts lower), and upper
     /// bumps the last suffix number, else the letter, else the last numeric
     /// component, then adds `_alpha`. Written digits stay: `26.04*` ends at `26.05_alpha`.
+    /// An unnumbered last suffix ends at the next kind instead: `1.0_rc*` ends at `1.0`.
     ///
     /// `None` means that bump does not fit in `u64`. See [`Self::glob_bounds_exact`]
     /// for when the range holds versions that are no match.
@@ -447,7 +470,9 @@ impl Version {
         let mut lower = parts.clone();
         lower.suffixes.push(alpha_suffix());
 
-        let upper = if !parts.suffixes.is_empty() {
+        let upper = if self.last_suffix_unnumbered() {
+            bumped_past_unnumbered_suffix(&parts)
+        } else if !parts.suffixes.is_empty() {
             bumped_suffix(&parts).or_else(|| bumped_numeric(&parts))
         } else if parts.letter.is_some() {
             Some(bumped_letter(&parts))
@@ -586,6 +611,39 @@ fn bumped_numeric(v: &VersionParts) -> Option<Version> {
     if !bump_last_numeric(&mut upper) {
         return None;
     }
+    upper.suffixes.push(alpha_suffix());
+    Some(upper.into())
+}
+
+// Above every `V_kN…` for an unnumbered last suffix `_k`: the next kind, or for `_rc` the
+// version without it. `_p` is the highest kind, so after it comes what follows `V`'s own
+// preceding suffix or letter.
+fn bumped_past_unnumbered_suffix(v: &VersionParts) -> Option<Version> {
+    let mut upper = v.clone();
+    upper.revision = Revision::default();
+    let next = match upper.suffixes.pop()?.kind {
+        SuffixKind::Alpha => SuffixKind::Beta,
+        SuffixKind::Beta => SuffixKind::Pre,
+        SuffixKind::Pre => SuffixKind::Rc,
+        SuffixKind::Rc => return Some(upper.into()),
+        SuffixKind::P if !upper.suffixes.is_empty() => {
+            return bumped_suffix(&upper).or_else(|| bumped_numeric(&upper));
+        }
+        SuffixKind::P => {
+            return Some(match upper.letter {
+                Some(_) => bumped_letter(&upper),
+                None => {
+                    upper.letter = Some('a');
+                    upper.suffixes.push(alpha_suffix());
+                    upper.into()
+                }
+            });
+        }
+    };
+    upper.suffixes.push(Suffix {
+        kind: next,
+        version: None,
+    });
     upper.suffixes.push(alpha_suffix());
     Some(upper.into())
 }
@@ -1166,7 +1224,16 @@ mod tests {
         let rc = Version::parse("1.0_rc").unwrap();
         assert!(Version::parse("1.0_rc").unwrap().glob_matches(&rc));
         assert!(Version::parse("1.0_rc0").unwrap().glob_matches(&rc));
-        assert!(!Version::parse("1.0_rc3").unwrap().glob_matches(&rc));
+        // Unnumbered, the last suffix takes any number of its kind, as in Portage.
+        assert!(Version::parse("1.0_rc3").unwrap().glob_matches(&rc));
+        assert!(Version::parse("1.0_rc3_p1-r2").unwrap().glob_matches(&rc));
+        assert!(!Version::parse("1.0_p3").unwrap().glob_matches(&rc));
+        assert!(!Version::parse("1.0").unwrap().glob_matches(&rc));
+        // A written number stays exact, `0` included, and so does a revision pattern's tail.
+        let p0 = Version::parse("1.0_p0").unwrap();
+        assert!(!Version::parse("1.0_p12").unwrap().glob_matches(&p0));
+        let p_r1 = Version::parse("1.0_p-r1").unwrap();
+        assert!(!Version::parse("1.0_p2-r1").unwrap().glob_matches(&p_r1));
 
         let rev = Version::parse("1.0-r1").unwrap();
         assert!(Version::parse("1.0-r1").unwrap().glob_matches(&rev));
@@ -1216,8 +1283,24 @@ mod tests {
             "26.04a",
             "26.04_rc1",
             "26.04-r2",
+            "1.2_alpha",
+            "1.2_pre",
+            "1.2_p0",
+            "1.2_rc3_p",
+            "1.2a_p",
+            "1.2z_p",
         ];
         let candidates = [
+            "1.2_alpha3",
+            "1.2_pre1",
+            "1.2_rc9_beta1",
+            "1.2_rc3_p9",
+            "1.2_rc4_p1",
+            "1.2_p7_rc1",
+            "1.2a_p2",
+            "1.2b_p1",
+            "1.2z_p4",
+            "1.2.0_p1",
             "1",
             "1.1",
             "1.2",
@@ -1324,7 +1407,17 @@ mod tests {
 
         let (lower, upper) = Version::parse("1.0_rc").unwrap().glob_bounds();
         assert_eq!(lower.to_string(), "1.0_rc_alpha");
-        assert_eq!(upper.unwrap().to_string(), "1.0_rc1_alpha");
+        assert_eq!(upper.unwrap().to_string(), "1.0");
+        for (pattern, end) in [
+            ("1.0_pre", "1.0_rc_alpha"),
+            ("1.0_p", "1.0a_alpha"),
+            ("1.0c_p", "1.0d_alpha"),
+            ("1.0_rc2_p", "1.0_rc3_alpha"),
+            ("1.0_p0", "1.0_p1_alpha"),
+        ] {
+            let (_, upper) = Version::parse(pattern).unwrap().glob_bounds();
+            assert_eq!(upper.unwrap().to_string(), end, "{pattern}");
+        }
 
         let (lower, upper) = Version::parse("1.0-r1").unwrap().glob_bounds();
         assert_eq!(lower.to_string(), "1.0-r1");

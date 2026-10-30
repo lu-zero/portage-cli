@@ -31,6 +31,8 @@
 - `Version`'s `Hash` agrees with its `Eq`; a bare slot operator parses as one atom however spelled.
 - `=V*` matches components in their written positions: a pattern letter, suffix or non-zero revision ends
   its numeric part. `glob_bounds` keeps written zeros (`=26.04*` ends at `26.05_alpha`).
+- An unnumbered last suffix in `=V*` takes any number of its kind, as in Portage: `=bash-5.3_p*` matches
+  `5.3_p20`. A written number (`_p0`) stays exact.
 
 ## 0.11.1
 
