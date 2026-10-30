@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpn, Dep, DepEntry, Operator, SlotDep, SlotOperator, UseDep, Version};
+use portage_atom::{Cpn, Dep, DepEntry, Operator, Slot, SlotDep, SlotOperator, UseDep, Version};
+use pubgrub::VersionSet as _;
 
 use crate::package::PortagePackage;
 use crate::required_use::RequiredUse;
@@ -115,8 +116,15 @@ pub(crate) struct UseDepConstraint {
 /// Slot info for a CPN: pre-computed `(slot_interned, slotted_package)` pairs
 pub type SlotMap = HashMap<Cpn, Vec<(Interned<DefaultInterner>, PortagePackage)>>;
 
-/// The versions of a CPN the solver can pick, for `=V*` ranges that are not exact
-pub(crate) type KnownVersions<'a> = &'a dyn Fn(&Cpn) -> Vec<Version>;
+/// A version of a CPN the solver can pick, with the `SLOT` it was published in
+#[derive(Clone)]
+pub(crate) struct KnownVersion {
+    pub(crate) version: Version,
+    pub(crate) slot: Option<Slot>,
+}
+
+/// The versions of a CPN the solver can pick, for `=V*` ranges and sub-slot pins
+pub(crate) type KnownVersions<'a> = &'a dyn Fn(&Cpn) -> Vec<KnownVersion>;
 
 /// The `UseDecision` virtual package for a given package's USE flag
 ///
@@ -333,13 +341,42 @@ impl ConvertCtx<'_> {
         }
     }
 
+    /// Narrow `version_set` to the known versions an explicit `:SLOT/SUB` pin admits
+    ///
+    /// A `:SLOT/SUB=` binding records what a package was built against; a change to it is a
+    /// rebuild, not a constraint, so it keeps the slot alone. PMS 7.2: no `/` means sub-slot = slot.
+    fn pin_subslot(
+        &self,
+        cpn: &Cpn,
+        version_set: PortageVersionSet,
+        slot: &Slot,
+        op: Option<SlotOperator>,
+    ) -> PortageVersionSet {
+        let Some(want) = slot.subslot else {
+            return version_set;
+        };
+        if op == Some(SlotOperator::Equal) {
+            return version_set;
+        }
+        let pinned = (self.known_versions)(cpn)
+            .into_iter()
+            .filter(|k| {
+                k.slot
+                    .is_some_and(|s| s.slot == slot.slot && s.subslot.unwrap_or(s.slot) == want)
+            })
+            .fold(PortageVersionSet::empty(), |set, k| {
+                set.union(&PortageVersionSet::singleton(k.version))
+            });
+        version_set.intersection(&pinned)
+    }
+
     fn convert_atom(&mut self, dep: &Dep) {
         let cpn = &dep.cpn;
         let version_set = match &dep.version {
             Some(v) => {
                 let op = dep.op.unwrap_or(Operator::Equal);
                 PortageVersionSet::from_operator_among(op, dep.glob, v.clone(), || {
-                    (self.known_versions)(cpn)
+                    (self.known_versions)(cpn).into_iter().map(|k| k.version)
                 })
             }
             None => PortageVersionSet::any(),
@@ -352,6 +389,7 @@ impl ConvertCtx<'_> {
                     op,
                 } => {
                     let pkg = PortagePackage::slotted(*cpn, slot.slot);
+                    let version_set = self.pin_subslot(cpn, version_set, slot, *op);
                     self.collect_post_solve(&pkg, &version_set, dep);
                     self.collect_slot_op(&pkg, &version_set, *op, Some(slot.slot));
                     self.requirements.push((pkg, version_set, self.gating_flag));

@@ -130,6 +130,7 @@ mod tests {
         VdbEntry {
             cpn: Cpn::parse(cpn).unwrap(),
             slot: Some(Interned::intern("0")),
+            subslot: None,
             version: Version::parse(ver).unwrap(),
             active_use: Vec::new(),
             iuse: Vec::new(),

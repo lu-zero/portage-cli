@@ -158,6 +158,42 @@ fn multi_slot_installs_both_when_required() {
     );
 }
 
+/// An explicit `:SLOT/SUB` pin selects a version published with that sub-slot; a `:SLOT/SUB=`
+/// binding (what a package was built against) only constrains the slot
+#[test]
+fn subslot_pin_selects_its_subslot_and_a_binding_does_not() {
+    let solve = |dep: &str| {
+        let mut repo = InMemoryRepository::new();
+        for (ver, sub) in [("7.2.0", "7.2"), ("10.1.0", "10.1")] {
+            repo.add_version(
+                portage_atom::Cpv::parse(&format!("dev-util/hip-{ver}")).unwrap(),
+                Some(Interned::intern("0")),
+                Some(Interned::intern(sub)),
+                empty_deps(),
+            );
+        }
+        repo.add_version(
+            portage_atom::Cpv::parse("dev-libs/rccl-7.2.0").unwrap(),
+            Some(Interned::intern("0")),
+            None,
+            PackageDeps {
+                rdepend: (DepEntry::parse(dep).unwrap()).into(),
+                ..PackageDeps::default()
+            },
+        );
+        let provider = PortageDependencyProvider::new(repo);
+        let root =
+            PortagePackage::slotted(Cpn::parse("dev-libs/rccl").unwrap(), Interned::intern("0"));
+        let solution = pubgrub::resolve(&provider, root, Version::parse("7.2.0").unwrap()).unwrap();
+        let hip =
+            PortagePackage::slotted(Cpn::parse("dev-util/hip").unwrap(), Interned::intern("0"));
+        solution.get(&hip).unwrap().to_string()
+    };
+    assert_eq!(solve("dev-util/hip:0/7.2"), "7.2.0");
+    assert_eq!(solve("dev-util/hip:0/7.2="), "10.1.0");
+    assert_eq!(solve("dev-util/hip:0"), "10.1.0");
+}
+
 #[test]
 fn resolve_slot_operator_equal() {
     let mut repo = InMemoryRepository::new();
@@ -4158,6 +4194,53 @@ fn installed_version(
             live: false,
         },
     }
+}
+
+// An installed version gone from the tree still satisfies a sub-slot pin by the sub-slot its VDB
+// `SLOT` recorded.
+#[test]
+fn installed_only_version_satisfies_a_subslot_pin() {
+    let solve = |recorded: Option<&str>| {
+        let mut repo = InMemoryRepository::new();
+        repo.add_version(
+            portage_atom::Cpv::parse("dev-util/hip-10.1.0").unwrap(),
+            Some(Interned::intern("0")),
+            Some(Interned::intern("10.1")),
+            empty_deps(),
+        );
+        repo.add_version(
+            portage_atom::Cpv::parse("dev-libs/rccl-7.2.0").unwrap(),
+            Some(Interned::intern("0")),
+            None,
+            PackageDeps {
+                rdepend: (DepEntry::parse("dev-util/hip:0/7.2").unwrap()).into(),
+                ..empty_deps()
+            },
+        );
+        let mut hip_7 = installed_version("7.2.0", Some("0"), true, "");
+        hip_7.meta.subslot = recorded.map(Interned::intern);
+        let hip_cpn = Cpn::parse("dev-util/hip").unwrap();
+        let mut provider = PortageDependencyProvider::new(crate::repository::WithInstalled {
+            inner: repo,
+            installed: HashMap::from([(hip_cpn, vec![hip_7])]),
+        });
+        let hip = PortagePackage::slotted(hip_cpn, Interned::intern("0"));
+        provider.add_installed(InstalledPackage {
+            package: hip.clone(),
+            version: Version::parse("7.2.0").unwrap(),
+            policy: InstalledPolicy::Favor,
+            active_use: vec![],
+            iuse: vec![],
+        });
+        let rccl =
+            PortagePackage::slotted(Cpn::parse("dev-libs/rccl").unwrap(), Interned::intern("0"));
+        provider
+            .resolve_targets(vec![(rccl, PortageVersionSet::any())])
+            .ok()
+            .and_then(|solution| solution.get(&hip).map(ToString::to_string))
+    };
+    assert_eq!(solve(Some("7.2")).as_deref(), Some("7.2.0"));
+    assert_eq!(solve(None), None, "unrecorded, nothing has sub-slot 7.2");
 }
 
 #[test]

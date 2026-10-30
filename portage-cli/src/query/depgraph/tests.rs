@@ -812,6 +812,7 @@ fn settle_repairs_splits_pulled_in_held_back_and_still_broken() {
     let proposed = [super::conflicts::ProposedPkg {
         cpn: Cpn::parse("app-misc/baz").unwrap(),
         slot,
+        subslot: None,
         version: Version::parse("2").unwrap(),
     }];
     let (pulled_in, held_back) = settle_repairs(tried, &order, &proposed);

@@ -7,7 +7,7 @@ use pubgrub::{Dependencies, SelectedDependencies};
 
 use crate::convert;
 use crate::package::{MergeRoot, PortagePackage};
-use crate::repository::PackageRepository;
+use crate::repository::{PackageRepository, PackageVersions};
 use crate::use_config::{UseConfig, UseFlagState};
 use crate::version_set::PortageVersionSet;
 use version_map::VersionMap;
@@ -518,14 +518,25 @@ impl PortageDependencyProvider {
         // virtual choice branch) is queued in turn.
         let mut queue: std::collections::VecDeque<Cpn> = seeds.into_iter().collect();
         let mut seen: HashSet<Cpn> = queue.iter().copied().collect();
-        let known_cache: std::cell::RefCell<HashMap<Cpn, Vec<Version>>> = Default::default();
-        let known_versions = |c: &Cpn| -> Vec<Version> {
+        let known_cache: std::cell::RefCell<HashMap<Cpn, Vec<convert::KnownVersion>>> =
+            Default::default();
+        let known_versions = |c: &Cpn| -> Vec<convert::KnownVersion> {
+            let known = |version: Version, meta: &PackageVersions| convert::KnownVersion {
+                version,
+                slot: meta.slot.map(|slot| portage_atom::Slot {
+                    slot,
+                    subslot: meta.subslot,
+                }),
+            };
             let mut cache = known_cache.borrow_mut();
             let versions = cache.entry(*c).or_insert_with(|| {
-                let installed = repo.installed_for(c).iter().map(|i| i.version.clone());
+                let installed = repo
+                    .installed_for(c)
+                    .iter()
+                    .map(|i| known(i.version.clone(), &i.meta));
                 repo.versions_for(c)
                     .into_iter()
-                    .map(|(cpv, _)| cpv.version)
+                    .map(|(cpv, meta)| known(cpv.version, &meta))
                     .chain(installed)
                     .collect()
             });

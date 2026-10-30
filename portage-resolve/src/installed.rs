@@ -21,6 +21,8 @@ pub struct VdbEntry {
     /// `build_and_solve`), so this avoids re-interning the same slot string
     /// on every one of those calls
     pub slot: Option<Interned<DefaultInterner>>,
+    /// The sub-slot (`7.2` in `SLOT="0/7.2"`); `None` when `SLOT` names none
+    pub subslot: Option<Interned<DefaultInterner>>,
     /// The installed version
     pub version: Version,
     /// USE flags active at build time
@@ -354,6 +356,7 @@ fn load_one_with_cache(
             VdbEntry {
                 cpn: *pkg.cpn(),
                 slot: pkg.slot_main().ok(),
+                subslot: pkg.subslot().ok().flatten(),
                 version: pkg.cpv().version.clone(),
                 active_use,
                 iuse,

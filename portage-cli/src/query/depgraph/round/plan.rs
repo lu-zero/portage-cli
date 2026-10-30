@@ -112,6 +112,7 @@ impl RoundCtx<'_> {
         let (proposed, dep_conflicts) = target_conflicts(
             &order,
             &installed_as_solved(self.target_installed, &provider, self.data),
+            self.data,
         );
 
         RoundOutcome {

@@ -212,7 +212,7 @@ impl RoundCtx<'_> {
                     version: cpv.version.clone(),
                     built_use: portage_atom_pubgrub::UseConfig::new(),
                     kept: false,
-                    meta: recorded_meta(slot, PackageDeps::default(), Vec::new(), false),
+                    meta: recorded_meta(slot, None, PackageDeps::default(), Vec::new(), false),
                 });
         }
 
@@ -405,7 +405,13 @@ fn installed_versions(
             version: e.version.clone(),
             built_use,
             kept: kept(e),
-            meta: recorded_meta(slot, e.deps.clone(), e.iuse.clone(), empty_any_of_matches),
+            meta: recorded_meta(
+                slot,
+                e.subslot,
+                e.deps.clone(),
+                e.iuse.clone(),
+                empty_any_of_matches,
+            ),
         });
     }
     installed
@@ -414,13 +420,14 @@ fn installed_versions(
 /// Solver metadata for an installed version the repository may not offer
 fn recorded_meta(
     slot: Option<Interned<DefaultInterner>>,
+    subslot: Option<Interned<DefaultInterner>>,
     deps: PackageDeps,
     iuse: Vec<Interned<DefaultInterner>>,
     empty_any_of_matches: bool,
 ) -> PackageVersions {
     PackageVersions {
         slot,
-        subslot: None,
+        subslot,
         repo: None,
         iuse,
         iuse_defaults: HashMap::new(),
@@ -441,6 +448,7 @@ mod tests {
         installed::VdbEntry {
             cpn: Cpn::try_new(cpn).expect("test cpn parses"),
             slot: Some(Interned::intern("0")),
+            subslot: None,
             version: version.parse().expect("test version parses"),
             active_use: active_use.iter().map(|f| Interned::intern(f)).collect(),
             iuse: Vec::new(),

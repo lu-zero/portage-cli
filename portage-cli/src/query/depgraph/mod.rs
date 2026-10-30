@@ -643,6 +643,7 @@ fn installed_as_solved(
 fn target_conflicts(
     order: &[(PortagePackage, Version)],
     target_installed: &[installed::VdbEntry],
+    data: &repo::RepoData,
 ) -> (Vec<conflicts::ProposedPkg>, Vec<conflicts::Conflict>) {
     let proposed: Vec<conflicts::ProposedPkg> = order
         .iter()
@@ -650,6 +651,7 @@ fn target_conflicts(
         .map(|(pkg, ver)| conflicts::ProposedPkg {
             cpn: *pkg.cpn(),
             slot: pkg.slot(),
+            subslot: repo::find_cache(data, pkg, ver).and_then(|c| c.metadata.slot.subslot),
             version: ver.clone(),
         })
         .collect();

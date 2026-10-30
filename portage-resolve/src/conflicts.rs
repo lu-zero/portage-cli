@@ -44,6 +44,8 @@ pub struct ProposedPkg {
     pub cpn: Cpn,
     /// Its slot, if any
     pub slot: Slot,
+    /// Its sub-slot, if its `SLOT` names one
+    pub subslot: Slot,
     /// The version the plan installs
     pub version: Version,
 }
@@ -67,25 +69,9 @@ pub fn find_conflicts(installed: &[VdbEntry], proposed: &[ProposedPkg]) -> Vec<C
     // on an untouched name is unchanged by the plan.
     let touched: HashSet<Cpn> = proposed.iter().map(|p| p.cpn).collect();
 
-    // Every package that will exist after the plan, keyed by name. Slotted
-    // packages contribute one entry per coexisting slot.
-    let mut present: HashMap<Cpn, Vec<(Slot, Cpv)>> = HashMap::new();
-    for p in proposed {
-        present
-            .entry(p.cpn)
-            .or_default()
-            .push((p.slot, Cpv::new(p.cpn, p.version.clone())));
-    }
-    for e in installed {
-        let slot = e.slot;
-        if replaced.contains_key(&(e.cpn, slot)) {
-            continue;
-        }
-        present
-            .entry(e.cpn)
-            .or_default()
-            .push((slot, Cpv::new(e.cpn, e.version.clone())));
-    }
+    let present = present_after(proposed, installed, |e| {
+        replaced.contains_key(&(e.cpn, e.slot))
+    });
 
     let mut conflicts = Vec::new();
     for entry in installed {
@@ -118,14 +104,60 @@ pub fn retained_owners(conflicts: &[Conflict]) -> impl Iterator<Item = &Conflict
     conflicts.iter().filter(|c| c.owner_replaced_by.is_none())
 }
 
+/// Every package present after the plan, keyed by name: the planned ones, then the installed
+/// ones not `gone`. Slotted packages contribute one entry per coexisting slot.
+type Present = HashMap<Cpn, Vec<(Option<portage_atom::Slot>, Cpv)>>;
+
+fn present_after(
+    proposed: &[ProposedPkg],
+    installed: &[VdbEntry],
+    gone: impl Fn(&VdbEntry) -> bool,
+) -> Present {
+    let mut present: Present = HashMap::new();
+    for p in proposed {
+        present.entry(p.cpn).or_default().push((
+            full_slot(p.slot, p.subslot),
+            Cpv::new(p.cpn, p.version.clone()),
+        ));
+    }
+    for e in installed.iter().filter(|e| !gone(e)) {
+        present.entry(e.cpn).or_default().push((
+            full_slot(e.slot, e.subslot),
+            Cpv::new(e.cpn, e.version.clone()),
+        ));
+    }
+    present
+}
+
+/// A `SLOT` with no `/` has its slot as its sub-slot (PMS 7.2)
+fn full_slot(slot: Slot, subslot: Slot) -> Option<portage_atom::Slot> {
+    slot.map(|slot| portage_atom::Slot {
+        slot,
+        subslot: Some(subslot.unwrap_or(slot)),
+    })
+}
+
 /// True if any package present after the plan satisfies `dep` (name, slot and
 /// version all considered)
-fn dep_satisfied(dep: &Dep, present: &HashMap<Cpn, Vec<(Slot, Cpv)>>) -> bool {
+///
+/// An explicit sub-slot pin (`:0/7.2`) must hold. A `:0/7.2=` binding is the sub-slot a package
+/// was built against; a change to it schedules a rebuild instead, so here it matches by slot.
+fn dep_satisfied(dep: &Dep, present: &Present) -> bool {
     let Some(cands) = present.get(&dep.cpn) else {
         return false;
     };
+    let binding = matches!(
+        dep.slot_dep,
+        Some(portage_atom::SlotDep::Slot {
+            op: Some(portage_atom::SlotOperator::Equal),
+            ..
+        })
+    );
     cands.iter().any(|(slot, cpv)| {
-        let slot = slot.map(portage_atom::Slot::from_name);
+        let slot = match slot {
+            Some(s) if binding => Some(portage_atom::Slot::from_name(s.slot)),
+            other => *other,
+        };
         dep.matches_cpv(cpv, slot.as_ref())
     })
 }
@@ -136,7 +168,7 @@ fn collect_violations(
     owner: &VdbEntry,
     owner_replaced_by: Option<&Version>,
     touched: &HashSet<Cpn>,
-    present: &HashMap<Cpn, Vec<(Slot, Cpv)>>,
+    present: &Present,
     out: &mut Vec<Conflict>,
 ) {
     walk_unsatisfied_deps(entries, touched, present, out, &mut |dep| {
@@ -171,7 +203,7 @@ fn collect_violations(
 fn walk_unsatisfied_deps<T>(
     entries: &[DepEntry],
     touched: &HashSet<Cpn>,
-    present: &HashMap<Cpn, Vec<(Slot, Cpv)>>,
+    present: &Present,
     out: &mut Vec<T>,
     on_violation: &mut impl FnMut(&Dep) -> Option<T>,
 ) {
@@ -300,23 +332,10 @@ fn removal_obstacles_once(
         .map(|p| ((p.cpn, p.slot), &p.version))
         .collect();
 
-    let mut present: HashMap<Cpn, Vec<(Slot, Cpv)>> = HashMap::new();
-    for p in proposed {
-        present
-            .entry(p.cpn)
-            .or_default()
-            .push((p.slot, Cpv::new(p.cpn, p.version.clone())));
-    }
-    for e in installed {
-        let slot = e.slot;
-        if replaced.contains_key(&(e.cpn, slot)) || removed.contains(&(e.cpn, slot)) {
-            continue;
-        }
-        present
-            .entry(e.cpn)
-            .or_default()
-            .push((slot, Cpv::new(e.cpn, e.version.clone())));
-    }
+    let present = present_after(proposed, installed, |e| {
+        let key = (e.cpn, e.slot);
+        replaced.contains_key(&key) || removed.contains(&key)
+    });
 
     // Only a removal candidate's own cpn matters here — an installed
     // consumer's dep on anything else is unaffected by this simulation.
@@ -656,10 +675,20 @@ mod tests {
         }
     }
 
+    /// `slot` is a `SLOT` value: `0`, or `0/7.2` with a sub-slot
+    fn split_slot(slot: &str) -> (Slot, Slot) {
+        let (slot, subslot) = slot
+            .split_once('/')
+            .map_or((slot, None), |(s, sub)| (s, Some(sub)));
+        (Some(Interned::intern(slot)), subslot.map(Interned::intern))
+    }
+
     fn entry(cpn: &str, slot: &str, version: &str, deps: &[&str]) -> VdbEntry {
+        let (slot, subslot) = split_slot(slot);
         VdbEntry {
             cpn: Cpn::try_new(cpn).expect("test cpn parses"),
-            slot: Some(Interned::intern(slot)),
+            slot,
+            subslot,
             version: version.parse().expect("test version parses"),
             active_use: Vec::new(),
             iuse: Vec::new(),
@@ -676,11 +705,38 @@ mod tests {
     }
 
     fn proposed(cpn: &str, slot: &str, version: &str) -> ProposedPkg {
+        let (slot, subslot) = split_slot(slot);
         ProposedPkg {
             cpn: Cpn::try_new(cpn).expect("test cpn parses"),
-            slot: Some(Interned::intern(slot)),
+            slot,
+            subslot,
             version: version.parse().expect("test version parses"),
         }
+    }
+
+    // An installed consumer's explicit sub-slot pin holds against a plan that moves its
+    // dependency to another sub-slot; a `:=` binding becomes a rebuild instead of a conflict.
+    #[test]
+    fn a_subslot_pin_conflicts_and_a_binding_does_not() {
+        let hip_10 = [proposed("dev-util/hip", "0/10.1", "10.1.0")];
+        let pinned = entry("dev-libs/rccl", "0", "7.2.0", &["dev-util/hip:0/7.2"]);
+        let bound = entry("dev-libs/rccl", "0", "7.2.0", &["dev-util/hip:0/7.2="]);
+        assert_eq!(
+            find_conflicts(std::slice::from_ref(&pinned), &hip_10).len(),
+            1
+        );
+        assert!(find_conflicts(&[bound], &hip_10).is_empty());
+
+        // The retained installed 7.2 satisfies the pin by its recorded sub-slot, while the plan
+        // adds hip in another slot.
+        let hip_7 = entry("dev-util/hip", "0/7.2", "7.2.0", &[]);
+        let other_slot = [proposed("dev-util/hip", "1/1", "1.0")];
+        assert!(find_conflicts(&[pinned.clone(), hip_7], &other_slot).is_empty());
+        let hip_7_unrecorded = entry("dev-util/hip", "0", "7.2.0", &[]);
+        assert_eq!(
+            find_conflicts(&[pinned, hip_7_unrecorded], &other_slot).len(),
+            1
+        );
     }
 
     // The llvm/clang/lldb shape: a `~`-pinned family moving in lockstep
@@ -852,6 +908,7 @@ mod tests {
         let resolvconf = VdbEntry {
             cpn: Cpn::try_new("virtual/resolvconf").expect("test cpn parses"),
             slot: Some(Interned::intern("0")),
+            subslot: None,
             version: "1.0".parse().expect("test version parses"),
             active_use: Vec::new(),
             iuse: Vec::new(),
