@@ -121,7 +121,7 @@ impl PortageDependencyProvider {
             let Some(data) = self.package_data(pkg) else {
                 continue;
             };
-            let Some(vd) = data.versions.get(version) else {
+            let Some(vd) = data.version(version) else {
                 continue;
             };
 
@@ -169,7 +169,7 @@ impl PortageDependencyProvider {
                                 let selected_version =
                                     solution.get(dp).or_else(|| self.selected_virtuals.get(dp));
                                 if let Some(version) = selected_version {
-                                    if let Some(vver) = vdata.versions.get(version) {
+                                    if let Some(vver) = vdata.version(version) {
                                         for (idp, idvs, _) in vver.by_class.iter().flatten() {
                                             work.push((idp, idvs));
                                         }

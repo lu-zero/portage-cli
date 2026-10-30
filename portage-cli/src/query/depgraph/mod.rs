@@ -1087,12 +1087,16 @@ fn narrow_to_required_iuse(
     else {
         return Err(missing);
     };
-    let narrowed = with_flags
-        .iter()
-        .filter(|(_, s)| *s == slot)
-        .fold(PortageVersionSet::empty(), |set, (cpv, _)| {
-            set.union(&PortageVersionSet::singleton(cpv.version.clone()))
-        });
+    let narrowed = with_flags.iter().filter(|(_, s)| *s == slot).fold(
+        PortageVersionSet::empty(),
+        |set, (cpv, _)| {
+            set.union(&PortageVersionSet::from_operator(
+                Operator::Equal,
+                false,
+                cpv.version.clone(),
+            ))
+        },
+    );
     Ok((PortagePackage::slotted(dep.cpn, slot), narrowed))
 }
 

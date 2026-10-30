@@ -8,6 +8,7 @@ use pubgrub::{Dependencies, SelectedDependencies};
 use crate::convert;
 use crate::package::{MergeRoot, PortagePackage};
 use crate::repository::PackageRepository;
+use crate::solver_version::SolverVersion;
 use crate::use_config::{UseConfig, UseFlagState};
 use crate::version_set::PortageVersionSet;
 use version_map::VersionMap;
@@ -142,6 +143,12 @@ impl VersionData {
 
 pub(crate) struct PackageData {
     pub(crate) versions: VersionMap<VersionData>,
+}
+
+impl PackageData {
+    pub(crate) fn version(&self, version: &Version) -> Option<&VersionData> {
+        self.versions.get(&SolverVersion::new(version))
+    }
 }
 
 /// A package that is already installed, with its version and policy
@@ -682,7 +689,9 @@ impl PortageDependencyProvider {
                 let entry = packages.entry(pkg).or_insert_with(|| PackageData {
                     versions: VersionMap::new(),
                 });
-                entry.versions.insert(cpv.version.clone(), version_data);
+                entry
+                    .versions
+                    .insert(SolverVersion::new(&cpv.version), version_data);
 
                 register_virtual_choices(&mut packages, all_virtual_choices);
             }
@@ -741,7 +750,7 @@ impl PortageDependencyProvider {
                                     alts.iter().filter(|a| known.contains(a)).cloned().collect()
                                 })
                                 .unwrap_or_default();
-                            dropped_parents.push((parent.clone(), parent_ver.clone()));
+                            dropped_parents.push((parent.clone(), parent_ver.to_version()));
                             dropped_deps.push(DroppedDep {
                                 package: pkg,
                                 version_set: vs,
@@ -828,12 +837,13 @@ impl PortageDependencyProvider {
 
         // Ensure the installed version exists in self.packages so PubGrub can
         // use it even when it has been removed from the repository tree.
+        let key = SolverVersion::new(&installed.version);
         if let Some(pkg_data) = self.packages.get_mut(&installed.package)
-            && !pkg_data.versions.contains_key(&installed.version)
+            && !pkg_data.versions.contains_key(&key)
         {
             let mut vd = VersionData::from_by_class(vec![vec![], vec![], vec![], vec![], vec![]]);
             vd.installed_only = true;
-            pkg_data.versions.insert(installed.version.clone(), vd);
+            pkg_data.versions.insert(key, vd);
         }
 
         if !installed.active_use.is_empty() {
@@ -995,8 +1005,11 @@ impl PortageDependencyProvider {
     ///
     /// `false` for an installed version known only from its installed record, and for unknown pairs.
     pub fn offers(&self, package: &PortagePackage, version: &Version) -> bool {
-        self.package_data(package)
-            .is_some_and(|d| d.versions.get(version).is_some_and(|vd| !vd.installed_only))
+        self.package_data(package).is_some_and(|d| {
+            d.versions
+                .get(&SolverVersion::new(version))
+                .is_some_and(|vd| !vd.installed_only)
+        })
     }
 
     /// Whether the solved `version` of `package` came from widened
@@ -1005,8 +1018,11 @@ impl PortageDependencyProvider {
     /// `false` for anything a strict solve could have selected, and for
     /// unknown package/version pairs.
     pub fn selection_needs_unmask(&self, package: &PortagePackage, version: &Version) -> bool {
-        self.package_data(package)
-            .is_some_and(|d| d.versions.get(version).is_some_and(|vd| vd.needs_unmask))
+        self.package_data(package).is_some_and(|d| {
+            d.versions
+                .get(&SolverVersion::new(version))
+                .is_some_and(|vd| vd.needs_unmask)
+        })
     }
 
     /// The installed versions `package` names: its own slot, or every slot
@@ -1044,8 +1060,11 @@ impl PortageDependencyProvider {
     ///
     /// `false` for unknown package/version pairs.
     pub fn selection_is_installed_only(&self, package: &PortagePackage, version: &Version) -> bool {
-        self.package_data(package)
-            .is_some_and(|d| d.versions.get(version).is_some_and(|vd| vd.installed_only))
+        self.package_data(package).is_some_and(|d| {
+            d.versions
+                .get(&SolverVersion::new(version))
+                .is_some_and(|vd| vd.installed_only)
+        })
     }
 
     /// Whether the solved `version` of `package` is a live ebuild
@@ -1053,8 +1072,11 @@ impl PortageDependencyProvider {
     ///
     /// `false` for unknown package/version pairs.
     pub fn selection_is_live(&self, package: &PortagePackage, version: &Version) -> bool {
-        self.package_data(package)
-            .is_some_and(|d| d.versions.get(version).is_some_and(|vd| vd.live))
+        self.package_data(package).is_some_and(|d| {
+            d.versions
+                .get(&SolverVersion::new(version))
+                .is_some_and(|vd| vd.live)
+        })
     }
 
     /// Set whether a cross build's host-root packages list their DEPEND and BDEPEND
@@ -1093,7 +1115,7 @@ impl PortageDependencyProvider {
     /// Return all versions registered for a given package, sorted ascending
     pub fn versions_for_pkg(&self, pkg: &PortagePackage) -> Vec<Version> {
         self.package_data(pkg)
-            .map(|d| d.versions.keys().cloned().collect())
+            .map(|d| d.versions.keys().map(SolverVersion::to_version).collect())
             .unwrap_or_default()
     }
 
@@ -1105,7 +1127,7 @@ impl PortageDependencyProvider {
         ver: &Version,
     ) -> Option<Vec<(PortagePackage, PortageVersionSet)>> {
         let data = self.package_data(pkg)?;
-        let vd = data.versions.get(ver)?;
+        let vd = data.versions.get(&SolverVersion::new(ver))?;
         Some(
             vd.constraints()
                 .map(|(p, vs)| (p.clone(), vs.clone()))
@@ -1168,6 +1190,7 @@ impl PortageDependencyProvider {
             .or_insert_with(|| PackageData {
                 versions: VersionMap::new(),
             });
+        let root_ver = SolverVersion::new(&root_ver);
         entry.versions.insert(root_ver.clone(), vd);
 
         // Re-solve so a pin sees its new dependency closure. Each pass adds
@@ -1178,7 +1201,7 @@ impl PortageDependencyProvider {
         self.upgrade_pins.clear();
         self.hard_pins.clear();
         const MAX_RESOLVE_ITERS: usize = 4;
-        let mut solution = pubgrub::resolve(self, root.clone(), root_ver.clone())?;
+        let mut solution = self.solve(&root, &root_ver)?;
         // Post-solve: collect USE flag requirements for all packages. Must run
         // before filtering virtuals because per-branch constraints live in
         // Choice/SlotChoice nodes.
@@ -1194,7 +1217,8 @@ impl PortageDependencyProvider {
             if hard {
                 self.hard_pins.insert(pkg.clone());
             }
-            let accepted = pubgrub::resolve(self, root.clone(), root_ver.clone())
+            let accepted = self
+                .solve(&root, &root_ver)
                 .ok()
                 .filter(|next| !hard || next.get(&pkg) == Some(&ver));
             if let Some(next) = accepted {
@@ -1235,6 +1259,20 @@ impl PortageDependencyProvider {
             .into_iter()
             .filter(|(p, _)| !p.is_virtual())
             .collect())
+    }
+
+    /// One PubGrub run from `root`, with the solution in the caller's versions
+    #[allow(clippy::result_large_err)]
+    fn solve(
+        &self,
+        root: &PortagePackage,
+        root_ver: &SolverVersion,
+    ) -> std::result::Result<
+        SelectedDependencies<PortagePackage, Version>,
+        pubgrub::PubGrubError<Self>,
+    > {
+        let keys = pubgrub::resolve(self, root.clone(), root_ver.clone())?;
+        Ok(keys.into_iter().map(|(p, v)| (p, v.to_version())).collect())
     }
 
     /// The next pin the re-solve loop should try, if any remain.
@@ -1385,9 +1423,9 @@ impl PortageDependencyProvider {
     /// the caller falls back to the default `max()` (= first-listed) pick.
     pub(crate) fn newest_installed_choice_branch<'a>(
         &self,
-        candidates: &[(&'a Version, &'a VersionData)],
-    ) -> Option<&'a Version> {
-        let mut best: Option<&'a Version> = None;
+        candidates: &[(&'a SolverVersion, &'a VersionData)],
+    ) -> Option<&'a SolverVersion> {
+        let mut best: Option<&'a SolverVersion> = None;
         let mut best_inst_ver: Option<Version> = None;
         for &(ver, vd) in candidates {
             if let Some(iv) = self.branch_installed_ver(vd, Self::BRANCH_DEPTH_LIMIT) {
@@ -1423,6 +1461,7 @@ fn register_virtual_choices(
             versions: VersionMap::new(),
         });
         for (ver, deps) in vc.versions {
+            let ver = SolverVersion::new(&ver);
             // Merge, don't overwrite: a UseDecision node can be produced by both
             // the conditional-dep path and the REQUIRED_USE encoder for the same
             // (cpn, flag). Selecting a version must enforce *all* of its deps.
@@ -1440,7 +1479,7 @@ fn register_virtual_choices(
         // which OR-group branch is already satisfied without rebuilds.
         for (ver, udeps) in vc.branch_use_deps {
             if !udeps.is_empty()
-                && let Some(vd) = entry.versions.get_mut(&ver)
+                && let Some(vd) = entry.versions.get_mut(&SolverVersion::new(&ver))
             {
                 vd.use_deps = udeps;
             }
@@ -1449,7 +1488,7 @@ fn register_virtual_choices(
         // selected OR / UseDecision alternative.
         for (ver, blockers) in vc.branch_blockers {
             if !blockers.is_empty()
-                && let Some(vd) = entry.versions.get_mut(&ver)
+                && let Some(vd) = entry.versions.get_mut(&SolverVersion::new(&ver))
             {
                 vd.blockers.extend(blockers);
             }
@@ -1469,7 +1508,7 @@ fn register_virtual_choices(
 /// PubGrub never backtracks into the untagged one.
 type VirtualBranch = (
     PortagePackage,
-    Version,
+    SolverVersion,
     Vec<(PortagePackage, PortageVersionSet)>,
 );
 
@@ -1501,7 +1540,7 @@ fn propagate_needs_unmask(packages: &mut HashMap<PortagePackage, PackageData>) {
                 packages.get(tpkg).is_none_or(|d| {
                     !d.versions
                         .iter()
-                        .any(|(v, vd)| tvs.contains(v) && !vd.needs_unmask)
+                        .any(|(v, vd)| tvs.contains_key(v) && !vd.needs_unmask)
                 })
             });
             if let Some(data) = packages.get_mut(node)

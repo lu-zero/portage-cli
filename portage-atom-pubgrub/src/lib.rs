@@ -49,6 +49,7 @@ mod provider;
 mod repository;
 mod required_use;
 mod solver_impl;
+mod solver_version;
 mod use_config;
 mod validate;
 mod version_set;
@@ -67,6 +68,7 @@ pub use repository::{
     PackageVersions, WithInstalled, rank_slots_by_version,
 };
 pub use required_use::RequiredUse;
+pub use solver_version::SolverVersion;
 pub use use_config::{
     ProfileUseNode, UseConfig, UseFlagState, UseLayer, UseOverride, resolve_effective_use,
 };

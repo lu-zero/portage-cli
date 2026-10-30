@@ -4,6 +4,8 @@ use portage_atom::{Operator, Revision, Suffix, SuffixKind, Version};
 use pubgrub::VersionSet;
 use version_ranges::Ranges;
 
+use crate::solver_version::SolverVersion;
+
 /// A PubGrub `VersionSet` backed by PMS version ranges
 ///
 /// Maps PMS dependency operators (`>=`, `~`, `=*`, etc.) to `Ranges<Version>`,
@@ -11,7 +13,7 @@ use version_ranges::Ranges;
 ///
 /// See [PMS 8.3.1](https://projects.gentoo.org/pms/9/pms.html#version_specs).
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct PortageVersionSet(Ranges<Version>);
+pub struct PortageVersionSet(Ranges<SolverVersion>);
 
 impl PortageVersionSet {
     /// Create a version set matching all versions
@@ -25,36 +27,36 @@ impl PortageVersionSet {
     }
 
     /// Returns the inner ranges
-    pub fn ranges(&self) -> &Ranges<Version> {
-        &self.0
-    }
-
     /// Returns `true` if the given version is in this set
     pub fn contains(&self, v: &Version) -> bool {
-        use pubgrub::VersionSet;
-        <Self as VersionSet>::contains(self, v)
+        self.0.contains(&SolverVersion::new(v))
+    }
+
+    pub(crate) fn contains_key(&self, key: &SolverVersion) -> bool {
+        self.0.contains(key)
     }
 
     /// Convert a PMS operator, glob flag, and version to a version set
     ///
     /// See [PMS 8.3.1](https://projects.gentoo.org/pms/9/pms.html#version_specs).
     pub fn from_operator(op: Operator, glob: bool, v: Version) -> Self {
+        let key = SolverVersion::new;
         match op {
-            Operator::GreaterOrEqual => Self(Ranges::higher_than(v)),
-            Operator::Greater => Self(Ranges::strictly_higher_than(v)),
-            Operator::LessOrEqual => Self(Ranges::lower_than(v)),
-            Operator::Less => Self(Ranges::strictly_lower_than(v)),
+            Operator::GreaterOrEqual => Self(Ranges::higher_than(key(&v))),
+            Operator::Greater => Self(Ranges::strictly_higher_than(key(&v))),
+            Operator::LessOrEqual => Self(Ranges::lower_than(key(&v))),
+            Operator::Less => Self(Ranges::strictly_lower_than(key(&v))),
             Operator::Equal if glob => {
                 let (lower, upper) = v.glob_bounds();
                 match upper {
-                    Some(upper) => Self(Ranges::between(lower, upper)),
-                    None => Self(Ranges::higher_than(lower)),
+                    Some(upper) => Self(Ranges::between(key(&lower), key(&upper))),
+                    None => Self(Ranges::higher_than(key(&lower))),
                 }
             }
-            Operator::Equal => Self(Ranges::singleton(v)),
+            Operator::Equal => Self(Ranges::singleton(key(&v))),
             Operator::Approximate => {
                 let (base, bumped) = approximate_bounds(&v);
-                Self(Ranges::between(base, bumped))
+                Self(Ranges::between(key(&base), key(&bumped)))
             }
         }
     }
@@ -79,10 +81,8 @@ impl PortageVersionSet {
         let mut set = Self::from_operator(op, glob, v.clone());
         for candidate in known() {
             if set.contains(&candidate) && !candidate.glob_matches(&v) {
-                set = Self(
-                    set.0
-                        .intersection(&Ranges::singleton(candidate).complement()),
-                );
+                let cut = Ranges::singleton(SolverVersion::new(&candidate)).complement();
+                set = Self(set.0.intersection(&cut));
             }
         }
         set
@@ -90,7 +90,7 @@ impl PortageVersionSet {
 }
 
 impl VersionSet for PortageVersionSet {
-    type V = Version;
+    type V = SolverVersion;
 
     fn empty() -> Self {
         Self(Ranges::empty())

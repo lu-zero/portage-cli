@@ -1,5 +1,6 @@
 use super::*;
 use crate::repository::{InMemoryRepository, PackageDeps, PackageVersions};
+use crate::solver_version::SolverVersion;
 use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Dep, DepEntry, DepList};
 use pubgrub::DependencyProvider as _;
@@ -70,7 +71,8 @@ fn choose_highest_version() {
     );
     let version = provider
         .choose_version(&openssl, &PortageVersionSet::any())
-        .unwrap();
+        .unwrap()
+        .map(|v| v.to_version());
     assert_eq!(version, Some(Version::parse("3.1.0").unwrap()));
 }
 
@@ -86,7 +88,11 @@ fn resolve_simple() {
         portage_atom::Cpn::parse("dev-lang/rust").unwrap(),
         Interned::intern("0"),
     );
-    let result = pubgrub::resolve(&provider, root, Version::parse("1.75.0").unwrap());
+    let result = pubgrub::resolve(
+        &provider,
+        root,
+        SolverVersion::from(&Version::parse("1.75.0").unwrap()),
+    );
     assert!(result.is_ok());
     let solution = result.unwrap();
     assert!(
@@ -135,7 +141,11 @@ fn multi_slot_installs_both_when_required() {
     let provider = PortageDependencyProvider::new(repo);
     let root =
         PortagePackage::slotted(Cpn::parse("app-misc/myapp").unwrap(), Interned::intern("0"));
-    let result = pubgrub::resolve(&provider, root, Version::parse("1.0").unwrap());
+    let result = pubgrub::resolve(
+        &provider,
+        root,
+        SolverVersion::from(&Version::parse("1.0").unwrap()),
+    );
     assert!(result.is_ok());
     let solution = result.unwrap();
     assert!(
@@ -184,7 +194,11 @@ fn resolve_slot_operator_equal() {
     let provider = PortageDependencyProvider::new(repo);
     let root =
         PortagePackage::slotted(Cpn::parse("app-misc/myapp").unwrap(), Interned::intern("0"));
-    let result = pubgrub::resolve(&provider, root, Version::parse("1.0").unwrap());
+    let result = pubgrub::resolve(
+        &provider,
+        root,
+        SolverVersion::from(&Version::parse("1.0").unwrap()),
+    );
     assert!(result.is_ok());
     let solution = result.unwrap();
     assert!(
@@ -223,7 +237,11 @@ fn resolve_slot_operator_star() {
     let provider = PortageDependencyProvider::new(repo);
     let root =
         PortagePackage::slotted(Cpn::parse("app-misc/myapp").unwrap(), Interned::intern("0"));
-    let result = pubgrub::resolve(&provider, root, Version::parse("1.0").unwrap());
+    let result = pubgrub::resolve(
+        &provider,
+        root,
+        SolverVersion::from(&Version::parse("1.0").unwrap()),
+    );
     assert!(result.is_ok());
 }
 
@@ -3676,7 +3694,8 @@ fn widened_candidate_loses_to_accepted_in_range() {
     assert_eq!(
         provider
             .choose_version(&pkg, &PortageVersionSet::any())
-            .unwrap(),
+            .unwrap()
+            .map(|v| v.to_version()),
         Some(Version::parse("1.0").unwrap())
     );
 }
@@ -3692,7 +3711,8 @@ fn tagged_only_range_resolves_and_reports() {
     // Strict filtering would make this range a hard `NoVersions` failure.
     let chosen = provider
         .choose_version(&pkg, &PortageVersionSet::any())
-        .unwrap();
+        .unwrap()
+        .map(|v| v.to_version());
     assert_eq!(chosen, Some(Version::parse("2.0").unwrap()));
     assert!(provider.selection_needs_unmask(&pkg, chosen.as_ref().unwrap()));
 }
@@ -3716,7 +3736,8 @@ fn tagged_release_beats_tagged_live() {
     assert_eq!(
         provider
             .choose_version(&pkg, &PortageVersionSet::any())
-            .unwrap(),
+            .unwrap()
+            .map(|v| v.to_version()),
         Some(Version::parse("2.0").unwrap())
     );
 }
