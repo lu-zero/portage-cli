@@ -274,9 +274,9 @@ impl PortageDependencyProvider {
                             // would silently unmask it outside the autounmask
                             // report path.
                             d.versions
-                                .keys()
-                                .filter(|v| v > &inst_ver && !d.versions[*v].needs_unmask)
-                                .max()
+                                .iter()
+                                .rfind(|(v, vd)| *v > inst_ver && !vd.needs_unmask)
+                                .map(|(v, _)| v)
                         })
                         .map(|new_ver| (pkg.clone(), new_ver.clone()))
                 })

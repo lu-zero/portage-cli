@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::repository::IUseDefault;
@@ -12,12 +10,14 @@ use crate::package::{MergeRoot, PortagePackage};
 use crate::repository::PackageRepository;
 use crate::use_config::{UseConfig, UseFlagState};
 use crate::version_set::PortageVersionSet;
+use version_map::VersionMap;
 
 /// Post-solve USE-requirement analysis
 mod post_solve;
 /// The PubGrub `DependencyProvider` impl (prioritise / choose_version /
 /// get_dependencies)
 mod solve;
+mod version_map;
 
 /// Whether an installed package should be favored or locked during resolution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,7 +142,7 @@ impl VersionData {
 }
 
 pub(crate) struct PackageData {
-    pub(crate) versions: BTreeMap<Version, VersionData>,
+    pub(crate) versions: VersionMap<VersionData>,
 }
 
 /// A package that is already installed, with its version and policy
@@ -681,7 +681,7 @@ impl PortageDependencyProvider {
                 version_data.installed_only = recorded.is_some();
 
                 let entry = packages.entry(pkg).or_insert_with(|| PackageData {
-                    versions: BTreeMap::new(),
+                    versions: VersionMap::new(),
                 });
                 entry.versions.insert(cpv.version.clone(), version_data);
 
@@ -1196,7 +1196,7 @@ impl PortageDependencyProvider {
             .packages
             .entry(root.clone())
             .or_insert_with(|| PackageData {
-                versions: BTreeMap::new(),
+                versions: VersionMap::new(),
             });
         entry.versions.insert(root_ver.clone(), vd);
 
@@ -1456,7 +1456,7 @@ fn register_virtual_choices(
 ) {
     for vc in choices {
         let entry = packages.entry(vc.package).or_insert_with(|| PackageData {
-            versions: BTreeMap::new(),
+            versions: VersionMap::new(),
         });
         for (ver, deps) in vc.versions {
             // Merge, don't overwrite: a UseDecision node can be produced by both
@@ -1526,7 +1526,7 @@ fn propagate_needs_unmask(packages: &mut HashMap<PortagePackage, PackageData>) {
         ) {
             continue;
         }
-        for (ver, vd) in &data.versions {
+        for (ver, vd) in data.versions.iter() {
             if let Dependencies::Available(cs) = &vd.merged {
                 let targets: Vec<_> = cs.iter().map(|(p, vs)| (p.clone(), vs.clone())).collect();
                 // The allow-none branch (no deps) always stays untagged.
