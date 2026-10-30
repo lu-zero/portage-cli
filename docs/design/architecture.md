@@ -51,7 +51,7 @@ Versions below are the **workspace** package versions in each crate's
 |-------|---------|---------|
 | `gentoo-interner` | 0.4.1 | String interning |
 | `gentoo-core` | 0.6.2 | Architecture types, variants |
-| `portage-atom` | 0.13.0 | PMS atom parsing |
+| `portage-atom` | 0.12.0 | PMS atom parsing |
 | `portage-metadata` | 0.11.0 | md5-cache entry parsing, EAPI, keywords |
 | `portage-atom-pubgrub` | 0.9.0 | PubGrub solver bridge (default in `em`) |
 | `portage-atom-resolvo` | 0.9.0 | SAT dependency solver (resolvo bridge) |
@@ -107,7 +107,7 @@ PMS atom parser — the vocabulary every other crate speaks.
 - `struct VersionParts` — the editable fields of a `Version` (`to_parts()`, `From<VersionParts>`)
 - `struct Revision(u64)` — Package revision (`-rN`)
 - `enum Operator` — `<`, `<=`, `=`, `~`, `>=`, `>`
-- `struct Suffix` / `enum SuffixKind` — Version suffix segment (`Alpha`, `Beta`, `Pre`, `Rc`, `Post`)
+- `struct Suffix` / `enum SuffixKind` — Version suffix segment (`Alpha`, `Beta`, `Pre`, `Rc`, `P`)
 - `struct Slot` — Slot + optional subslot
 - `enum SlotDep` / `enum SlotOperator` — `:=`, `:*`
 - `struct UseDep` — USE flag constraint
@@ -568,7 +568,7 @@ only a package's own facts):
 | USE-dep constraints (`[flag]`, `[flag?]`, `[flag=]`) | crate `validate.rs` | `check_use_deps` |
 | Blockers (`!foo` / `!!foo`) | crate `validate.rs` + `conflicts` | classify; hard conflict → exit 1; WouldUnmerge on real merge |
 | `::repo` constraints | crate `validate.rs` | `check_repo_constraints` |
-| Reverse-dependency conflicts | resolve `conflicts.rs` | every installed pkg's deps vs the plan; each broken kept package is re-solved as a target (up to 3 rounds, off with `--complete-graph-if-new-ver n`) that moves to the version nearest its installed one (newest under `-uD`), so it is updated too or holds the update back; what remains is reported as "Dependency constraint conflict" |
+| Reverse-dependency conflicts | resolve `conflicts.rs` | every installed pkg's deps vs the plan; each broken kept package is re-solved as a target (up to 3 rounds, off with `--complete-graph-if-new-ver n`) that moves to the oldest offered version at or above its installed one (newest under `-uD`), so it is updated too or holds the update back; what remains is reported as "Dependency constraint conflict" |
 | `REQUIRED_USE` | cli `required_use.rs` | **Level A** — see below |
 
 Both installed-package checks (reverse-dependency conflicts and blocker removal) read an installed

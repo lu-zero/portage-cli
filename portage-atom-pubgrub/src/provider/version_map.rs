@@ -2,8 +2,8 @@ use portage_atom::Version;
 
 /// A package's versions in ascending order, stored as one sorted `Vec`
 ///
-/// Most provider packages are virtual choice nodes with two or three
-/// branches; a `BTreeMap` would allocate an eleven-slot leaf for each.
+/// Most provider packages are virtual choice nodes with two or three branches,
+/// which a `Vec` holds without a `BTreeMap`'s per-node allocation.
 pub(crate) struct VersionMap<V>(Vec<(Version, V)>);
 
 impl<V> VersionMap<V> {

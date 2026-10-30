@@ -221,10 +221,7 @@ impl fmt::Display for Operator {
 /// Dot-separated numeric components
 ///
 /// `SmallVec`-backed: real-world versions almost always have 4 or fewer
-/// components, so this avoids a heap allocation for the common case —
-/// `Version` is cloned constantly during dependency resolution (per solver
-/// decision, per dependency edge, inside the range-algebra of the
-/// version-set crate it's compared through).
+/// components, so the common case needs no heap allocation.
 pub type Numbers = SmallVec<[u64; 4]>;
 
 /// Package version according to PMS
@@ -267,7 +264,7 @@ pub struct Version(Repr);
 pub struct VersionParts {
     /// Dot-separated numeric components (e.g. `[1, 2, 3]` for `1.2.3`)
     ///
-    /// Each must fit in a `u64`; a longer one is a parse error rather than a truncation.
+    /// At least one (PMS 3.2). Each must fit in a `u64`; a longer one is a parse error, not a truncation.
     #[cfg_attr(feature = "builder", builder(start_fn))]
     pub numbers: Numbers,
     /// Zeros written before each component's value (`[2, 1]` for `003.03`); empty when none are
@@ -308,8 +305,8 @@ impl Hash for Version {
 impl Version {
     /// Create a version from its dot-separated numeric components
     ///
-    /// `Version::new(&[1, 75, 0])` produces `1.75.0`. All optional fields
-    /// (letter, suffixes, revision, glob) default to their zero values.
+    /// `Version::new(&[1, 75, 0])` produces `1.75.0`. The letter, suffixes and
+    /// revision are absent.
     ///
     /// # Panics
     ///
@@ -631,7 +628,7 @@ fn bump_last_numeric(v: &mut VersionParts) -> bool {
             Some(next) => {
                 v.numbers[i] = next;
                 if let Some(zeros) = v.leading_zeros.get_mut(i) {
-                    let width = *zeros + decimal_len(current);
+                    let width = zeros.saturating_add(decimal_len(current));
                     *zeros = width.saturating_sub(decimal_len(next));
                 }
                 return true;
@@ -753,7 +750,7 @@ pub(crate) fn parse_version(input: &mut &str) -> ModalResult<Version> {
         .parse_next(input)
 }
 
-pub(crate) fn parse_version_no_raw(input: &mut &str) -> ModalResult<(Version, bool)> {
+pub(crate) fn parse_dep_version(input: &mut &str) -> ModalResult<(Version, bool)> {
     (parse_parts, opt('*'))
         .map(|(parts, glob)| (Version::from(parts), glob.is_some()))
         .context(StrContext::Label("version"))
@@ -832,8 +829,7 @@ mod tests {
         assert!(v4 < v1);
     }
 
-    // Issue 3: glob (*) suffix is now handled at the Dep level, not Version.
-    // See dep.rs tests for glob matching via Dep::parse("=pkg-ver*").
+    // The glob (*) suffix is a `Dep` property; see the dep.rs tests.
 
     #[test]
     fn test_version_component_count() {
@@ -917,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_preserves_leading_zeros() {
+    fn test_spelling_preserves_leading_zeros() {
         let v = Version::parse("26.04.0").unwrap();
         assert_eq!(
             v.components().collect::<Vec<_>>().as_slice(),
@@ -927,7 +923,7 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_in_cpv_round_trip() {
+    fn test_spelling_in_cpv_round_trip() {
         use crate::cpv::Cpv;
 
         let cpv = Cpv::parse("app-accessibility/kontrast-26.04.0").unwrap();
@@ -979,19 +975,19 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_none_for_programmatic() {
+    fn test_built_version_displays_canonically() {
         let v = Version::new(&[1, 2, 3]);
         assert_eq!(v.to_string(), "1.2.3");
     }
 
     #[test]
-    fn test_raw_with_suffix_and_revision() {
+    fn test_spelling_with_suffix_and_revision() {
         let v = Version::parse("1.2.3a_rc1_p2-r5").unwrap();
         assert_eq!(v.to_string(), "1.2.3a_rc1_p2-r5");
     }
 
     #[test]
-    fn test_raw_glob_preserved() {
+    fn test_spelling_glob_preserved() {
         use crate::dep::Dep;
 
         let dep = Dep::parse("=dev-util/nvidia-cuda-toolkit-11*").unwrap();

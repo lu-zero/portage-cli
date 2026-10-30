@@ -9,7 +9,7 @@ use winnow::prelude::*;
 use crate::cpn::{Cpn, parse_category, parse_package};
 use crate::error::{Error, Result};
 use crate::parsers::{find_last_hyphen_digit, parse_ident_with_dot_star};
-use crate::version::{Version, parse_version, parse_version_no_raw};
+use crate::version::{Version, parse_dep_version, parse_version};
 
 /// Category/Package/Version (Cpv)
 ///
@@ -140,7 +140,7 @@ pub(crate) fn parse_cpv_with_glob(input: &mut &str) -> ModalResult<(Cpv, bool)> 
             return fail.parse_next(input);
         }
     };
-    let (version, glob) = match parse_whole(ver_str, parse_version_no_raw) {
+    let (version, glob) = match parse_whole(ver_str, parse_dep_version) {
         Ok(parsed) => parsed,
         Err(ErrMode::Cut(err)) => return Err(ErrMode::Cut(err)),
         Err(_) => {

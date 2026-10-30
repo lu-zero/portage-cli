@@ -346,7 +346,7 @@ impl PortageDependencyProvider {
         // (`InstalledPolicy::Rebuild`) expands the full build-time closure instead.
         if let Some((inst, policy)) = self.installed.get(package)
             && !matches!(policy, InstalledPolicy::Rebuild)
-            && inst.clone() == *version
+            && inst == version
         {
             // `package.provided`: no real VDB record backs this, so unlike a
             // genuinely installed package there is nothing to trust past "the

@@ -309,7 +309,7 @@ pub struct PortageDependencyProvider {
     pub(crate) root_targets: std::collections::HashMap<PortagePackage, PortageVersionSet>,
     /// Root targets added only to keep an installed package's dependencies satisfied
     ///
-    /// They move to the version nearest the installed one rather than the newest.
+    /// They move to the oldest offered version at or above the installed one, rather than the newest.
     pub(crate) repair_targets: HashSet<PortagePackage>,
     /// Whether a cross build's host-root packages list their DEPEND and BDEPEND
     pub(crate) with_bdeps: bool,
@@ -1137,8 +1137,8 @@ impl PortageDependencyProvider {
 
     /// [`Self::resolve_targets`], plus installed packages the solve must keep satisfied
     ///
-    /// Each repair target moves to the offered version nearest its installed one (the
-    /// newest under `prefer_update`) and is never reported as held back.
+    /// Each repair target moves to the oldest offered version at or above its installed one (else,
+    /// and under `prefer_update`, the newest) and is never reported as held back.
     #[allow(clippy::result_large_err)]
     pub fn resolve_with_repairs(
         &mut self,
