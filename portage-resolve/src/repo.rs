@@ -596,6 +596,32 @@ fn restrict_has_conditional(entries: &[portage_metadata::RestrictExpr]) -> bool 
     })
 }
 
+/// True if every token of a `RESTRICT`/`PROPERTIES` value is accepted, conditional ones included
+///
+/// A conditional can only drop tokens from the implicit AND, so this holds for any USE.
+fn every_restrict_token_accepted(
+    entries: &[portage_metadata::RestrictExpr],
+    accept: &portage_repo::AcceptSet,
+) -> bool {
+    use portage_metadata::RestrictExpr;
+    entries.iter().all(|e| match e {
+        RestrictExpr::Token(name) => accept.accepts(name),
+        RestrictExpr::UseConditional { entries, .. } => {
+            every_restrict_token_accepted(entries, accept)
+        }
+    })
+}
+
+fn restrict_needs_effective(
+    entries: &[portage_metadata::RestrictExpr],
+    accept: &AcceptOverlay,
+    cpv: &Cpv,
+    slot: Option<Interned<DefaultInterner>>,
+) -> bool {
+    restrict_has_conditional(entries)
+        && !every_restrict_token_accepted(entries, &accept.effective_for(cpv, slot))
+}
+
 /// Whether every entry of a `RESTRICT`/`PROPERTIES` value is accepted under
 /// `accept`, evaluating conditionals against the version's effective USE only
 /// when the value actually has any (same hot-path shortcut as `license_ok_for`)
@@ -612,8 +638,11 @@ fn restrict_family_ok_for(
     }
     let slot = Some(meta.slot.slot);
     let a = accept.effective_for(cpv, slot);
+    if every_restrict_token_accepted(entries, &a) {
+        return true;
+    }
     if !restrict_has_conditional(entries) {
-        return a.accepts_restrict(entries, &|_| false);
+        return false;
     }
     if let Some(cfg) = effective {
         return a.accepts_restrict(entries, &use_predicate(cfg));
@@ -959,7 +988,7 @@ impl<'a> PolicyFactsRef<'a> {
         } else {
             let effective = if let Some(effective) = facts.effective.clone() {
                 Some(effective)
-            } else if version_needs_effective(meta) {
+            } else if version_needs_effective(&raw_policy, cpv, meta) {
                 Some(crate::effective_use::effective_use_metadata(
                     &raw_policy,
                     cpv,
@@ -1050,16 +1079,15 @@ impl<'a> PolicyFactsRef<'a> {
     }
 }
 
-fn version_needs_effective(meta: &portage_metadata::EbuildMetadata) -> bool {
+fn version_needs_effective(
+    policy: &ResolvePolicy,
+    cpv: &Cpv,
+    meta: &portage_metadata::EbuildMetadata,
+) -> bool {
+    let slot = Some(meta.slot.slot);
     meta.license.as_ref().is_some_and(license_has_conditional)
-        || meta
-            .properties
-            .iter()
-            .any(|entry| restrict_has_conditional(std::slice::from_ref(entry)))
-        || meta
-            .restrict
-            .iter()
-            .any(|entry| restrict_has_conditional(std::slice::from_ref(entry)))
+        || restrict_needs_effective(&meta.properties, policy.accept_properties, cpv, slot)
+        || restrict_needs_effective(&meta.restrict, policy.accept_restrict, cpv, slot)
 }
 
 /// The resolved keyword/mask/license/USE policy
@@ -3691,6 +3719,53 @@ mod tests {
             ..adapter
         };
         assert!(adapter_allow.version_accepted(&cpv, entry));
+    }
+
+    // A denied token inside a conditional rejects the version only while its flag is on
+    #[test]
+    fn conditional_restrict_token_follows_the_flag() {
+        let arch = Arch::intern("amd64");
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let deny_bindist = AcceptRestrict::new(
+            AcceptSet::from_tokens_plain(&["*".into(), "-bindist".into()]),
+            Vec::new(),
+        );
+        let accept_all = AcceptOverlay::new(accept_all_licenses(), Vec::new());
+        for (iuse, accepted) in [("+bindist", false), ("bindist", true)] {
+            let cache = PolicyFactsCache::new();
+            let (data, cpv) = repo_with(
+                "net-misc/thing-1.0",
+                &format!(
+                    "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nIUSE={iuse}\n\
+                     RESTRICT=bindist? ( bindist )\nDESCRIPTION=t\n"
+                ),
+            );
+            let entry = &data.versions[&cpv.cpn][0].1;
+            for facts in [None, Some(cache.generation_for(&[]))] {
+                let policy = ResolvePolicy {
+                    accept_keywords: &ak,
+                    package_mask: &PolicyMaskList::EMPTY,
+                    package_unmask: &PolicyMaskList::EMPTY,
+                    accept_licenses: &accept_all,
+                    accept_properties: &accept_all,
+                    accept_restrict: &deny_bindist,
+                    defaults: empty_layer(),
+                    conf: empty_layer(),
+                    env_use: empty_layer(),
+                    package_use: &[],
+                    profile_package_use: &[],
+                    force_mask: &ForceMask::default(),
+                    facts,
+                };
+                let repo = repo_name_of(&data, &cpv);
+                assert_eq!(
+                    version_accepted_for(&policy, &cpv, entry, repo),
+                    accepted,
+                    "IUSE={iuse}, cached={}",
+                    policy.facts.is_some()
+                );
+            }
+        }
     }
 
     // `target_package`'s unslotted return is the caller's signal that nothing
