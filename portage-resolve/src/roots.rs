@@ -273,11 +273,6 @@ impl Roots {
         self.base.as_deref().filter(|b| *b != self.merge_root())
     }
 
-    /// `ESYSROOT` / cross sysroot: `PORTAGE_CONFIGROOT` when set, else base
-    pub fn sysroot(&self) -> Option<&Utf8Path> {
-        self.config.as_deref().or(self.base.as_deref())
-    }
-
     /// Load `repos.conf` portage-style for this invocation
     ///
     /// Global defaults + confdir under the config root, plus the

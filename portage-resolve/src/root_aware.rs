@@ -21,11 +21,11 @@ use crate::Roots;
 #[derive(Debug, Clone)]
 pub struct CrossContext {
     /// Whether dual-root cross planning is active for this invocation
-    /// (config≠install root, foreign target arch, or BROOT genuinely
+    /// (base≠install root, foreign target arch, or BROOT genuinely
     /// differing from the target) — true for `--root`/`--prefix`/cross,
-    /// false for bare and `--local`
+    /// false for bare and `--local`, whatever the config root
     pub active: bool,
-    /// `ESYSROOT` / `PORTAGE_CONFIGROOT`: where `DEPEND` is resolved
+    /// The installed system `DEPEND` is resolved against: the base root, never the config root
     pub sysroot: Utf8PathBuf,
     /// `ROOT` / `EROOT`: where target packages install
     pub target: Utf8PathBuf,
@@ -84,8 +84,9 @@ impl CrossContext {
 /// overlay-ness cleared), wrongly reporting the real host as the destination
 /// for a `MergeRoot::Host` entry under an unprivileged `--prefix` overlay.
 pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
+    // The config root only says where `etc/portage` is: the installed system is the base.
     let sysroot = roots
-        .sysroot()
+        .base()
         .map(|p| p.to_owned())
         .unwrap_or_else(|| Utf8PathBuf::from("/"));
     let target = roots.merge_root().to_owned();
@@ -104,7 +105,7 @@ pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
     // rejects the order of. `roots.broot() == None` means "trivially equals
     // merge_root", so that case reads as "doesn't differ" correctly too.
     let broot_differs = roots.broot().is_some_and(|b| b.as_str() != target.as_str());
-    let (chost, cbuild) = read_chost_cbuild(&sysroot);
+    let (chost, cbuild) = read_chost_cbuild(roots.config().unwrap_or(&sysroot));
     let cross_arch = match (chost.as_deref(), cbuild.as_deref()) {
         (Some(c), Some(b)) => c != b,
         _ => false,
@@ -255,6 +256,37 @@ mod tests {
         let roots = crate::Roots::default();
         let cross = detect(&roots, Utf8Path::new("/"));
         assert!(!cross.active);
+    }
+
+    // `--config-root` only moves where configuration is read: it is not a second root, but CHOST comes from it
+    #[test]
+    fn a_config_root_is_not_a_system_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(config.join("etc/portage")).unwrap();
+        std::fs::write(
+            config.join("etc/portage/make.conf"),
+            "CHOST=riscv64-unknown-linux-gnu\nCBUILD=aarch64-unknown-linux-gnu\n",
+        )
+        .unwrap();
+
+        let bare = crate::Roots::default().with_config(Some(config.to_owned()));
+        let cross = detect(&bare, Utf8Path::new("/"));
+        assert_eq!(cross.sysroot.as_str(), "/");
+        assert_eq!(cross.chost.as_deref(), Some("riscv64-unknown-linux-gnu"));
+
+        let plain = crate::Roots::default().with_config(Some(Utf8PathBuf::from("/srv/cfg")));
+        assert!(!detect(&plain, Utf8Path::new("/")).active);
+
+        let local = crate::Roots::for_test("/root/local-test").with_config(Some(config.to_owned()));
+        let cross = detect(&local, Utf8Path::new("/root/local-test"));
+        assert_eq!(cross.sysroot.as_str(), "/root/local-test");
+
+        let offset = crate::Roots::for_test_root_with_broot("/srv/x", "/")
+            .with_config(Some(Utf8PathBuf::from("/srv/cfg")));
+        let cross = detect(&offset, Utf8Path::new("/"));
+        assert!(cross.active, "--root: BROOT differs from the target");
+        assert_eq!(cross.sysroot.as_str(), "/srv/x");
     }
 
     // The combined `--prefix --target` case: `roots` here would be
