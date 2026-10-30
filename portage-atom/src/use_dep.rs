@@ -44,7 +44,7 @@ pub enum UseDepKind {
     /// must also be enabled; otherwise unconstrained
     Conditional,
     /// `[!flag?]` — if the *parent's* flag is disabled, the dependency's flag
-    /// must be enabled; otherwise unconstrained
+    /// must be disabled too; otherwise unconstrained
     ConditionalInverse,
     /// `[flag=]` — the dependency's flag must match the parent's flag state
     /// (both enabled or both disabled)
