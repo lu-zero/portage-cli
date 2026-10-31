@@ -175,21 +175,18 @@ pub(super) fn assemble(
                 root_labels.push(label);
             }
         }
+        let pristine = repo::ResolvePolicy {
+            package_use: &pristine_package_use,
+            facts: None,
+            ..final_policy
+        };
         let entries = package_use::build_entries(
             &combined,
             &root_atoms,
             &root_labels,
             &edges,
-            &defaults,
-            &env_use,
-            &pristine_package_use,
-            &profile_package_use,
-            &conf,
-            &|cpv| {
-                data.cache_entry(&cpv.cpn, &cpv.version)
-                    .map(effective_use::iuse_defaults)
-                    .unwrap_or_default()
-            },
+            &pristine,
+            &data,
             &matched_flags,
             &use_conflicts,
         );

@@ -157,6 +157,30 @@ fn solve_with(
     })
 }
 
+/// A policy accepting every `amd64` package, configured by `pu` alone
+fn plain_policy(pu: &'static [(Dep, Vec<UseOverride>)]) -> ResolvePolicy<'static> {
+    let arch = Arch::intern("amd64");
+    let lic: &'static AcceptOverlay = Box::leak(Box::new(AcceptOverlay::new(
+        AcceptSet::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),
+        Vec::new(),
+    )));
+    ResolvePolicy {
+        accept_keywords: Box::leak(Box::new(AcceptKeywords::from_global(&arch, &["amd64"]))),
+        package_mask: &crate::repo::PolicyMaskList::EMPTY,
+        package_unmask: &crate::repo::PolicyMaskList::EMPTY,
+        accept_licenses: lic,
+        accept_properties: lic,
+        accept_restrict: lic,
+        defaults: empty_layer(),
+        conf: empty_layer(),
+        env_use: empty_layer(),
+        package_use: pu,
+        profile_package_use: &[],
+        force_mask: Box::leak(Box::new(ForceMask::default())),
+        facts: None,
+    }
+}
+
 /// A single (default, no-autosolve) solve — shows the Tier-2 behaviour
 fn solve(data: &RepoData, targets: &[&str]) -> Outcome {
     solve_with(data, targets, &[]).expect("solve")
@@ -418,18 +442,13 @@ fn a_plain_demand_wins_over_a_mirror_one_by_flipping_its_parent() {
             .all(|r| r.required_enabled.is_empty() && r.required_disabled.is_empty())
     );
 
-    let empty = portage_atom_pubgrub::UseLayer::empty();
     let entries = crate::package_use::build_entries(
         &out.applied,
         &[],
         &[],
         &[],
-        &empty,
-        &empty,
-        &[],
-        &[],
-        &empty,
-        &|_| HashMap::new(),
+        &plain_policy(&[]),
+        &data,
         &out.matched,
         &out.conflicts,
     );
@@ -503,4 +522,37 @@ fn a_mirror_parent_pulled_in_by_a_flip_is_flipped_too() {
         left.iter()
             .all(|r| r.required_enabled.is_empty() && r.required_disabled.is_empty())
     );
+}
+
+// `dev-lang/rust` requires `net-misc/curl[http2]`: with `+http2` in curl's IUSE no package.use
+// line is needed, as with emerge.
+#[test]
+fn a_flag_enabled_by_an_iuse_default_needs_no_package_use_line() {
+    let req = UseFlagRequirement {
+        package: portage_atom_pubgrub::PortagePackage::unslotted(
+            portage_atom::Cpn::parse("net-misc/curl").unwrap(),
+        ),
+        version: portage_atom::Version::parse("1").unwrap(),
+        upgrade_to: None,
+        required_enabled: vec![portage_atom::interner::Interned::intern("http2")],
+        required_disabled: Vec::new(),
+        required_by: vec!["dev-lang/rust".to_owned()],
+        demands: Vec::new(),
+    };
+    let lines = |iuse: &str| {
+        let data = repo_from(&[("net-misc/curl-1", &leaf(iuse, ""))]);
+        crate::package_use::build_entries(
+            std::slice::from_ref(&req),
+            &[],
+            &[],
+            &[],
+            &plain_policy(&[]),
+            &data,
+            &[],
+            &[],
+        )
+        .len()
+    };
+    assert_eq!(lines("http2"), 1, "no default: change needed");
+    assert_eq!(lines("+http2"), 0, "+http2 default satisfies it");
 }

@@ -31,7 +31,7 @@ pub fn apply_ceded(cfg: &mut UseConfig, cpn: Cpn, ceded: &[CededFlag]) {
 
 /// Build the `iuse_defaults` map `resolve_effective_use` needs from a cache
 /// entry's parsed `IUSE` list (`+flag`/`-flag` → enabled/disabled default)
-pub fn iuse_defaults(cache: &CacheEntry) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
+fn iuse_defaults(cache: &CacheEntry) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
     iuse_defaults_from_metadata(&cache.metadata)
 }
 
@@ -77,7 +77,7 @@ pub(crate) fn enabled_iuse_defaults_from_metadata(
 /// Must run **after** `resolve_effective_use` and **before** [`apply_ceded`] so
 /// env-level `-*` cannot wipe forced flags (and ceded decisions still win
 /// last).
-pub fn apply_force_mask(
+fn apply_force_mask(
     cfg: &mut UseConfig,
     force_mask: &ForceMask,
     cpv: &Cpv,
