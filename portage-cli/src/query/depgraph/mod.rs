@@ -914,6 +914,30 @@ pub(super) type RootUseDeps = (
     String,
 );
 
+/// Where each `package.mask`-masked candidate is masked, read back only for a reported target
+fn mask_reasons(
+    candidates: &[repo::AutounmaskCandidate],
+    data: &repo::RepoData,
+    policy: &repo::ResolvePolicy,
+) -> Vec<(Cpv, repo::MaskReason)> {
+    candidates
+        .iter()
+        .filter(|c| {
+            c.reasons
+                .iter()
+                .any(|r| matches!(r, repo::FilterReason::Masked))
+        })
+        .filter_map(|c| {
+            let slot = &data.cache_entry(&c.cpv.cpn, &c.cpv.version)?.metadata.slot;
+            let reason =
+                policy
+                    .package_mask
+                    .reason(&c.cpv, slot, repo::repo_name_of(data, &c.cpv))?;
+            Some((c.cpv.clone(), reason))
+        })
+        .collect()
+}
+
 /// The installed version in each slot of each package
 pub(super) fn installed_slots(
     entries: &[installed::VdbEntry],
@@ -989,18 +1013,20 @@ fn classify_root_targets(
         let (pkg, vs) = match unsatisfied {
             Ok(root) => root,
             Err((problem, reasons, missing_iuse)) => {
-                let unsat = output::UnsatisfiableTarget {
+                let mut unsat = output::UnsatisfiableTarget {
                     atom: atom.clone(),
                     origin: target.origin.clone(),
                     problem,
                     reasons,
                     missing_iuse,
+                    mask_reasons: Vec::new(),
                 };
                 // `--emptytree` deliberately ignores what is installed, so a
                 // satisfying VDB entry must not silence the atom there.
                 let satisfied = !empty && targets::installed_satisfies(&dep, installed);
                 match targets::classify_root_target(&target.origin, satisfied, selective) {
                     targets::RootTargetDecision::DropWithWarning => {
+                        unsat.mask_reasons = mask_reasons(&unsat.reasons, data, target_policy);
                         unsatisfiable.push(unsat);
                         continue;
                     }
@@ -1019,6 +1045,7 @@ fn classify_root_targets(
                         continue;
                     }
                     targets::RootTargetDecision::Fatal => {
+                        unsat.mask_reasons = mask_reasons(&unsat.reasons, data, target_policy);
                         fatal.push(unsat);
                         continue;
                     }

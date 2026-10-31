@@ -820,11 +820,78 @@ pub struct PolicyFactsRef<'a> {
 #[derive(Debug, Default, Clone)]
 pub struct PolicyMaskList {
     by_cpn: Option<HashMap<Cpn, Vec<Dep>>>,
+    /// The files the atoms are written in, the one that wins first
+    files: Option<Vec<camino::Utf8PathBuf>>,
+}
+
+/// Where a mask is written, with the comment block above it
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaskReason {
+    /// The `package.mask` file holding the entry
+    pub file: camino::Utf8PathBuf,
+    /// The comment lines that apply to the entry, `#` included; empty when none does
+    pub comment: Vec<String>,
 }
 
 impl PolicyMaskList {
     /// An empty list that can be borrowed without allocation.
-    pub const EMPTY: Self = Self { by_cpn: None };
+    pub const EMPTY: Self = Self {
+        by_cpn: None,
+        files: None,
+    };
+
+    /// The files the atoms come from, the one that wins first, for [`reason`](Self::reason)
+    pub fn with_files(mut self, files: Vec<camino::Utf8PathBuf>) -> Self {
+        self.files = Some(files);
+        self
+    }
+
+    /// The file and comment of the entry that masks `cpv`, read back from the files on demand
+    ///
+    /// The first file with an entry for one of the atoms in force wins. A comment applies to
+    /// the entries that follow it until a blank line.
+    pub fn reason(
+        &self,
+        cpv: &Cpv,
+        slot: &portage_atom::Slot,
+        repo: Interned<DefaultInterner>,
+    ) -> Option<MaskReason> {
+        let in_force: Vec<&Dep> = self
+            .by_cpn
+            .as_ref()?
+            .get(&cpv.cpn)?
+            .iter()
+            .filter(|dep| {
+                mask_matches(dep, cpv)
+                    && mask_slot_matches(dep, slot)
+                    && mask_repo_matches(dep, repo)
+            })
+            .collect();
+        if in_force.is_empty() {
+            return None;
+        }
+        let files = self.files.iter().flatten().flat_map(|path| {
+            portage_repo::list_config_files(path, portage_repo::ConfigFilesMode::Flat)
+                .unwrap_or_default()
+        });
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let mut comment: Vec<String> = Vec::new();
+            for line in text.lines().map(str::trim) {
+                if line.is_empty() {
+                    comment.clear();
+                } else if line.starts_with('#') {
+                    comment.push(line.to_owned());
+                } else if Dep::parse(line).is_ok_and(|dep| in_force.contains(&&dep)) {
+                    let file = camino::Utf8PathBuf::from_path_buf(file).ok()?;
+                    return Some(MaskReason { file, comment });
+                }
+            }
+        }
+        None
+    }
 
     /// Build a list from the final, already-folded policy entries.
     pub fn new(entries: Vec<Dep>) -> Self {
@@ -837,6 +904,7 @@ impl PolicyMaskList {
         }
         Self {
             by_cpn: Some(by_cpn),
+            files: None,
         }
     }
 
@@ -1212,7 +1280,7 @@ impl ResolvedPolicy {
             accept_licenses,
             accept_properties,
             accept_restrict,
-            package_mask: PolicyMaskList::new(env.package_mask),
+            package_mask: PolicyMaskList::new(env.package_mask).with_files(env.package_mask_files),
             package_unmask: PolicyMaskList::new(env.package_unmask),
             defaults: env.defaults,
             conf: env.conf,
@@ -4658,5 +4726,77 @@ mod tests {
             live_upper_bound(entries, &selected, None).map(|v| v.to_string()),
             Some("22.0.0.9999".to_string())
         );
+    }
+
+    // The first file with an entry in force wins; a comment covers the entries under it until a blank line.
+    #[test]
+    fn a_mask_reason_is_the_first_file_entry_in_force_and_its_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let user = root.join("etc/portage/package.mask");
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::write(user.join("local"), "# my reason\n=app-misc/foo-1\n").unwrap();
+        let repo_file = root.join("repo/profiles/package.mask");
+        std::fs::create_dir_all(repo_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &repo_file,
+            "# Dev <dev@example.org> (2026-01-01)\n# Old.\napp-misc/foo\napp-misc/bar\n\napp-misc/baz\n",
+        )
+        .unwrap();
+        let atoms = [
+            "app-misc/foo",
+            "=app-misc/foo-1",
+            "app-misc/bar",
+            "app-misc/baz",
+        ];
+        let mask = PolicyMaskList::new(atoms.iter().map(|a| Dep::parse(a).unwrap()).collect())
+            .with_files(vec![user.clone(), repo_file.clone()]);
+        let reason = |cpv: &str| {
+            let cpv = Cpv::parse(cpv).unwrap();
+            mask.reason(
+                &cpv,
+                &portage_atom::Slot::from_name(Interned::intern("0")),
+                Interned::intern("gentoo"),
+            )
+        };
+        let repo_block = vec![
+            "# Dev <dev@example.org> (2026-01-01)".to_owned(),
+            "# Old.".to_owned(),
+        ];
+        assert_eq!(
+            reason("app-misc/foo-1"),
+            Some(MaskReason {
+                file: user.join("local"),
+                comment: vec!["# my reason".to_owned()]
+            })
+        );
+        assert_eq!(
+            reason("app-misc/foo-2"),
+            Some(MaskReason {
+                file: repo_file.clone(),
+                comment: repo_block.clone()
+            })
+        );
+        assert_eq!(
+            reason("app-misc/bar-1"),
+            Some(MaskReason {
+                file: repo_file.clone(),
+                comment: repo_block
+            })
+        );
+        assert_eq!(
+            reason("app-misc/baz-1"),
+            Some(MaskReason {
+                file: repo_file.clone(),
+                comment: Vec::new()
+            })
+        );
+        assert_eq!(reason("app-misc/other-1"), None);
+
+        let lifted = PolicyMaskList::new(vec![Dep::parse("app-misc/foo").unwrap()])
+            .with_files(vec![repo_file]);
+        let bar = Cpv::parse("app-misc/bar-1").unwrap();
+        let slot = portage_atom::Slot::from_name(Interned::intern("0"));
+        assert_eq!(lifted.reason(&bar, &slot, Interned::intern("gentoo")), None);
     }
 }

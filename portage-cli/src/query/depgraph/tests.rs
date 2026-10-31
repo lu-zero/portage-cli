@@ -574,6 +574,28 @@ fn a_target_sub_slot_pins_the_version() {
     );
 }
 
+// A target masked in package.mask is reported with the file and the comment above the entry.
+#[test]
+fn a_masked_target_shows_the_mask_file_and_comment() {
+    let fix = fixture(&pair(), &[]);
+    let mask = fix.root.join("etc/portage/package.mask");
+    std::fs::write(&mask, "# Broken on this box, see bug 1.\napp-misc/foo\n").unwrap();
+    let atoms = [TargetAtom::explicit("app-misc/foo")];
+    let Err(err) = try_solve(&fix, Solve::new(&atoms)) else {
+        panic!("a masked target must not resolve");
+    };
+    let message = err
+        .downcast_ref::<crate::error::UnsatisfiableTarget>()
+        .map(|e| e.0.clone())
+        .unwrap_or_default();
+    assert!(
+        message.contains(&format!(
+            "    {mask}:\n    # Broken on this box, see bug 1."
+        )),
+        "{message}"
+    );
+}
+
 #[test]
 fn every_fatal_unsatisfiable_target_is_reported() {
     let pkgs = [

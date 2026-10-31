@@ -583,6 +583,8 @@ pub(super) struct UnsatisfiableTarget {
     /// For [`TargetProblem::MissingIuse`](super::targets::TargetProblem::MissingIuse), each
     /// accepted version and the required flags its IUSE lacks
     pub missing_iuse: super::MissingIuse,
+    /// Where each `package.mask`-masked candidate is masked
+    pub mask_reasons: Vec<(Cpv, super::repo::MaskReason)>,
 }
 
 /// Portage's `(masked by: …)` parenthetical for one filtered version
@@ -652,8 +654,8 @@ fn target_lines(target: &UnsatisfiableTarget, data: &RepoData, multi_repo: bool)
             seg(plain_style, format!(" (Missing IUSE: {})", flags.join(" "))),
         ]
     }));
-    lines.extend(target.reasons.iter().map(|c| {
-        vec![
+    for c in &target.reasons {
+        lines.push(vec![
             seg(plain_style, "  "),
             seg(C_PKG, format!("{}-{}", c.cpv.cpn, c.cpv.version)),
             seg(
@@ -661,8 +663,19 @@ fn target_lines(target: &UnsatisfiableTarget, data: &RepoData, multi_repo: bool)
                 format!("::{}", super::repo::repo_name_of(data, &c.cpv)),
             ),
             seg(plain_style, format!(" ({})", masked_by(&c.reasons))),
-        ]
-    }));
+        ]);
+        // As emerge does: the file, then the comment block of the entry that masks it.
+        let Some((_, reason)) = target.mask_reasons.iter().find(|(cpv, _)| *cpv == c.cpv) else {
+            continue;
+        };
+        lines.push(vec![seg(plain_style, format!("    {}:", reason.file))]);
+        lines.extend(
+            reason
+                .comment
+                .iter()
+                .map(|l| vec![seg(plain_style, format!("    {l}"))]),
+        );
+    }
     lines
 }
 

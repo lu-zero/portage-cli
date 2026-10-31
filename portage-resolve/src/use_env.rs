@@ -42,6 +42,8 @@ pub struct UseEnv {
     /// Masked packages: repo-global `profiles/package.mask`, the profile
     /// stack, and `/etc/portage/package.mask`
     pub package_mask: Vec<Dep>,
+    /// The `package.mask` files behind `package_mask`, the one that wins first
+    pub package_mask_files: Vec<Utf8PathBuf>,
     /// Unmasks from the profiles and `/etc/portage/package.unmask` — a matching
     /// entry cancels any mask for that package
     pub package_unmask: Vec<Dep>,
@@ -431,6 +433,18 @@ async fn compute_use_env(
         package_mask.extend(load_dep_list(overlay.join("package.mask").as_str()));
         package_unmask.extend(load_dep_list(overlay.join("package.unmask").as_str()));
     }
+    let profile_masks = stack
+        .profiles()
+        .iter()
+        .rev()
+        .filter_map(|p| Utf8PathBuf::from_path_buf(p.path().join("package.mask")).ok());
+    let package_mask_files: Vec<Utf8PathBuf> = config_overlay
+        .map(|overlay| overlay.join("package.mask"))
+        .into_iter()
+        .chain([portage_dir.join("package.mask")])
+        .chain(profile_masks)
+        .chain([repo.path().join("profiles/package.mask")])
+        .collect();
 
     // `package.provided` — CPVs the system supplies externally (profile stack,
     // incl. the folded-in `/etc/portage/profile`). Fed to the solver as
@@ -486,6 +500,7 @@ async fn compute_use_env(
         package_use,
         profile_package_use,
         package_mask,
+        package_mask_files,
         package_unmask,
         force_mask,
         accept_keywords,
