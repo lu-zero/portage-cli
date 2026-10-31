@@ -22,7 +22,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = { workspace = true }
 camino = { workspace = true }
-winnow-args = "0.5.0"
+winnow-args = "0.6.0"
 minijinja = { workspace = true }
 spdx = { workspace = true }
 cargo-lock = { workspace = true }

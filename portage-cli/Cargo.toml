@@ -82,7 +82,7 @@ roxmltree = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 portage-binpkg = { workspace = true }
-winnow-args = "0.5.0"
+winnow-args = "0.6.0"
 tokio = { workspace = true, features = ["sync", "signal"] }
 futures-util = { workspace = true }
 thiserror = { workspace = true }
@@ -113,8 +113,8 @@ pseudoroot = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
-winnow-args-spec = "0.5.0"
-winnow-args-markdown = "0.5.0"
+winnow-args-spec = "0.6.0"
+winnow-args-markdown = "0.6.0"
 
 [[bench]]
 name = "elfscan"

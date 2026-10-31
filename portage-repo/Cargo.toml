@@ -32,7 +32,7 @@ brush-winnow-args-adapter = { workspace = true }
 brush-builtins = { workspace = true }
 brush-parser = { workspace = true }
 anstyle = { workspace = true }
-winnow-args = { version = "0.5.0", default-features = false, features = ["derive", "help-text"] }
+winnow-args = { version = "0.6.0", default-features = false, features = ["derive", "help-text"] }
 tokio = { workspace = true, features = ["rt"] }
 regex = { workspace = true }
 thiserror = { workspace = true }
