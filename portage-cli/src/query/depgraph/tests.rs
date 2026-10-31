@@ -425,7 +425,7 @@ fn newuse(atoms: &[TargetAtom], deep: bool) -> Solve<'_> {
     opts
 }
 
-// `-N` checks root targets, and every installed package only under `--deep`. A drifted package is
+// `-N` checks root targets, and every installed package only under `--deep`, even below a merged one. A drifted package is
 // compared with the best visible version, whose new IUSE counts, and rebuilds onto it.
 #[test]
 fn newuse_checks_targets_or_everything_under_deep_against_the_best_version() {
@@ -448,6 +448,12 @@ fn newuse_checks_targets_or_everything_under_deep_against_the_best_version() {
         "dep drifted, but is no target"
     );
     assert_eq!(names(&solve(&fix, newuse(&top, true))), ["app-misc/dep-2"]);
+    let fresh = fixture(&pkgs, &["app-misc/dep-1", "app-misc/other-1"]);
+    assert_eq!(
+        names(&solve(&fresh, newuse(&top, false))),
+        ["app-misc/top-1"],
+        "a merged package's drifted dependency stays without --deep"
+    );
     let other = [TargetAtom::explicit("app-misc/other")];
     assert_eq!(
         names(&solve(&fix, newuse(&other, false))),
