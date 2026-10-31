@@ -771,7 +771,7 @@ pub(super) async fn source_incremental(
     // Source the layer's content through brush.
     match source {
         ConfSource::File(path) => shell.source_make_defaults(path).await?,
-        ConfSource::Str(content) => shell.run_string(content).await?,
+        ConfSource::Str(content) => shell.source_conf_str(content).await?,
     }
 
     // Collect this file's contributions to the true incrementals only.

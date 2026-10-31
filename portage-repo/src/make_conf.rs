@@ -234,7 +234,7 @@ impl MakeConf {
         }
 
         let params = shell.default_exec_params();
-        shell
+        let result = shell
             .run_string(
                 self.src.as_str(),
                 &brush_core::SourceInfo::from("make.conf"),
@@ -242,6 +242,7 @@ impl MakeConf {
             )
             .await
             .map_err(|e| Error::Shell(e.to_string()))?;
+        crate::error::require_completed("make.conf", result)?;
 
         let names: Vec<String> = shell
             .env()

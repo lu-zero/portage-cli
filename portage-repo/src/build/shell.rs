@@ -16,7 +16,7 @@ use super::pty;
 use super::stubs;
 use super::terminal;
 use super::ver_funcs;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, require_completed, require_normal_flow};
 use crate::repo::ebuild::Ebuild;
 use crate::repo::repository::Repository;
 use crate::source::SourceContext;
@@ -1128,7 +1128,7 @@ impl EbuildShell {
                 }
                 None => format!("{{ {func_name} ; }} < /dev/null"),
             };
-            let phase_result = self.run_string(&invocation).await;
+            let phase_result = self.run_named(func_name, &invocation).await;
             // Drain and close the pty before looking at how the phase went: a
             // failing phase's own output is the first thing anyone reads.
             drop(pty);
@@ -1499,13 +1499,10 @@ impl EbuildShell {
                 .await
                 .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path())))?,
         };
-        if !source_result.exit_code.is_success() {
+        if let Err(error) = require_completed(&format!("sourcing {}", ebuild.path()), source_result)
+        {
             let _ = self.die_flag.take();
-            return Err(Error::Shell(format!(
-                "sourcing {} returned status {}",
-                ebuild.path(),
-                u8::from(source_result.exit_code)
-            )));
+            return Err(error);
         }
         if let Some(message) = self.die_flag.take() {
             return Err(Error::Shell(format!("die: {message}")));
@@ -2186,7 +2183,8 @@ impl EbuildShell {
         // environment (see `need_source` above).
         if need_source {
             let params = self.shell.default_exec_params();
-            self.shell
+            let sourced = self
+                .shell
                 .source_script(
                     ebuild.path().as_std_path(),
                     std::iter::empty::<&str>(),
@@ -2194,6 +2192,7 @@ impl EbuildShell {
                 )
                 .await
                 .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path())))?;
+            require_completed(&format!("sourcing {}", ebuild.path()), sourced)?;
 
             // Combine eclass E_* contributions with ebuild-defined values (PMS 10.2).
             for (&var, &e_var) in accum_vars.iter().zip(e_vars.iter()) {
@@ -2258,33 +2257,6 @@ impl EbuildShell {
         self.call_phase_function(func_name).await
     }
 
-    /// Pre-parse every `.eclass` file in the shell's configured eclass directories
-    /// into the shared AST cache.
-    ///
-    /// Calling this once before spawning workers guarantees 100% cache hits during
-    /// ebuild processing, eliminating all per-worker parse work and any concurrent
-    /// insert races.  Directories are searched in order; the first definition of
-    /// each eclass name wins (same priority as `inherit`).
-    /// Source an eclass by name.
-    ///
-    /// Searches the configured eclass directories in order.
-    pub async fn source_eclass(&mut self, name: &str) -> Result<()> {
-        self.invalidate_baseline();
-        let filename = format!("{name}.eclass");
-        for dir in &self.eclass_dirs {
-            let path: Utf8PathBuf = dir.join(&filename);
-            if path.is_file() {
-                let params = self.shell.default_exec_params();
-                self.shell
-                    .source_script(path.as_std_path(), std::iter::empty::<&str>(), &params)
-                    .await
-                    .map_err(|e| Error::Shell(format!("sourcing eclass {name}: {e}")))?;
-                return Ok(());
-            }
-        }
-        Err(Error::Shell(format!("eclass not found: {name}")))
-    }
-
     /// Source a `make.defaults` file
     ///
     /// Variable assignments (with `${VAR}` expansion) are evaluated in the
@@ -2294,11 +2266,28 @@ impl EbuildShell {
     pub async fn source_make_defaults(&mut self, path: &Path) -> Result<()> {
         self.invalidate_baseline();
         let params = self.shell.default_exec_params();
-        self.shell
+        let sourced = self
+            .shell
             .source_script(path, std::iter::empty::<&str>(), &params)
             .await
             .map_err(|e| Error::Shell(format!("sourcing make.defaults {}: {e}", path.display())))?;
-        Ok(())
+        require_completed(
+            &format!("sourcing make.defaults {}", path.display()),
+            sourced,
+        )
+    }
+
+    /// Evaluate conf-layer content held in memory, as strictly as [`Self::source_make_defaults`].
+    pub(crate) async fn source_conf_str(&mut self, content: &str) -> Result<()> {
+        self.invalidate_baseline();
+        let params = self.shell.default_exec_params();
+        let source_info = SourceInfo::from("conf layer");
+        let result = self
+            .shell
+            .run_string(content, &source_info, &params)
+            .await
+            .map_err(|e| Error::Shell(format!("conf layer: {e}")))?;
+        require_completed("conf layer", result)
     }
 
     /// Source a per-package environment file (`/etc/portage/package.env` points
@@ -2314,11 +2303,12 @@ impl EbuildShell {
     pub async fn source_env_file(&mut self, path: &Path) -> Result<()> {
         self.invalidate_baseline();
         let params = self.shell.default_exec_params();
-        self.shell
+        let sourced = self
+            .shell
             .source_script(path, std::iter::empty::<&str>(), &params)
             .await
             .map_err(|e| Error::Shell(format!("sourcing env file {}: {e}", path.display())))?;
-        Ok(())
+        require_completed(&format!("sourcing env file {}", path.display()), sourced)
     }
 
     /// Export every variable in the shell's environment so a real subprocess an
@@ -2527,15 +2517,26 @@ impl EbuildShell {
         );
     }
 
-    /// Run a bash script string directly in the shell without writing a temporary file
+    /// Run a bash script string directly in the shell without writing a temporary file.
+    ///
+    /// A non-zero status is not an error; it remains the shell's last status.
+    /// `exit`, `return`, `break`, and `continue` are errors, because this
+    /// caller cannot apply that control flow.
     pub async fn run_string(&mut self, script: &str) -> Result<()> {
+        self.run_named("run_string", script).await
+    }
+
+    /// [`Self::run_string`], with errors naming `what` ran.
+    async fn run_named(&mut self, what: &str, script: &str) -> Result<()> {
         let params = self.shell.default_exec_params();
         let source_info = SourceInfo::from("inline");
-        self.shell
+        let result = self
+            .shell
             .run_string(script, &source_info, &params)
             .await
-            .map_err(|e| Error::Shell(format!("run_string: {e}")))?;
-        Ok(())
+            .map_err(|e| Error::Shell(format!("{what}: {e}")))?;
+        // The phase runner ignores a trailing non-zero status.
+        require_normal_flow(what, &result)
     }
 
     /// Set the active USE flags for this shell session

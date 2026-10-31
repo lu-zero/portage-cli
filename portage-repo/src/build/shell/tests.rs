@@ -2646,3 +2646,98 @@ async fn use_expand_groups_follow_the_filtered_use() {
         .unwrap();
     assert_eq!(shell.get_var("_exported").as_deref(), Some("3"));
 }
+
+fn write_status_repo(repo_root: &std::path::Path, eclass: &str, ebuild_body: &str) -> Utf8PathBuf {
+    std::fs::create_dir_all(repo_root.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_root.join("profiles")).unwrap();
+    std::fs::create_dir_all(repo_root.join("eclass")).unwrap();
+    std::fs::write(repo_root.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_root.join("profiles/repo_name"), "t\n").unwrap();
+    std::fs::write(repo_root.join("eclass/probe.eclass"), eclass).unwrap();
+    let ebdir = repo_root.join("cat/pkg");
+    std::fs::create_dir_all(&ebdir).unwrap();
+    let path = ebdir.join("pkg-1.ebuild");
+    std::fs::write(
+        &path,
+        format!(
+            "EAPI=8\ninherit probe\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\n\
+             S=\"${{WORKDIR}}\"\npkg_setup() {{ :; }}\n{ebuild_body}"
+        ),
+    )
+    .unwrap();
+    Utf8PathBuf::from_path_buf(path).unwrap()
+}
+
+#[tokio::test]
+async fn an_eclass_that_fails_or_exits_dies_in_inherit() {
+    for (eclass, expected) in [
+        ("PROBE=1\nfalse\n", "returned status 1"),
+        ("exit 3\nPROBE=1\n", "exited 3"),
+    ] {
+        let dir = tempdir().unwrap();
+        let path = write_status_repo(&dir.path().join("repo"), eclass, "");
+        let repo = Repository::builder()
+            .in_memory_cache()
+            .open(dir.path().join("repo"))
+            .unwrap();
+        let mut shell = repo.shell().await.unwrap();
+        let ebuild = Ebuild::from_path(&path).unwrap();
+        let err = shell
+            .source_ebuild(&ebuild)
+            .await
+            .expect_err("a failed eclass must stop the ebuild");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("inherit: sourcing probe") && msg.contains(expected),
+            "{eclass:?}: {msg}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_default_phase_returns_the_status_of_its_failed_emake() {
+    let dir = tempdir().unwrap();
+    let body = "src_compile() { printf 'all:\\n\\t@exit 5\\n' > Makefile; default; \
+                echo $? > \"${T}/status\"; }\n";
+    let path = write_status_repo(&dir.path().join("repo"), "", body);
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(dir.path().join("repo"))
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    let ebuild = Ebuild::from_path(&path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+    let err = shell
+        .run_phase(&ebuild, "compile", &work, std::path::Path::new("/"))
+        .await
+        .expect_err("a failed emake dies");
+    assert!(err.to_string().contains("emake failed"), "{err}");
+    let t = shell.get_var("T").unwrap();
+    let status = std::fs::read_to_string(std::path::Path::new(&t).join("status")).unwrap();
+    assert_eq!(status.trim(), "2", "make's own status, not a stand-in");
+}
+
+#[tokio::test]
+async fn an_env_file_that_exits_is_an_error() {
+    let dir = tempdir().unwrap();
+    let path = write_status_repo(&dir.path().join("repo"), "", "");
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(dir.path().join("repo"))
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    let ebuild = Ebuild::from_path(&path).unwrap();
+    shell.source_ebuild(&ebuild).await.unwrap();
+    let env_file = dir.path().join("probe.conf");
+    std::fs::write(&env_file, "exit 0\nCFLAGS=-O3\n").unwrap();
+    let err = shell
+        .source_env_file(&env_file)
+        .await
+        .expect_err("an exit must not let the file count as read");
+    assert!(err.to_string().contains("exited 0"), "{err}");
+    assert_ne!(shell.get_var("CFLAGS").as_deref(), Some("-O3"));
+}

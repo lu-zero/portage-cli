@@ -96,3 +96,45 @@ impl Error {
 
 /// Result type for portage-repo operations
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// `Ok` when `result` is status 0 and control flow is normal.
+///
+/// A non-zero status, or a `return` / `exit` / `break` / `continue` that
+/// escaped the script, is a shell error named by `what`.
+pub(crate) fn require_completed(what: &str, result: brush_core::ExecutionResult) -> Result<()> {
+    if result.is_success() && result.is_normal_flow() {
+        Ok(())
+    } else {
+        Err(shell_stopped(what, &result))
+    }
+}
+
+/// `Ok` when `result` did not `return`, `exit`, `break`, or `continue`.
+///
+/// A non-zero status with normal flow is not an error. The phase runner
+/// ignores a phase function's trailing status and aborts through `die`.
+pub(crate) fn require_normal_flow(what: &str, result: &brush_core::ExecutionResult) -> Result<()> {
+    if result.is_normal_flow() {
+        Ok(())
+    } else {
+        Err(shell_stopped(what, result))
+    }
+}
+
+fn shell_stopped(what: &str, result: &brush_core::ExecutionResult) -> Error {
+    Error::Shell(stopped_message(what, result))
+}
+
+/// How `result` stopped `what`, for a script that had to finish at status 0 with normal flow.
+pub(crate) fn stopped_message(what: &str, result: &brush_core::ExecutionResult) -> String {
+    let status = u8::from(result.exit_code);
+    if result.is_exit() {
+        format!("{what} exited {status}")
+    } else if result.is_return_or_exit() {
+        format!("{what} returned {status}")
+    } else if !result.is_normal_flow() {
+        format!("{what} interrupted the shell")
+    } else {
+        format!("{what} returned status {status}")
+    }
+}

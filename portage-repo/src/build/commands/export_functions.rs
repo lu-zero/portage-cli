@@ -49,8 +49,6 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for ExportFunctionsC
 
         let source_info = brush_core::SourceInfo::from("EXPORT_FUNCTIONS");
         let params = shell.default_exec_params();
-        shell.run_string(&script, &source_info, &params).await?;
-
-        Ok(brush_core::ExecutionResult::success())
+        shell.run_string(&script, &source_info, &params).await
     }
 }

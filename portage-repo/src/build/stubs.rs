@@ -20,11 +20,11 @@ use crate::error::{Error, Result};
 pub(crate) async fn register(shell: &mut Shell) -> Result<()> {
     let params = shell.default_exec_params();
     let source_info = SourceInfo::from("portage-builtins");
-    shell
+    let result = shell
         .run_string(PORTAGE_FUNCTIONS, &source_info, &params)
         .await
         .map_err(|e| Error::Shell(format!("registering portage builtins: {e}")))?;
-    Ok(())
+    crate::error::require_completed("registering portage builtins", result)
 }
 
 /// All Portage-specific bash function definitions

@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use brush_core::builtins;
 
 use super::die::DieFlag;
+use crate::error::stopped_message;
 use brush_parser::ast::Program;
 
 /// Accumulating metadata variables (PMS 10.2) for EAPI < 8
@@ -166,12 +167,10 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for InheritCommand {
 
             let eclass_file = find_eclass(context.shell, eclass);
             let Some(eclass_file) = eclass_file else {
-                let message = format!("inherit: eclass not found: {eclass}");
-                if let Some(flag) = context.shell.builtin_state::<DieFlag>() {
-                    flag.raise(&message);
-                }
-                let _ = writeln!(context.params.stderr(context.shell), "die: {message}");
-                return Ok(brush_core::ExecutionResult::new(1));
+                return Ok(die(
+                    &context,
+                    &format!("inherit: eclass not found: {eclass}"),
+                ));
             };
 
             let saved: Vec<(&'static str, String)> = accum_vars
@@ -209,12 +208,10 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for InheritCommand {
             let program = match cached {
                 Ok(program) => program,
                 Err(error) => {
-                    let message = format!("inherit: failed to parse {eclass}: {error}");
-                    if let Some(flag) = context.shell.builtin_state::<DieFlag>() {
-                        flag.raise(&message);
-                    }
-                    let _ = writeln!(context.params.stderr(context.shell), "die: {message}");
-                    return Ok(brush_core::ExecutionResult::new(1));
+                    return Ok(die(
+                        &context,
+                        &format!("inherit: failed to parse {eclass}: {error}"),
+                    ));
                 }
             };
 
@@ -223,12 +220,14 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for InheritCommand {
                 .source_program(program, &source_info, std::iter::empty::<&str>(), &params)
                 .await;
 
-            if let Err(e) = result {
-                let _ = writeln!(
-                    context.params.stderr(context.shell),
-                    "die: inherit: failed to source {eclass}: {e}"
-                );
-                return Ok(brush_core::ExecutionResult::new(1));
+            // Like `source eclass || die`: an eclass must finish at status 0 with normal flow.
+            let failure = match result {
+                Err(e) => Some(format!("inherit: failed to source {eclass}: {e}")),
+                Ok(r) if r.is_success() && r.is_normal_flow() => None,
+                Ok(r) => Some(stopped_message(&format!("inherit: sourcing {eclass}"), &r)),
+            };
+            if let Some(message) = failure {
+                return Ok(die(&context, &message));
             }
 
             set_var(context.shell, "ECLASS", &prev_eclass);
@@ -295,6 +294,18 @@ pub(crate) fn parse_eclass_file(
     parser
         .parse_program()
         .map_err(|e| format!("parse error in {}: {e}", path))
+}
+
+/// Raise `die` with `message` and fail the `inherit` call.
+fn die<SE: brush_core::ShellExtensions>(
+    context: &brush_core::ExecutionContext<'_, SE>,
+    message: &str,
+) -> brush_core::ExecutionResult {
+    if let Some(flag) = context.shell.builtin_state::<DieFlag>() {
+        flag.raise(message);
+    }
+    let _ = writeln!(context.params.stderr(context.shell), "die: {message}");
+    brush_core::ExecutionResult::new(1)
 }
 
 fn get_var<SE: brush_core::ShellExtensions>(shell: &brush_core::Shell<SE>, name: &str) -> String {

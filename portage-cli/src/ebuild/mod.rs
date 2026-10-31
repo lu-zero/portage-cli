@@ -3523,15 +3523,12 @@ async fn restore_package_environment(
     };
 
     if !functions.is_empty() {
-        // A file that does not parse is reported by the shell and not run, and
-        // the call still succeeds: the last line tells whether it was read.
-        const READ: &str = "__em_saved_environment_read";
-        write(&format!("{variables}{functions}\n{READ}=1\n"))?;
-        let sourced = shell.source_env_file(path.as_std_path()).await;
-        let read = shell.get_var(READ).is_some();
-        let _ = shell.run_string(&format!("unset {READ}")).await;
-        sourced.with_context(|| format!("sourcing the saved environment {path}"))?;
-        anyhow::ensure!(read, "the saved environment does not read back: {path}");
+        // A file that does not parse fails here with a non-zero status.
+        write(&format!("{variables}{functions}\n"))?;
+        shell
+            .source_env_file(path.as_std_path())
+            .await
+            .with_context(|| format!("sourcing the saved environment {path}"))?;
         shell.mark_phase_sourced(ebuild);
         return Ok(());
     }
@@ -4383,7 +4380,7 @@ mod tests {
             restore_package_environment(&mut shell, &ebuild, &work, &saved, &Shield::default())
                 .await;
         let error = format!("{:#}", restored.unwrap_err());
-        assert!(error.contains("does not read back"), "{error}");
+        assert!(error.contains("sourcing the saved environment"), "{error}");
         assert!(!shell.is_phase_sourced(&ebuild));
     }
 

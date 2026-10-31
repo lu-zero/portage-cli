@@ -77,6 +77,30 @@ fn die_now<SE: brush_core::ShellExtensions>(
     let _ = writeln!(params.stderr(shell), "die: {msg}");
 }
 
+/// `Some` when `result` failed or asked the caller to return, exit, break,
+/// or continue.
+fn halted(result: brush_core::ExecutionResult) -> Option<brush_core::ExecutionResult> {
+    if result.is_success() && result.is_normal_flow() {
+        None
+    } else {
+        Some(result)
+    }
+}
+
+/// `die` on a normal non-zero status, then [`halted`].
+fn failed_emake<SE: brush_core::ShellExtensions>(
+    result: brush_core::ExecutionResult,
+    params: &brush_core::ExecutionParameters,
+    die_flag: Option<&DieFlag>,
+    shell: &mut brush_core::Shell<SE>,
+    msg: &str,
+) -> Option<brush_core::ExecutionResult> {
+    if result.is_normal_flow() && !result.is_success() {
+        die_now(params, die_flag, shell, msg);
+    }
+    halted(result)
+}
+
 async fn has_makefile<SE: brush_core::ShellExtensions>(shell: &brush_core::Shell<SE>) -> bool {
     let cwd = shell.working_dir();
     for name in ["Makefile", "GNUmakefile", "makefile"] {
@@ -96,11 +120,10 @@ async fn run_emake<SE: brush_core::ShellExtensions>(
     params: &brush_core::ExecutionParameters,
     shell: &mut brush_core::Shell<SE>,
     args: &[&str],
-) -> Result<bool, brush_core::Error> {
+) -> Result<brush_core::ExecutionResult, brush_core::Error> {
     let script = format!("emake {}", quoted_args(args));
     let source_info = brush_core::SourceInfo::from("__eapi_default");
-    let result = shell.run_string(script, &source_info, params).await?;
-    Ok(result.exit_code.is_success())
+    shell.run_string(script, &source_info, params).await
 }
 
 /// See [`run_emake`]'s doc comment on `params` — `econf`'s own "checking
@@ -109,14 +132,13 @@ async fn run_econf_if_configure_at<SE: brush_core::ShellExtensions>(
     params: &brush_core::ExecutionParameters,
     shell: &mut brush_core::Shell<SE>,
     configure_dir: &str,
-) -> Result<(), brush_core::Error> {
+) -> Result<brush_core::ExecutionResult, brush_core::Error> {
     let cwd = shell.working_dir();
     if !cwd.join(configure_dir).join("configure").is_file() {
-        return Ok(());
+        return Ok(brush_core::ExecutionResult::success());
     }
     let source_info = brush_core::SourceInfo::from("__eapi_default");
-    shell.run_string("econf", &source_info, params).await?;
-    Ok(())
+    shell.run_string("econf", &source_info, params).await
 }
 
 /// PMS 9.1.16 / Table 9.10: pkg_nofetch's default for EAPI &ge; 2
@@ -149,17 +171,23 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiPkgNofetchCo
             return Ok(brush_core::ExecutionResult::success());
         }
         let source_info = brush_core::SourceInfo::from("__eapi0_pkg_nofetch");
-        shell
+        let result = shell
             .run_string(
                 "einfo 'Please download the following and place them in your DISTDIR:'",
                 &source_info,
                 &context.params,
             )
             .await?;
+        if let Some(result) = halted(result) {
+            return Ok(result);
+        }
         for line in lines {
-            shell
+            let result = shell
                 .run_string(line, &source_info, &context.params)
                 .await?;
+            if let Some(result) = halted(result) {
+                return Ok(result);
+            }
         }
         Ok(brush_core::ExecutionResult::success())
     }
@@ -188,8 +216,7 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiSrcUnpackCom
         let source_info = brush_core::SourceInfo::from("__eapi0_src_unpack");
         shell
             .run_string(script, &source_info, &context.params)
-            .await?;
-        Ok(brush_core::ExecutionResult::success())
+            .await
     }
 }
 
@@ -203,11 +230,21 @@ async fn default_src_compile<SE: brush_core::ShellExtensions>(
     configure_dir: Option<&str>,
 ) -> Result<brush_core::ExecutionResult, brush_core::Error> {
     if let Some(dir) = configure_dir {
-        run_econf_if_configure_at(params, shell, dir).await?;
+        let result = run_econf_if_configure_at(params, shell, dir).await?;
+        if let Some(result) = halted(result) {
+            return Ok(result);
+        }
     }
-    if has_makefile(shell).await && !run_emake(params, shell, &[]).await? {
-        die_now(params, die_flag, shell, "emake failed");
-        return Ok(brush_core::ExecutionResult::new(1));
+    if has_makefile(shell).await
+        && let Some(result) = failed_emake(
+            run_emake(params, shell, &[]).await?,
+            params,
+            die_flag,
+            shell,
+            "emake failed",
+        )
+    {
+        return Ok(result);
     }
     Ok(brush_core::ExecutionResult::success())
 }
@@ -307,8 +344,7 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiSrcConfigure
         } else {
             econf_source
         };
-        run_econf_if_configure_at(&context.params, shell, &dir).await?;
-        Ok(brush_core::ExecutionResult::success())
+        run_econf_if_configure_at(&context.params, shell, &dir).await
     }
 }
 
@@ -358,7 +394,7 @@ async fn install_docs_var<SE: brush_core::ShellExtensions>(
     shell: &mut brush_core::Shell<SE>,
     var: &str,
     extra_dodoc_args: &str,
-) -> Result<(), brush_core::Error> {
+) -> Result<brush_core::ExecutionResult, brush_core::Error> {
     // Built before the match ends, so the borrow from `var_shape` (tied to
     // `&*shell`) is done by the time `run_string` needs `&mut shell`.
     let script = match var_shape(shell, var) {
@@ -375,9 +411,9 @@ async fn install_docs_var<SE: brush_core::ShellExtensions>(
     };
     if let Some(script) = script {
         let source_info = brush_core::SourceInfo::from("__eapi_default");
-        shell.run_string(script, &source_info, params).await?;
+        return shell.run_string(script, &source_info, params).await;
     }
-    Ok(())
+    Ok(brush_core::ExecutionResult::success())
 }
 
 impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiSrcInstall4Command {
@@ -390,19 +426,22 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiSrcInstall4C
         let die_flag = context.shell.builtin_state::<DieFlag>().cloned();
         let shell = context.shell;
         if has_makefile(shell).await
-            && !run_emake(&context.params, shell, &["DESTDIR=${D}", "install"]).await?
-        {
-            die_now(
+            && let Some(result) = failed_emake(
+                run_emake(&context.params, shell, &["DESTDIR=${D}", "install"]).await?,
                 &context.params,
                 die_flag.as_ref(),
                 shell,
                 "emake install failed",
-            );
-            return Ok(brush_core::ExecutionResult::new(1));
+            )
+        {
+            return Ok(result);
         }
         let declared = shell.env().get("DOCS").is_some();
         if declared {
-            install_docs_var(&context.params, shell, "DOCS", "").await?;
+            let result = install_docs_var(&context.params, shell, "DOCS", "").await?;
+            if let Some(result) = halted(result) {
+                return Ok(result);
+            }
         } else {
             let cwd = shell.working_dir().to_path_buf();
             let source_info = brush_core::SourceInfo::from("__eapi4_src_install");
@@ -413,9 +452,12 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiSrcInstall4C
                         && let Some(name) = candidate.file_name().and_then(|n| n.to_str())
                     {
                         let script = format!("dodoc -- {}", shell_quote(name));
-                        shell
+                        let result = shell
                             .run_string(script, &source_info, &context.params)
                             .await?;
+                        if let Some(result) = halted(result) {
+                            return Ok(result);
+                        }
                     }
                 }
             }
@@ -503,21 +545,20 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiSrcInstall6C
         let die_flag = context.shell.builtin_state::<DieFlag>().cloned();
         let shell = context.shell;
         if has_makefile(shell).await
-            && !run_emake(&context.params, shell, &["DESTDIR=${D}", "install"]).await?
-        {
-            die_now(
+            && let Some(result) = failed_emake(
+                run_emake(&context.params, shell, &["DESTDIR=${D}", "install"]).await?,
                 &context.params,
                 die_flag.as_ref(),
                 shell,
                 "emake install failed",
-            );
-            return Ok(brush_core::ExecutionResult::new(1));
+            )
+        {
+            return Ok(result);
         }
         let source_info = brush_core::SourceInfo::from("__eapi6_src_install");
         shell
             .run_string("einstalldocs", &source_info, &context.params)
-            .await?;
-        Ok(brush_core::ExecutionResult::success())
+            .await
     }
 }
 
@@ -542,16 +583,22 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EinstalldocsComm
             .into_owned();
         let source_info = brush_core::SourceInfo::from("einstalldocs");
 
-        shell
+        let result = shell
             .run_string("docinto ''", &source_info, &context.params)
             .await?;
+        if let Some(result) = halted(result) {
+            return Ok(result);
+        }
         // PMS Algorithm 12.4: the README*-style fallback list only applies
         // when DOCS is unset. A declared-but-empty DOCS (`DOCS=""`,
         // `DOCS=()`) installs nothing — `install_docs_var`'s own
         // `var_shape` check already no-ops for that case, same as
         // `EapiSrcInstall4Command`'s identical `declared` gate.
         if shell.env().get("DOCS").is_some() {
-            install_docs_var(&context.params, shell, "DOCS", "-r").await?;
+            let result = install_docs_var(&context.params, shell, "DOCS", "-r").await?;
+            if let Some(result) = halted(result) {
+                return Ok(result);
+            }
         } else {
             let cwd = shell.working_dir().to_path_buf();
             for pattern in DEFAULT_DOC_FILES {
@@ -561,25 +608,32 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EinstalldocsComm
                         && let Some(name) = candidate.file_name().and_then(|n| n.to_str())
                     {
                         let script = format!("dodoc -- {}", shell_quote(name));
-                        shell
+                        let result = shell
                             .run_string(script, &source_info, &context.params)
                             .await?;
+                        if let Some(result) = halted(result) {
+                            return Ok(result);
+                        }
                     }
                 }
             }
         }
 
-        shell
+        let result = shell
             .run_string("docinto html", &source_info, &context.params)
             .await?;
-        install_docs_var(&context.params, shell, "HTML_DOCS", "-r").await?;
+        if let Some(result) = halted(result) {
+            return Ok(result);
+        }
+        let result = install_docs_var(&context.params, shell, "HTML_DOCS", "-r").await?;
+        if let Some(result) = halted(result) {
+            return Ok(result);
+        }
 
         let restore = format!("docinto {}", shell_quote(&saved_docdesttree));
         shell
             .run_string(restore, &source_info, &context.params)
-            .await?;
-
-        Ok(brush_core::ExecutionResult::success())
+            .await
     }
 }
 
@@ -609,24 +663,26 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiSrcTestComma
         let source_info = brush_core::SourceInfo::from("__eapi0_src_test");
         for target in ["check", "test"] {
             let probe = format!("emake -n {target} &>/dev/null");
-            let available = shell
+            let probed = shell
                 .run_string(probe, &source_info, &context.params)
-                .await?
-                .exit_code
-                .is_success();
-            if !available {
+                .await?;
+            if !probed.is_normal_flow() {
+                return Ok(probed);
+            }
+            if !probed.exit_code.is_success() {
                 continue;
             }
             let mut args = jobs.to_vec();
             args.push(target);
-            if !run_emake(&context.params, shell, &args).await? {
-                die_now(
-                    &context.params,
-                    die_flag.as_ref(),
-                    shell,
-                    &format!("{target} target failed"),
-                );
-                return Ok(brush_core::ExecutionResult::new(1));
+            let msg = format!("{target} target failed");
+            if let Some(result) = failed_emake(
+                run_emake(&context.params, shell, &args).await?,
+                &context.params,
+                die_flag.as_ref(),
+                shell,
+                &msg,
+            ) {
+                return Ok(result);
             }
             break;
         }
@@ -651,7 +707,7 @@ async fn apply_patches_var<SE: brush_core::ShellExtensions>(
     params: &brush_core::ExecutionParameters,
     shell: &mut brush_core::Shell<SE>,
     dashdash: bool,
-) -> Result<(), brush_core::Error> {
+) -> Result<brush_core::ExecutionResult, brush_core::Error> {
     let sep = if dashdash { "-- " } else { "" };
     let script = match var_shape(shell, "PATCHES") {
         VarShape::Array(files) => Some(format!("eapply {sep}{}", quoted_args(&files))),
@@ -662,12 +718,12 @@ async fn apply_patches_var<SE: brush_core::ShellExtensions>(
     };
     let source_info = brush_core::SourceInfo::from("__eapi_default");
     if let Some(script) = script {
-        shell.run_string(script, &source_info, params).await?;
+        let result = shell.run_string(script, &source_info, params).await?;
+        if let Some(result) = halted(result) {
+            return Ok(result);
+        }
     }
-    shell
-        .run_string("eapply_user", &source_info, params)
-        .await?;
-    Ok(())
+    shell.run_string("eapply_user", &source_info, params).await
 }
 
 impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiSrcPrepare6Command {
@@ -677,8 +733,7 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiSrcPrepare6C
         self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
-        apply_patches_var(&context.params, context.shell, false).await?;
-        Ok(brush_core::ExecutionResult::success())
+        apply_patches_var(&context.params, context.shell, false).await
     }
 }
 
@@ -696,8 +751,7 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for EapiSrcPrepare8C
         self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
-        apply_patches_var(&context.params, context.shell, true).await?;
-        Ok(brush_core::ExecutionResult::success())
+        apply_patches_var(&context.params, context.shell, true).await
     }
 }
 
