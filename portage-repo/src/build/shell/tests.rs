@@ -2599,3 +2599,50 @@ async fn use_holds_only_iuse_effective_flags_with_profile_iuse_injection() {
         assert_eq!(shell.get_var("USE").as_deref(), Some(want), "EAPI {eapi}");
     }
 }
+
+// Each USE_EXPAND group is regenerated from the filtered USE and exported, empty ones included.
+#[tokio::test]
+async fn use_expand_groups_follow_the_filtered_use() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().to_path_buf();
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(
+        repo_path.join("metadata").join("layout.conf"),
+        "masters = \ncache-formats = md5-dict\n",
+    )
+    .unwrap();
+    std::fs::write(repo_path.join("profiles").join("repo_name"), "test-repo\n").unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    shell
+        .set_use_flags(&[
+            "amd64",
+            "video_cards_dummy",
+            "video_cards_fbdev",
+            "video_cards_intel",
+        ])
+        .unwrap();
+    shell.set_var("EAPI", "8");
+    shell.set_var("IUSE", "video_cards_dummy video_cards_fbdev l10n_de");
+    shell.set_var("USE_EXPAND", "VIDEO_CARDS L10N");
+    shell.set_var("VIDEO_CARDS", "intel fbdev dummy");
+    shell.set_var("USE_EXPAND_UNPREFIXED", "ARCH");
+    shell.set_var("USE_EXPAND_IMPLICIT", "ARCH");
+    shell.set_var("USE_EXPAND_VALUES_ARCH", "amd64 arm64");
+    shell.set_var("ARCH", "amd64");
+    shell.apply_iuse_effective();
+
+    assert_eq!(shell.get_var("VIDEO_CARDS").as_deref(), Some("fbdev dummy"));
+    assert_eq!(shell.get_var("L10N").as_deref(), Some(""));
+    assert_eq!(shell.get_var("ARCH").as_deref(), Some("amd64"));
+    shell
+        .run_string("_exported=$(export -p | grep -cE '^declare -x (VIDEO_CARDS|L10N|ARCH)=')")
+        .await
+        .unwrap();
+    assert_eq!(shell.get_var("_exported").as_deref(), Some("3"));
+}

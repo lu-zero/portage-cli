@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -1879,40 +1879,19 @@ impl EbuildShell {
         // found". Real write-confinement is M3.
         self.run_string(SANDBOX_STUBS).await?;
 
-        // Reconstruct USE_EXPAND group variables from the final USE set. Some
-        // groups (e.g. llvm-r1's LLVM_SLOT) are populated only by an IUSE
-        // default (`+llvm_slot_21`) with no make.conf value, so without this
-        // reverse mapping the eclass reads an empty LLVM_SLOT and dies.
-        self.populate_use_expand_vars();
+        // Groups an IUSE default alone enables (llvm-r1's `+llvm_slot_21`) have no make.conf
+        // value; eclasses read the group variable. Sourcing narrows them to IUSE_EFFECTIVE.
+        let words = |v: Option<String>| -> Vec<String> {
+            v.unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect()
+        };
+        let expand = words(self.get_var("USE_EXPAND"));
+        let unprefixed = words(self.get_var("USE_EXPAND_UNPREFIXED"));
+        self.regenerate_use_expand(&expand, &unprefixed);
 
         Ok(())
-    }
-
-    /// Set each prefixed `USE_EXPAND` group variable to the values of its
-    /// enabled flags (the reverse of profile expansion): group `FOO` gets
-    /// `<value>` for every enabled `foo_<value>` flag, read by eclasses
-    /// directly (`LLVM_SLOT`, `PYTHON_TARGETS`, …). Only groups with at
-    /// least one enabled flag are written. `USE_EXPAND_UNPREFIXED` groups
-    /// are left alone (indistinguishable from plain USE without the list).
-    fn populate_use_expand_vars(&mut self) {
-        let use_str = self.get_var("USE").unwrap_or_default();
-        let use_expand = self.get_var("USE_EXPAND").unwrap_or_default();
-        if use_expand.is_empty() {
-            return;
-        }
-        let enabled: Vec<&str> = use_str.split_whitespace().collect();
-        for key in use_expand.split_whitespace() {
-            let prefix = format!("{}_", key.to_ascii_lowercase());
-            let mut values: Vec<&str> = enabled
-                .iter()
-                .filter_map(|f| f.strip_prefix(prefix.as_str()))
-                .collect();
-            if values.is_empty() {
-                continue;
-            }
-            values.sort_unstable();
-            self.set_var(key, &values.join(" "));
-        }
     }
 
     /// Source an ebuild and run a single phase function
@@ -2390,9 +2369,9 @@ impl EbuildShell {
             eapi,
             split("IUSE"),
             split("IUSE_IMPLICIT"),
-            expand,
+            expand.iter(),
             split("USE_EXPAND_IMPLICIT"),
-            unprefixed,
+            unprefixed.iter(),
             &values,
         );
         // PMS 11.1.1: with profile IUSE injection, USE holds only IUSE_EFFECTIVE flags.
@@ -2403,6 +2382,47 @@ impl EbuildShell {
         }
         let joined = set.into_iter().collect::<Vec<_>>().join(" ");
         self.set_var("IUSE_EFFECTIVE", &joined);
+        self.regenerate_use_expand(&expand, &unprefixed);
+    }
+
+    /// Set and export each `USE_EXPAND` group to the values USE enables, configured order first
+    ///
+    /// An unprefixed group (`ARCH`) keeps the configured words USE still holds.
+    fn regenerate_use_expand(&mut self, expand: &[String], unprefixed: &[String]) {
+        let use_var = self.get_var("USE").unwrap_or_default();
+        let use_flags: HashSet<&str> = use_var.split_whitespace().collect();
+        for group in expand {
+            let prefix = format!("{}_", group.to_lowercase());
+            let enabled: BTreeSet<&str> = use_flags
+                .iter()
+                .filter_map(|f| f.strip_prefix(prefix.as_str()))
+                .collect();
+            let configured = self.get_var(group).unwrap_or_default();
+            let mut value: Vec<&str> = Vec::new();
+            for v in configured.split_whitespace().chain(enabled.iter().copied()) {
+                if enabled.contains(v) && !value.contains(&v) {
+                    value.push(v);
+                }
+            }
+            let value = value.join(" ");
+            self.set_exported_var(group, &value);
+        }
+        for group in unprefixed {
+            let configured = self.get_var(group).unwrap_or_default();
+            let value: Vec<&str> = configured
+                .split_whitespace()
+                .filter(|v| use_flags.contains(*v))
+                .collect();
+            let value = value.join(" ");
+            self.set_exported_var(group, &value);
+        }
+    }
+
+    fn set_exported_var(&mut self, name: &str, value: &str) {
+        self.set_var(name, value);
+        if let Some(mut var) = self.shell.env_mut().get_mut(name) {
+            var.base_var_mut().export();
+        }
     }
 
     /// Snapshot all ebuild metadata variables into an `EbuildEnv`
