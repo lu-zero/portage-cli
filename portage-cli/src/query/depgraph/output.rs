@@ -3,10 +3,9 @@ use std::io::Write as _;
 
 use anstyle::{AnsiColor, Effects, Style};
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpn, Cpv, Dep, Version};
+use portage_atom::{Cpn, Cpv, Version};
 use portage_atom_pubgrub::{
     CededFlag, DepClass, DroppedDep, PortagePackage, UseConfig, UseFlagRequirement, UseFlagState,
-    UseOverride, resolve_effective_use,
 };
 use portage_metadata::CacheEntry;
 
@@ -1465,11 +1464,8 @@ pub(super) struct PrettyCtx<'a> {
     pub data: &'a RepoData,
     pub installed: &'a HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>>,
     pub installed_entries: &'a [super::installed::VdbEntry],
-    pub defaults: &'a portage_atom_pubgrub::UseLayer,
-    pub conf: &'a portage_atom_pubgrub::UseLayer,
-    pub env_use: &'a portage_atom_pubgrub::UseLayer,
-    pub package_use: &'a [(Dep, Vec<UseOverride>)],
-    pub profile_package_use: &'a [portage_atom_pubgrub::ProfileUseNode],
+    /// The policy the plan was resolved under, which each row's USE is folded from
+    pub policy: &'a super::repo::ResolvePolicy<'a>,
     pub use_expand: &'a [String],
     pub use_expand_hidden: &'a [String],
     pub flag_reqs: &'a HashMap<&'a PortagePackage, &'a UseFlagRequirement>,
@@ -1477,10 +1473,6 @@ pub(super) struct PrettyCtx<'a> {
     pub slot_op_cpns: &'a std::collections::HashSet<Cpn>,
     pub verbose: u8,
     pub ceded: &'a [CededFlag],
-    /// Profile force/mask applied post-fold (not via package.use)
-    pub force_mask: &'a portage_resolve::force_mask::ForceMask,
-    /// For deciding whether `*.stable.*` force/mask applies to a version
-    pub accept_keywords: &'a portage_resolve::repo::AcceptKeywords,
     /// Local binpkg index, when `-k`/`-K` (usepkg/usepkgonly) is active —
     /// used to show `[binary ...]` instead of `[ebuild ...]` for an entry
     /// whose USE matches an available binpkg. `None` when neither flag is
@@ -1571,11 +1563,7 @@ fn format_plan_parts(
         data,
         installed,
         installed_entries,
-        defaults: defaults_layer,
-        conf,
-        env_use,
-        package_use,
-        profile_package_use,
+        policy,
         use_expand,
         use_expand_hidden,
         flag_reqs,
@@ -1583,8 +1571,6 @@ fn format_plan_parts(
         slot_op_cpns,
         verbose,
         ceded,
-        force_mask,
-        accept_keywords,
         binpkg_index,
         resolve_secs: _,
         selected,
@@ -1603,41 +1589,24 @@ fn format_plan_parts(
     // emerge -p always shows USE flags; -v additionally shows the
     // :slot/subslot::repo suffix and download size.
     let cpv = Cpv::new(*cpn, ver.clone());
-    let defaults = cache
-        .map(super::effective_use::iuse_defaults)
-        .unwrap_or_default();
-    let mut effective_use = resolve_effective_use(
-        &defaults,
-        defaults_layer,
-        &cpv,
-        pkg.slot(),
-        package_use,
-        env_use,
-        profile_package_use,
-        conf,
-    );
-    // `use.force`/`use.mask` (global + package + `*.stable.*`): applied to
-    // effective USE (forced on, then masked off — mask wins, matching
-    // portage), and their union is also the parenthesised-flag set portage
-    // shows in the USE string (`_create_use_string:325` sets
-    // `iuse_forced = use.force ∪ use.mask`).
-    let mut forced_display: HashSet<Interned<DefaultInterner>> = HashSet::new();
-    if let Some(c) = cache {
-        let stable = accept_keywords.is_stable(&c.metadata.keywords, &cpv, pkg.slot());
-        let iuse = super::effective_use::iuse_set(c, &force_mask.iuse_injection);
-        let slot_key = pkg.slot().map(portage_atom::Slot::from_name);
-        if !force_mask.is_empty() {
-            let (forced, masked) = force_mask.effective(&cpv, slot_key.as_ref(), stable, &iuse);
-            for &f in &forced {
-                effective_use.enable(f);
-            }
-            for &f in &masked {
-                effective_use.disable(f);
-            }
-            forced_display = forced.union(&masked).copied().collect();
+    // The USE the build gets, and the use.force ∪ use.mask flags emerge shows in parentheses.
+    let (effective_use, forced_display) = match cache {
+        Some(c) => {
+            let stable = policy
+                .accept_keywords
+                .is_stable(&c.metadata.keywords, &cpv, pkg.slot());
+            (
+                super::effective_use::effective_use(policy, pkg, ver, c, stable, ceded),
+                super::effective_use::pinned_flags(policy, pkg, ver, c, stable),
+            )
         }
-    }
-    super::effective_use::apply_ceded(&mut effective_use, *cpn, ceded);
+        None => {
+            let mut cfg =
+                super::effective_use::effective_use_without_metadata(policy, &cpv, pkg.slot());
+            super::effective_use::apply_ceded(&mut cfg, *cpn, ceded);
+            (cfg, HashSet::new())
+        }
+    };
 
     // Would `-k`/`-K` reuse a local binpkg for this exact (cpv, USE)?
     // Same `use_compatible` rule `run_merge_plan` uses to actually pick

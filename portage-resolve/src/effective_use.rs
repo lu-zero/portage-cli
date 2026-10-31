@@ -155,9 +155,33 @@ pub(crate) fn effective_use_metadata(
     fold_effective_use(policy, cpv, slot, &iuse_defaults, &iuse, stable)
 }
 
-/// Effective USE for a CPV whose repository metadata is unavailable.
-pub(crate) fn effective_use_without_metadata(policy: &ResolvePolicy, cpv: &Cpv) -> UseConfig {
-    fold_effective_use(policy, cpv, None, &HashMap::new(), &HashSet::new(), false)
+/// Effective USE for a CPV whose repository metadata is unavailable
+pub fn effective_use_without_metadata(
+    policy: &ResolvePolicy,
+    cpv: &Cpv,
+    slot: Option<Interned<DefaultInterner>>,
+) -> UseConfig {
+    fold_effective_use(policy, cpv, slot, &HashMap::new(), &HashSet::new(), false)
+}
+
+/// The flags `use.force`/`use.mask` pin for a version, which `-p` shows in parentheses
+pub fn pinned_flags(
+    policy: &ResolvePolicy,
+    pkg: &PortagePackage,
+    ver: &Version,
+    cache: &CacheEntry,
+    stable: bool,
+) -> HashSet<Interned<DefaultInterner>> {
+    if policy.force_mask.is_empty() {
+        return HashSet::new();
+    }
+    let cpv = Cpv::new(*pkg.cpn(), ver.clone());
+    let slot = pkg.slot().map(portage_atom::Slot::from_name);
+    let iuse = iuse_set(cache, &policy.force_mask.iuse_injection);
+    let (forced, masked) = policy
+        .force_mask
+        .effective(&cpv, slot.as_ref(), stable, &iuse);
+    forced.union(&masked).copied().collect()
 }
 
 /// Package-use pins only, for the cede gate's "user pinned this" check.

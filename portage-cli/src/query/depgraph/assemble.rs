@@ -232,11 +232,7 @@ pub(super) fn assemble(
         data: &data,
         installed: &installed,
         installed_entries: &target_installed,
-        defaults: &defaults,
-        conf: &conf,
-        env_use: &env_use,
-        package_use: &package_use,
-        profile_package_use: &profile_package_use,
+        policy: &final_policy,
         use_expand: &use_expand,
         use_expand_hidden: &use_expand_hidden,
         flag_reqs: &flag_reqs,
@@ -244,8 +240,6 @@ pub(super) fn assemble(
         slot_op_cpns: &slot_op_cpns,
         verbose,
         ceded: &ceded,
-        force_mask: &force_mask,
-        accept_keywords: &accept_keywords,
         binpkg_index,
         resolve_secs,
         selected: &selected,
@@ -476,28 +470,8 @@ pub(super) fn assemble(
                     effective.enabled_flags(),
                 )
             } else {
-                let mut effective = portage_atom_pubgrub::resolve_effective_use(
-                    &HashMap::new(),
-                    &defaults,
-                    &cpv,
-                    pkg.slot(),
-                    &package_use,
-                    &env_use,
-                    &profile_package_use,
-                    &conf,
-                );
-                // No cache ⇒ no IUSE/keywords; still apply global force/mask
-                // and ceded so build USE stays consistent with the solver.
-                let empty_iuse = HashSet::new();
-                let slot_key = pkg.slot().map(portage_atom::Slot::from_name);
-                effective_use::apply_force_mask(
-                    &mut effective,
-                    &force_mask,
-                    &cpv,
-                    slot_key.as_ref(),
-                    false,
-                    &empty_iuse,
-                );
+                let mut effective =
+                    effective_use::effective_use_without_metadata(&final_policy, &cpv, pkg.slot());
                 effective_use::apply_ceded(&mut effective, *cpn, &ceded);
                 (Vec::new(), Vec::new(), effective.enabled_flags())
             };

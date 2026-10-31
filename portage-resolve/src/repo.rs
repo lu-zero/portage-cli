@@ -1582,7 +1582,7 @@ impl PackageRepository for Adapter<'_> {
     fn desired_use(&self, cpv: &Cpv) -> portage_atom_pubgrub::UseConfig {
         let cache = self.data.cache_entry(&cpv.cpn, &cpv.version);
         let Some(cache) = cache else {
-            return crate::effective_use::effective_use_without_metadata(&self.policy(), cpv);
+            return crate::effective_use::effective_use_without_metadata(&self.policy(), cpv, None);
         };
 
         let meta = &cache.metadata;
