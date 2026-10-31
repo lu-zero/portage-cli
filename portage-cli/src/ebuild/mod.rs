@@ -3266,7 +3266,40 @@ async fn capture_environment(
     let dump = capture_shell_dump(shell, work_root, "{ declare -p; declare -f; }").await?;
     let text = String::from_utf8_lossy(&dump);
     let text = filter_declare_dump(&text);
+    let text = drop_run_state(&text);
     Ok(drop_inherited_environment(&text, |name| std::env::var(name).ok()).into_bytes())
+}
+
+/// What a saved environment leaves out: the profile's list of `USE_EXPAND` groups, configuration
+/// and roots set again for every run, and the state of the run that saved it
+const RUN_STATE: &[&str] = &[
+    "USE_EXPAND",
+    "ROOT",
+    "EROOT",
+    "DISTDIR",
+    "PKGDIR",
+    "ACCEPT_LICENSE",
+    "HOME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "NOCOLOR",
+    "NO_COLOR",
+    "COLUMNS",
+    "MAKEFLAGS",
+    "LD_PRELOAD",
+    "FAKEROOTKEY",
+];
+
+/// Drop the [`RUN_STATE`] variables from a `declare -p` dump
+fn drop_run_state(text: &str) -> String {
+    text.lines()
+        .filter(|l| !declared_name(l).is_some_and(|name| RUN_STATE.contains(&name)))
+        .fold(String::with_capacity(text.len()), |mut acc, l| {
+            acc.push_str(l);
+            acc.push('\n');
+            acc
+        })
 }
 
 /// Drop from a `declare -p` dump the exported variables that still hold the
@@ -4533,6 +4566,29 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_environment_leaves_the_run_state_out() {
+        let dump = concat!(
+            "declare -x USE_EXPAND=\"ELIBC VIDEO_CARDS\"\n",
+            "declare -x VIDEO_CARDS=\"\"\n",
+            "declare -x ROOT=\"/\"\n",
+            "declare -x HOME=\"/var/tmp/portage/x/homedir\"\n",
+            "declare -x T=\"/var/tmp/portage/x/temp\"\n",
+            "declare -- MY_PKG_STATE=\"kept\"\n",
+            "my_func ()\n{\n    : HOME\n}\n",
+        );
+        let kept = drop_run_state(dump);
+        assert_eq!(
+            kept,
+            concat!(
+                "declare -x VIDEO_CARDS=\"\"\n",
+                "declare -x T=\"/var/tmp/portage/x/temp\"\n",
+                "declare -- MY_PKG_STATE=\"kept\"\n",
+                "my_func ()\n{\n    : HOME\n}\n",
+            )
+        );
+    }
+
+    #[test]
     fn filter_declare_dump_drops_readonly_and_dynamic_vars() {
         let dump = concat!(
             "declare -x PATH=\"/usr/bin\"\n",
@@ -5173,7 +5229,7 @@ mod tests {
             "1",
             &format!(
                 "{INSTALLS_A_FILE}\
-                 pkg_prerm() {{ note \"${{EBUILD_PHASE}}:${{T}}:${{HOME}}\"; }}\n\
+                 pkg_prerm() {{ note \"${{EBUILD_PHASE}}:${{T}}:${{HOME}} distdir=${{DISTDIR:+set}}\"; }}\n\
                  pkg_postrm() {{ note \"${{EBUILD_PHASE}}:${{T}}\"; }}\n"
             ),
         );
@@ -5188,6 +5244,7 @@ mod tests {
             "{log}"
         );
         assert!(log.contains(&format!("postrm:{unmerge}/")), "{log}");
+        assert!(log.contains("distdir=set"), "{log}");
         assert!(!log.contains(build.as_str()), "{log}");
     }
 

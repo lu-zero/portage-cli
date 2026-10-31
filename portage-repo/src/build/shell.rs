@@ -1928,7 +1928,7 @@ impl EbuildShell {
 
     /// Set up `phase` for a package restored from its saved environment, with no ebuild to source
     ///
-    /// The directories, phase name and roots are this run's, never the saved ones.
+    /// The directories, distfiles, phase name and roots are this run's, never the saved ones.
     pub async fn prepare_saved_phase(
         &mut self,
         phase: &str,
@@ -1940,6 +1940,9 @@ impl EbuildShell {
             .and_then(|s| s.parse::<Eapi>().ok())
             .unwrap_or(Eapi::Zero);
         self.enter_phase_dirs(work_root, eapi)?;
+        let (distdir, ro) = self.effective_distdir();
+        self.set_var("DISTDIR", &distdir);
+        self.set_var("PORTAGE_RO_DISTDIRS", &ro.join(" "));
         let (phase_val, func_name) = phase_to_func(phase);
         self.set_var("EBUILD_PHASE", phase_val);
         self.set_var("EBUILD_PHASE_FUNC", func_name);
