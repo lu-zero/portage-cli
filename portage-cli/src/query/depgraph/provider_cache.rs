@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 
 use portage_atom::{Cpn, Dep};
-use portage_atom_pubgrub::{PortageDependencyProvider, UseOverride};
+use portage_atom_pubgrub::{PortageDependencyProvider, PortagePackage, UseOverride};
 
 /// What a provider was built from; two equal keys build the same provider
 pub(super) struct ProviderKey {
@@ -12,6 +12,8 @@ pub(super) struct ProviderKey {
     pub(super) autosolve_use: bool,
     pub(super) widened: bool,
     pub(super) seeds: HashSet<Cpn>,
+    /// Installed packages solved as rebuilt because their recorded USE breaks a USE dependency
+    pub(super) use_rebuilds: HashSet<PortagePackage>,
 }
 
 impl ProviderKey {
@@ -20,6 +22,7 @@ impl ProviderKey {
         self.autosolve_use == other.autosolve_use
             && self.widened == other.widened
             && self.seeds == other.seeds
+            && self.use_rebuilds == other.use_rebuilds
             && self.package_use.len() == other.package_use.len()
             && self
                 .package_use

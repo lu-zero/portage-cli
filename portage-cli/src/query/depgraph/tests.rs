@@ -484,6 +484,35 @@ fn deep_newuse_checks_the_build_tools_of_a_rebuild() {
     );
 }
 
+// An installed package rebuilt because a USE dependency needs a flag it was built without is solved
+// as a rebuild: its build tools come into the plan and build first.
+#[test]
+fn a_use_rebuild_brings_its_build_tools_and_orders_them_first() {
+    let pkgs = [
+        Pkg {
+            rdepend: "app-misc/lib[py_new]",
+            ..plain("app-misc/top-1", "", "")
+        },
+        Pkg {
+            bdepend: "app-misc/tool[py_new]",
+            ..plain("app-misc/lib-1", "", "py_new")
+        },
+        plain("app-misc/tool-1", "", "py_new"),
+    ];
+    let fix = fixture(&pkgs, &[]);
+    plant_installed(&fix.root, "app-misc/lib-1", "0", "", "py_new");
+    plant_installed(&fix.root, "app-misc/tool-1", "0", "", "py_new");
+    let make_conf = fix.root.join("etc/portage/make.conf");
+    let mut text = std::fs::read_to_string(&make_conf).unwrap();
+    text.push_str("USE=\"py_new\"\n");
+    std::fs::write(&make_conf, text).unwrap();
+    let atoms = [TargetAtom::explicit("app-misc/top")];
+    assert_eq!(
+        names(&solve(&fix, Solve::new(&atoms))),
+        ["app-misc/tool-1", "app-misc/lib-1", "app-misc/top-1"]
+    );
+}
+
 /// `app-misc/foo` and `app-misc/bar` with L10N flags, `L10N` declared by the profile, and `conf`
 /// appended to make.conf and `package_use` written as package.use
 fn l10n_fixture(conf: &str, package_use: &str) -> Fix {

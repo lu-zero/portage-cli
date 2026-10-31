@@ -21,6 +21,8 @@ use crate::query::depgraph::provider_cache::ProviderKey;
 
 type Solution = pubgrub::SelectedDependencies<PortagePackage, Version>;
 type Targets = [(PortagePackage, PortageVersionSet)];
+/// Installed packages solved as rebuilt because their recorded USE breaks a USE dependency
+type UseRebuilds = HashSet<PortagePackage>;
 
 /// A round's settled solve
 pub(super) struct Solved {
@@ -75,16 +77,54 @@ impl RoundCtx<'_> {
         }
     }
 
-    /// The USE co-solve fixpoint and its final solve
+    /// Solve until every installed package the plan rebuilds for USE was solved as a rebuild
     ///
-    /// The fixpoint forces the `[flag]` USE-deps of the plan on through synthetic `package.use`, as
-    /// `emerge -p` previews the graph with the USE changes it will ask for. A failed
-    /// `--autosolve-use` solve falls back to fixed USE so the plan and its advisory still appear.
+    /// Kept, it would list only its runtime dependencies, so the build tools its rebuild needs
+    /// would be missing from the plan or ordered after it.
     fn attempt(
         &self,
         targets: &Targets,
         repairs: &Targets,
         widened: bool,
+    ) -> anyhow::Result<Solved> {
+        let mut use_rebuilds = UseRebuilds::new();
+        loop {
+            let solved = self.attempt_with(targets, repairs, widened, &use_rebuilds)?;
+            let found: Vec<PortagePackage> = solved
+                .provider
+                .reinstall_deps()
+                .iter()
+                .filter(|r| {
+                    !solved
+                        .provider
+                        .installed_policy(&r.package)
+                        .is_some_and(|p| matches!(p, InstalledPolicy::Rebuild))
+                })
+                .map(|r| match r.package.slot() {
+                    Some(slot) => PortagePackage::slotted(*r.package.cpn(), slot),
+                    None => PortagePackage::unslotted(*r.package.cpn()),
+                })
+                .filter(|pkg| !use_rebuilds.contains(pkg))
+                .collect();
+            if found.is_empty() {
+                return Ok(solved);
+            }
+            self.providers.put(solved.key, solved.provider);
+            use_rebuilds.extend(found);
+        }
+    }
+
+    /// The USE co-solve fixpoint and its final solve
+    ///
+    /// The fixpoint forces the `[flag]` USE-deps of the plan on through synthetic `package.use`, as
+    /// `emerge -p` previews the graph with the USE changes it will ask for. A failed
+    /// `--autosolve-use` solve falls back to fixed USE so the plan and its advisory still appear.
+    fn attempt_with(
+        &self,
+        targets: &Targets,
+        repairs: &Targets,
+        widened: bool,
+        use_rebuilds: &UseRebuilds,
     ) -> anyhow::Result<Solved> {
         let CosolveOutcome {
             package_use,
@@ -96,8 +136,14 @@ impl RoundCtx<'_> {
             self.package_use.clone(),
             self.data,
             |pu| {
-                let (key, provider, result) =
-                    self.build_and_solve(targets, repairs, widened, self.autosolve_use, pu);
+                let (key, provider, result) = self.build_and_solve(
+                    targets,
+                    repairs,
+                    widened,
+                    self.autosolve_use,
+                    pu,
+                    use_rebuilds,
+                );
                 match result {
                     Ok(sol) => Some((key, provider, sol)),
                     Err(_) => {
@@ -119,6 +165,7 @@ impl RoundCtx<'_> {
                     widened,
                     self.autosolve_use,
                     &package_use,
+                    use_rebuilds,
                 );
                 match result {
                     Ok(sol) => (key, provider, sol),
@@ -128,8 +175,14 @@ impl RoundCtx<'_> {
                          falling back to a fixed-USE plan.",
                         );
                         self.providers.put(key, provider);
-                        let (key, provider, result) =
-                            self.build_and_solve(targets, repairs, widened, false, &package_use);
+                        let (key, provider, result) = self.build_and_solve(
+                            targets,
+                            repairs,
+                            widened,
+                            false,
+                            &package_use,
+                            use_rebuilds,
+                        );
                         (key, provider, result.map_err(resolve_failed)?)
                     }
                     Err(e) => return Err(resolve_failed(e)),
@@ -180,6 +233,7 @@ impl RoundCtx<'_> {
         widened: bool,
         autosolve_use: bool,
         package_use: &[(Dep, Vec<UseOverride>)],
+        use_rebuilds: &UseRebuilds,
     ) -> (
         ProviderKey,
         PortageDependencyProvider,
@@ -201,10 +255,11 @@ impl RoundCtx<'_> {
             autosolve_use,
             widened,
             seeds: seeds.iter().copied().collect(),
+            use_rebuilds: use_rebuilds.clone(),
         };
         let mut provider = match self.providers.take(&key) {
             Some(provider) => provider,
-            None => self.build_provider(seeds, package_use, autosolve_use, widened),
+            None => self.build_provider(seeds, package_use, autosolve_use, widened, use_rebuilds),
         };
         let resolve_start = Instant::now();
         let result = provider.resolve_with_repairs(targets.to_vec(), repairs.to_vec());
@@ -221,6 +276,7 @@ impl RoundCtx<'_> {
         package_use: &[(Dep, Vec<UseOverride>)],
         autosolve_use: bool,
         widened: bool,
+        use_rebuilds: &UseRebuilds,
     ) -> PortageDependencyProvider {
         let adapter = self.adapter(package_use, autosolve_use, widened);
         let policy = adapter.policy();
@@ -238,7 +294,7 @@ impl RoundCtx<'_> {
             forced_use,
             self.rebuilding_installed_cpvs,
             self.emptytree_native,
-            |e, pkg| self.needs_use_rebuild(e, pkg, &policy),
+            |e, pkg| self.rebuilt_for_use(e, pkg, &policy, use_rebuilds),
         );
         for (cpv, slot) in self.provided_avail {
             let slot = slot.as_deref().map(Interned::intern);
@@ -268,7 +324,7 @@ impl RoundCtx<'_> {
             "provider build"
         );
         self.apply_solve_policy(&mut provider);
-        self.register_installed(&mut provider, &policy);
+        self.register_installed(&mut provider, &policy, use_rebuilds);
         self.register_provided(&mut provider, &policy);
         // A BDEPEND the build host already has is satisfied there, unless a USE-dep needs a flag it lacks.
         for e in self.host_installed {
@@ -327,10 +383,23 @@ impl RoundCtx<'_> {
     }
 
     /// The VDB's installed packages, with their blockers, as Favor or Rebuild
+    /// Whether an installed package is solved as rebuilt for USE: `-N`/`-U` drift, or a USE
+    /// dependency its recorded USE breaks
+    fn rebuilt_for_use(
+        &self,
+        e: &installed::VdbEntry,
+        pkg: &PortagePackage,
+        policy: &repo::ResolvePolicy<'_>,
+        use_rebuilds: &UseRebuilds,
+    ) -> bool {
+        use_rebuilds.contains(pkg) || self.needs_use_rebuild(e, pkg, policy)
+    }
+
     fn register_installed(
         &self,
         provider: &mut PortageDependencyProvider,
         policy: &repo::ResolvePolicy<'_>,
+        use_rebuilds: &UseRebuilds,
     ) {
         for (e, blockers) in self.target_installed.iter().zip(self.installed_blockers) {
             let pkg = match e.slot.filter(|s| !s.is_empty()) {
@@ -338,11 +407,12 @@ impl RoundCtx<'_> {
                 None => PortagePackage::unslotted(e.cpn),
             };
             provider.add_installed_blockers(&pkg, blockers);
-            let policy = if self.emptytree_native || self.needs_use_rebuild(e, &pkg, policy) {
-                InstalledPolicy::Rebuild
-            } else {
-                InstalledPolicy::Favor
-            };
+            let policy =
+                if self.emptytree_native || self.rebuilt_for_use(e, &pkg, policy, use_rebuilds) {
+                    InstalledPolicy::Rebuild
+                } else {
+                    InstalledPolicy::Favor
+                };
             provider.add_installed(SolverInstalledPackage {
                 package: pkg,
                 version: e.version.clone(),
