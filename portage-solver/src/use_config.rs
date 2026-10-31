@@ -237,6 +237,8 @@ pub struct UseLayer {
     /// (`strip_expand_tokens`), but the ebuild's own `+`-defaulted IUSE is
     /// only known per package — so the group travels with the layer.
     group_clears: Arc<[String]>,
+    /// The `<group>_*` wildcards this layer enables (`L10N="*"` ⇒ `l10n_*`)
+    wildcards: Vec<Interned<DefaultInterner>>,
 }
 
 impl Default for UseLayer {
@@ -246,6 +248,7 @@ impl Default for UseLayer {
             has_clear_all: false,
             frozen: Arc::new(HashMap::new()),
             group_clears: Arc::from([]),
+            wildcards: Vec::new(),
         }
     }
 }
@@ -288,12 +291,27 @@ impl UseLayer {
             }
         }
         let (frozen, has_clear_all) = freeze_tokens(&tokens);
+        let wildcards = tokens
+            .iter()
+            .filter_map(|tok| match tok {
+                LayerTok::Flag { flag, enable: true } if flag.as_str().ends_with("_*") => {
+                    Some(*flag)
+                }
+                _ => None,
+            })
+            .collect();
         Self {
             tokens,
             has_clear_all,
             frozen: Arc::new(frozen),
             group_clears: Arc::from([]),
+            wildcards,
         }
+    }
+
+    /// The `<group>_*` wildcards this layer enables; whether one stays on is the fold's to say
+    pub fn wildcards(&self) -> &[Interned<DefaultInterner>] {
+        &self.wildcards
     }
 
     /// Record the `USE_EXPAND` groups this layer explicitly assigned, by

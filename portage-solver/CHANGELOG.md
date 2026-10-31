@@ -9,6 +9,10 @@
 - `resolve_effective_use` takes eight parameters instead of six.
 - `Solver::add_sysroot_installed` is removed: no solver consulted it.
 
+### Features
+
+- `UseLayer::wildcards` lists the `<group>_*` USE_EXPAND wildcards a layer enables.
+
 ### Bug fixes
 
 - `package.use` applies over `make.defaults` (PMS 5.2.10), and a profile's `package.use` does not override

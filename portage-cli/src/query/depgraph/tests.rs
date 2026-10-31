@@ -484,6 +484,84 @@ fn deep_newuse_checks_the_build_tools_of_a_rebuild() {
     );
 }
 
+/// `app-misc/foo` and `app-misc/bar` with L10N flags, `L10N` declared by the profile, and `conf`
+/// appended to make.conf and `package_use` written as package.use
+fn l10n_fixture(conf: &str, package_use: &str) -> Fix {
+    let pkgs = [
+        plain("app-misc/foo-1", "", "l10n_de l10n_fr other"),
+        plain("app-misc/bar-1", "", "l10n_de"),
+    ];
+    let fix = fixture(&pkgs, &[]);
+    let defaults = fix.set.main().path().join("profiles/base/make.defaults");
+    std::fs::write(
+        &defaults,
+        "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"amd64\"\nUSE_EXPAND=\"L10N\"\n",
+    )
+    .unwrap();
+    let make_conf = fix.root.join("etc/portage/make.conf");
+    let mut text = std::fs::read_to_string(&make_conf).unwrap();
+    text.push_str(conf);
+    std::fs::write(&make_conf, text).unwrap();
+    std::fs::write(fix.root.join("etc/portage/package.use"), package_use).unwrap();
+    fix
+}
+
+/// The `l10n_` flags each planned package builds with
+fn l10n_flags(fix: &Fix) -> Vec<(String, Vec<String>)> {
+    let atoms = [
+        TargetAtom::explicit("app-misc/foo"),
+        TargetAtom::explicit("app-misc/bar"),
+    ];
+    let mut out: Vec<_> = solve(fix, Solve::new(&atoms))
+        .plan
+        .iter()
+        .map(|p| {
+            let mut flags: Vec<String> = p
+                .use_flags
+                .iter()
+                .map(|f| f.as_str().to_owned())
+                .filter(|f| f.starts_with("l10n_") && f != "l10n_*")
+                .collect();
+            flags.sort();
+            (p.cpv.cpn.to_string(), flags)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+// `L10N="*"` enables every L10N value in a package's IUSE, over a narrower package.use disable.
+#[test]
+fn a_use_expand_wildcard_enables_every_value_in_iuse() {
+    let fix = l10n_fixture("L10N=\"*\"\n", "app-misc/bar -l10n_de\n");
+    assert_eq!(
+        l10n_flags(&fix),
+        [
+            ("app-misc/bar".to_owned(), vec!["l10n_de".to_owned()]),
+            (
+                "app-misc/foo".to_owned(),
+                vec!["l10n_de".to_owned(), "l10n_fr".to_owned()]
+            ),
+        ]
+    );
+}
+
+// `cat/pkg L10N: *` in package.use reaches only that package.
+#[test]
+fn a_package_use_wildcard_stays_with_its_package() {
+    let fix = l10n_fixture("", "app-misc/foo L10N: *\n");
+    assert_eq!(
+        l10n_flags(&fix),
+        [
+            ("app-misc/bar".to_owned(), Vec::new()),
+            (
+                "app-misc/foo".to_owned(),
+                vec!["l10n_de".to_owned(), "l10n_fr".to_owned()]
+            ),
+        ]
+    );
+}
+
 #[test]
 fn onlydeps_plans_the_dependency_and_omits_the_target() {
     let fix = fixture(&pair(), &[]);
