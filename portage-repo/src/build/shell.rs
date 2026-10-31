@@ -1894,6 +1894,60 @@ impl EbuildShell {
         Ok(())
     }
 
+    /// Create the phase directories under `work_root`, move there, and point `WORKDIR`, `T`,
+    /// `TMPDIR`, `HOME` and `D` at them; returns `WORKDIR`
+    fn enter_phase_dirs(&mut self, work_root: &Path, eapi: Eapi) -> Result<std::path::PathBuf> {
+        let workdir = work_root.join("work");
+        let t = work_root.join("temp");
+        let d = work_root.join("image");
+        let homedir = work_root.join("homedir");
+        // `${T}/logging` is portage's `PKG_LOGDIR`: its existence is what enables
+        // the `e*` builtins' elog capture, so it is created unconditionally per
+        // package (as `prepare_build_dirs.py` does) and the *dispatch* side
+        // decides what, if anything, to do with what lands there.
+        let pkg_logdir = t.join("logging");
+        for dir in [&workdir, &t, &d, &homedir, &pkg_logdir] {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| Error::Shell(format!("creating {}: {e}", dir.display())))?;
+        }
+        // Keep the phase cwd on the shell instance. The process cwd is shared by
+        // every concurrent merge and must not be used as package state.
+        self.shell.set_working_dir(work_root).map_err(|e| {
+            Error::Shell(format!(
+                "setting working directory {}: {e}",
+                work_root.display()
+            ))
+        })?;
+        self.set_var("WORKDIR", &workdir.to_string_lossy());
+        self.set_var("T", &t.to_string_lossy());
+        self.set_var("TMPDIR", &t.to_string_lossy());
+        self.set_var("HOME", &homedir.to_string_lossy());
+        self.set_var("D", &slashed_for(eapi, &d.to_string_lossy()));
+        Ok(workdir)
+    }
+
+    /// Set up `phase` for a package restored from its saved environment, with no ebuild to source
+    ///
+    /// The directories, phase name and roots are this run's, never the saved ones.
+    pub async fn prepare_saved_phase(
+        &mut self,
+        phase: &str,
+        work_root: &Path,
+        root: &Path,
+    ) -> Result<()> {
+        let eapi = self
+            .get_var("EAPI")
+            .and_then(|s| s.parse::<Eapi>().ok())
+            .unwrap_or(Eapi::Zero);
+        self.enter_phase_dirs(work_root, eapi)?;
+        let (phase_val, func_name) = phase_to_func(phase);
+        self.set_var("EBUILD_PHASE", phase_val);
+        self.set_var("EBUILD_PHASE_FUNC", func_name);
+        self.assign_root_vars(root);
+        self.run_string(&format!("export {}", PM_EXPORTED_VARS.join(" ")))
+            .await
+    }
+
     /// Source an ebuild and run a single phase function
     ///
     /// Creates the standard build directories under `work_root` if they don't
@@ -1962,39 +2016,14 @@ impl EbuildShell {
         // right EAPI-specific defaults.
         self.init_build_env().await?;
 
-        // Create and set real build directories.
-        let workdir = work_root.join("work");
-        let t = work_root.join("temp");
+        let workdir = self.enter_phase_dirs(work_root, eapi)?;
         let d = work_root.join("image");
-        let homedir = work_root.join("homedir");
-        // `${T}/logging` is portage's `PKG_LOGDIR`: its existence is what enables
-        // the `e*` builtins' elog capture, so it is created unconditionally per
-        // package (as `prepare_build_dirs.py` does) and the *dispatch* side
-        // decides what, if anything, to do with what lands there.
-        let pkg_logdir = t.join("logging");
-        for dir in [&workdir, &t, &d, &homedir, &pkg_logdir] {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| Error::Shell(format!("creating {}: {e}", dir.display())))?;
-        }
-        // Keep the phase cwd on the shell instance. The process cwd is shared by
-        // every concurrent merge and must not be used as package state.
-        self.shell.set_working_dir(work_root).map_err(|e| {
-            Error::Shell(format!(
-                "setting working directory {}: {e}",
-                work_root.display()
-            ))
-        })?;
-        self.set_var("WORKDIR", &workdir.to_string_lossy());
         // S defaults to ${WORKDIR}/${P}. Assert it before a source, and when a
         // restored environment carried none. A non-empty carried value stays.
         let s_unset = self.get_var("S").is_none_or(|s| s.is_empty());
         if need_source || s_unset {
             self.set_var("S", &workdir.join(&p).to_string_lossy());
         }
-        self.set_var("T", &t.to_string_lossy());
-        self.set_var("TMPDIR", &t.to_string_lossy());
-        self.set_var("HOME", &homedir.to_string_lossy());
-        self.set_var("D", &slashed_for(eapi, &d.to_string_lossy()));
         // DISTDIR is already set by init_build_env() from env or ~/.cache/distfiles;
         // do not override it here.
 

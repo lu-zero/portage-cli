@@ -2523,6 +2523,12 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
             };
             match restored {
                 Ok(()) => {
+                    // The phases see the USE the package was built with, not today's configuration.
+                    let recorded = old_pkg.use_flags().unwrap_or_default();
+                    let recorded: Vec<&str> = recorded.iter().map(|f| f.as_str()).collect();
+                    shell
+                        .set_use_flags(&recorded)
+                        .context("setting the recorded USE")?;
                     if let Some(version) = replaced_by {
                         shell.preset_var("REPLACED_BY_VERSION", &version.to_string());
                     }
@@ -2777,7 +2783,7 @@ fn stage_env_bz2(pkg: &InstalledPackage, work_root: &Utf8Path) -> Option<Utf8Pat
 async fn try_run_phase_from_env_file(
     shell: &mut portage_repo::EbuildShell,
     phase: &str,
-    _work_root: &Utf8Path,
+    work_root: &Utf8Path,
     root: &Utf8Path,
     env_file: &Utf8Path,
     replaced_by: Option<&portage_atom::Version>,
@@ -2788,9 +2794,14 @@ async fn try_run_phase_from_env_file(
         return false;
     }
 
-    // The saved file just sourced may name a different EAPI and a different
-    // REPLACED_BY_VERSION. PMS trailing-slash and the replacement version win.
-    shell.assign_root_vars(root.as_std_path());
+    // The saved file carries the directories, phase and roots of the build that wrote it.
+    if let Err(e) = shell
+        .prepare_saved_phase(phase, work_root.as_std_path(), root.as_std_path())
+        .await
+    {
+        crate::style::warn_line!("could not set up {phase} from the saved environment: {e}");
+        return false;
+    }
     if let Some(version) = replaced_by {
         shell.preset_var("REPLACED_BY_VERSION", &version.to_string());
     }
@@ -2804,13 +2815,13 @@ async fn try_run_phase_from_env_file(
     // The phase function is entirely optional (PMS: an ebuild need not
     // define pkg_prerm/pkg_postrm at all) — guard the call so a package
     // that simply never defined it doesn't produce a spurious "command
-    // not found" for a hook nothing was ever supposed to run. This path
-    // does not go through `run_phase`, so the call exports the roots itself.
+    // not found" for a hook nothing was ever supposed to run. REPLACED_BY_VERSION
+    // is set after `prepare_saved_phase` exported the rest.
     if let Err(e) = shell
         .run_string(&format!(
             "if declare -F '{func}' >/dev/null 2>&1; then \
-             export ROOT EROOT REPLACED_BY_VERSION; \
-             EBUILD_PHASE_FUNC='{func}' {func}; \
+             export REPLACED_BY_VERSION; \
+             {func}; \
              fi"
         ))
         .await
@@ -5103,6 +5114,81 @@ mod tests {
         assert!(log.contains("var:clean"), "{log}");
         assert!(!log.contains("func:leaked"), "{log}");
         assert!(!log.contains("from-the-previous"), "{log}");
+    }
+
+    /// Remove the one package the probe's root holds, from a shell whose configuration is `config`
+    async fn remove_probe(probe: &Probe, config: &str) {
+        let root = probe.path("root");
+        let vdb = Vdb::open(root.join("var/db/pkg")).unwrap();
+        let pkg = vdb.packages().into_iter().next().unwrap();
+        let repo = probe.repo();
+        let mut shell = repo.shell().await.unwrap();
+        shell.run_string(config).await.unwrap();
+        shell.save_profile_session();
+        let mut registry = preserve_libs::PreservedLibsRegistry::load(&root);
+        let graph = preserve_libs::build_link_graph(&vdb, &HashSet::new(), &registry, &root);
+        unmerge_standalone(
+            &mut shell,
+            &pkg,
+            &probe.path("unmerge"),
+            &root,
+            &vdb,
+            &graph,
+            &mut registry,
+        )
+        .await
+        .unwrap();
+    }
+
+    // The removal phases see the USE the package was recorded with, groups included.
+    #[tokio::test]
+    async fn a_removal_runs_with_the_recorded_use() {
+        let probe = Probe::new();
+        let ebuild = probe.ebuild(
+            "probe",
+            "1",
+            &format!(
+                "IUSE=\"foo\"\n{INSTALLS_A_FILE}\
+                 pkg_prerm() {{ note \"foo=$(usex foo yes no) cards=${{VIDEO_CARDS}}\"; }}\n"
+            ),
+        );
+        probe.run(&ebuild, BUILD_AND_MERGE).await.unwrap();
+        let record = probe.path("root/var/db/pkg/app-misc/probe-1/USE");
+        fs::write(&record, "foo video_cards_fbdev\n").unwrap();
+        remove_probe(
+            &probe,
+            "export USE=video_cards_intel USE_EXPAND=VIDEO_CARDS VIDEO_CARDS=intel",
+        )
+        .await;
+        let log = probe.log();
+        assert!(log.contains("foo=yes cards=fbdev"), "{log}");
+    }
+
+    // Without an ebuild copy the saved environment runs the phases, in this removal's directories.
+    #[tokio::test]
+    async fn a_removal_from_the_saved_environment_runs_in_its_own_phase() {
+        let probe = Probe::new();
+        let ebuild = probe.ebuild(
+            "probe",
+            "1",
+            &format!(
+                "{INSTALLS_A_FILE}\
+                 pkg_prerm() {{ note \"${{EBUILD_PHASE}}:${{T}}:${{HOME}}\"; }}\n\
+                 pkg_postrm() {{ note \"${{EBUILD_PHASE}}:${{T}}\"; }}\n"
+            ),
+        );
+        probe.run(&ebuild, BUILD_AND_MERGE).await.unwrap();
+        fs::remove_file(probe.path("root/var/db/pkg/app-misc/probe-1/probe-1.ebuild")).unwrap();
+        remove_probe(&probe, ":").await;
+        let (unmerge, build) = (probe.path("unmerge"), probe.path("work"));
+        let log = probe.log();
+        assert!(log.contains(&format!("prerm:{unmerge}/")), "{log}");
+        assert!(
+            log.contains(".unmerge/temp:") && log.contains(".unmerge/homedir"),
+            "{log}"
+        );
+        assert!(log.contains(&format!("postrm:{unmerge}/")), "{log}");
+        assert!(!log.contains(build.as_str()), "{log}");
     }
 
     #[tokio::test]
