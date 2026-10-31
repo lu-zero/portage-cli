@@ -914,17 +914,33 @@ pub(super) type RootUseDeps = (
     String,
 );
 
+/// The installed version in each slot of each package
+pub(super) fn installed_slots(
+    entries: &[installed::VdbEntry],
+) -> HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>> {
+    let mut installed: HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>> = HashMap::new();
+    for e in entries {
+        let slot = e.slot.unwrap_or_else(|| Interned::intern(""));
+        installed
+            .entry(e.cpn)
+            .or_default()
+            .insert(slot, e.version.clone());
+    }
+    installed
+}
+
 /// Classify each requested atom into a solver root dep, a reported
 /// unsatisfiable target, or a silent drop.
 fn classify_root_targets(
     atoms: &[TargetAtom],
     data: &repo::RepoData,
     target_policy: &repo::ResolvePolicy,
-    installed: &HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>>,
+    installed_entries: &[installed::VdbEntry],
     empty: bool,
     selective: bool,
     multi_repo: bool,
 ) -> anyhow::Result<RootTargets> {
+    let installed = &installed_slots(installed_entries);
     let mut deps = Vec::new();
     let mut use_deps = Vec::new();
     let mut cpns: std::collections::HashSet<Cpn> = std::collections::HashSet::new();
@@ -952,12 +968,13 @@ fn classify_root_targets(
             }
             None => PortageVersionSet::any(),
         };
+        let vs = pin_subslot(&dep, vs, data, installed_entries);
         // `target_package` hands back an unslotted package when nothing the atom
         // matches survives keyword/mask/license filtering — an identity the
         // provider never registers, so leaving it in `deps` turns into an
         // opaque solver failure. Classify it here instead, the way portage does
         // in argument processing.
-        let unsatisfied = if pkg.slot().is_none() {
+        let unsatisfied = if pkg.slot().is_none() || vs == pubgrub::VersionSet::empty() {
             let reasons = repo::filter_reasons_for_atom(data, &dep, &vs, target_policy);
             let problem = if reasons.is_empty() {
                 targets::TargetProblem::NoEbuilds
@@ -1029,6 +1046,43 @@ fn classify_root_targets(
         unsatisfiable,
         masked_kept,
     })
+}
+
+/// `vs` narrowed to the known versions a target's `:SLOT/SUB` admits
+///
+/// Unlike in a dependency, a `:SLOT/SUB=` target pins too, as emerge does.
+/// PMS 7.2: no `/` means sub-slot = slot.
+fn pin_subslot(
+    dep: &Dep,
+    vs: PortageVersionSet,
+    data: &repo::RepoData,
+    installed: &[installed::VdbEntry],
+) -> PortageVersionSet {
+    use pubgrub::VersionSet as _;
+    let Some(portage_atom::SlotDep::Slot {
+        slot: Some(pin), ..
+    }) = &dep.slot_dep
+    else {
+        return vs;
+    };
+    let Some(want) = pin.subslot else {
+        return vs;
+    };
+    let admits = |slot, subslot: Option<_>| slot == pin.slot && subslot.unwrap_or(slot) == want;
+    let known = data.versions.get(&dep.cpn).into_iter().flatten();
+    let known = known
+        .filter(|(_, cache)| admits(cache.metadata.slot.slot, cache.metadata.slot.subslot))
+        .map(|(cpv, _)| cpv.version.clone());
+    let held = installed
+        .iter()
+        .filter(|e| e.cpn == dep.cpn && e.slot.is_some_and(|slot| admits(slot, e.subslot)))
+        .map(|e| e.version.clone());
+    let pinned = known
+        .chain(held)
+        .fold(PortageVersionSet::empty(), |set, v| {
+            set.union(&PortageVersionSet::singleton(v))
+        });
+    vs.intersection(&pinned)
 }
 
 /// Accepted versions of a target and the flags its USE requirements name that each one lacks

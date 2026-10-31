@@ -547,6 +547,33 @@ fn a_target_use_requirement_no_version_has_is_unsatisfiable() {
     assert!(message.contains("Missing IUSE: nosuchflag"), "{err:#}");
 }
 
+// A target's sub-slot picks among the versions of its slot, `=` or not; one no version has is unsatisfiable.
+#[test]
+fn a_target_sub_slot_pins_the_version() {
+    let subslotted = |cpv, slot| Pkg {
+        slot,
+        ..plain(cpv, "", "")
+    };
+    let pkgs = [
+        subslotted("app-misc/lib-1", "0/1"),
+        subslotted("app-misc/lib-2", "0/2"),
+    ];
+    let fix = fixture(&pkgs, &[]);
+    for atom in ["app-misc/lib:0/1", "app-misc/lib:0/1="] {
+        let atoms = [TargetAtom::explicit(atom)];
+        assert_eq!(
+            names(&solve(&fix, Solve::new(&atoms))),
+            ["app-misc/lib-1"],
+            "{atom}"
+        );
+    }
+    let atoms = [TargetAtom::explicit("app-misc/lib:0/3")];
+    assert!(
+        try_solve(&fix, Solve::new(&atoms)).is_err(),
+        "no version has sub-slot 3"
+    );
+}
+
 #[test]
 fn every_fatal_unsatisfiable_target_is_reported() {
     let pkgs = [

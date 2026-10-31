@@ -263,15 +263,6 @@ pub(super) async fn prepare<'a>(
         None
     };
 
-    let mut installed: HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>> = HashMap::new();
-    for e in &target_installed {
-        let slot_key = e.slot.unwrap_or_else(|| Interned::intern(""));
-        installed
-            .entry(e.cpn)
-            .or_default()
-            .insert(slot_key, e.version.clone());
-    }
-
     let policy_facts = repo::PolicyFactsCache::new();
     let target_policy = repo::ResolvePolicy {
         accept_keywords: &accept_keywords,
@@ -301,6 +292,7 @@ pub(super) async fn prepare<'a>(
 
     let provided_avail = provided_availability(&provided, &data);
 
+    let installed = super::installed_slots(&target_installed);
     let RootTargets {
         deps: root_deps,
         use_deps: root_use_deps,
@@ -311,7 +303,7 @@ pub(super) async fn prepare<'a>(
         atoms,
         &data,
         &target_policy,
-        &installed,
+        &target_installed,
         empty,
         selective,
         set.is_multi(),
