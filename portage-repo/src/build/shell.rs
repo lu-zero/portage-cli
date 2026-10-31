@@ -2360,7 +2360,7 @@ impl EbuildShell {
         self.shell.env_str(name).map(|cow| cow.into_owned())
     }
 
-    /// Set `IUSE_EFFECTIVE` from IUSE + profile implicit/expand values (PMS 11.1.1)
+    /// Set `IUSE_EFFECTIVE` from IUSE + profile implicit/expand values, and narrow USE to it (PMS 11.1.1)
     ///
     /// Undefined during metadata generation; call this on the build-phase
     /// source path only.
@@ -2395,6 +2395,12 @@ impl EbuildShell {
             unprefixed,
             &values,
         );
+        // PMS 11.1.1: with profile IUSE injection, USE holds only IUSE_EFFECTIVE flags.
+        if eapi.has_profile_iuse_injection() {
+            self.use_flags.retain(|f| set.contains(f));
+            let use_flags = self.use_flags_string();
+            self.set_var("USE", &use_flags);
+        }
         let joined = set.into_iter().collect::<Vec<_>>().join(" ");
         self.set_var("IUSE_EFFECTIVE", &joined);
     }

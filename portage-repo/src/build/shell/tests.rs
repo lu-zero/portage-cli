@@ -2563,3 +2563,39 @@ async fn a_names_a_distfile_offered_by_several_uris_once() {
     shell.set_a_from_src_uri();
     assert_eq!(shell.get_var("A").as_deref(), Some("z-1.tar.xz p.patch"));
 }
+
+#[tokio::test]
+async fn use_holds_only_iuse_effective_flags_with_profile_iuse_injection() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().to_path_buf();
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(
+        repo_path.join("metadata").join("layout.conf"),
+        "masters = \ncache-formats = md5-dict\n",
+    )
+    .unwrap();
+    std::fs::write(repo_path.join("profiles").join("repo_name"), "test-repo\n").unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    for (eapi, want) in [
+        ("8", "amd64 foo"),
+        ("4", "amd64 foo other video_cards_fbdev"),
+    ] {
+        shell
+            .set_use_flags(&["foo", "other", "amd64", "video_cards_fbdev"])
+            .unwrap();
+        shell.set_var("EAPI", eapi);
+        shell.set_var("IUSE", "foo -bar");
+        shell.set_var("USE_EXPAND", "VIDEO_CARDS");
+        shell.set_var("USE_EXPAND_UNPREFIXED", "ARCH");
+        shell.set_var("USE_EXPAND_IMPLICIT", "ARCH");
+        shell.set_var("USE_EXPAND_VALUES_ARCH", "amd64 arm64");
+        shell.apply_iuse_effective();
+        assert_eq!(shell.get_var("USE").as_deref(), Some(want), "EAPI {eapi}");
+    }
+}
