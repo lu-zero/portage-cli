@@ -742,6 +742,9 @@ async fn emerge_atoms_inner(
     // never actually happens.
     let skip_unmerge =
         merge_flags.fetchonly || merge_flags.fetch_all_uri || merge_flags.buildpkgonly;
+    if !skip_unmerge {
+        crate::merge::check_merge_roots_writable(&outcome.plan, &roots, cli)?;
+    }
     if merge_flags.ask {
         if merge_flags.eta {
             print_eta(&outcome);

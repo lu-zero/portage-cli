@@ -379,6 +379,57 @@ fn entry_roots<'a>(
     }
 }
 
+/// Refuse a merge into a root this user cannot write, before anything builds
+///
+/// A fake root (pseudoroot, hakoniwa) only fakes ownership: it cannot write a root the user does
+/// not own, such as the real `/` a missing build dependency merges into under `--root`.
+pub(crate) fn check_merge_roots_writable(
+    plan: &[query::depgraph::PlannedMerge],
+    roots: &portage_resolve::Roots,
+    globals: &cli::Cli,
+) -> Result<()> {
+    if rustix::process::geteuid().is_root()
+        || crate::privilege::install_wrap_backend() == Some(crate::privilege::Backend::Sudo)
+    {
+        return Ok(());
+    }
+    let host_roots = globals.host_roots();
+    let base_roots = globals.sysroot_roots().unwrap_or_else(|| roots.clone());
+    let mut blocked: std::collections::BTreeMap<&camino::Utf8Path, Vec<&portage_atom::Cpv>> =
+        std::collections::BTreeMap::new();
+    for planned in plan {
+        let root = entry_roots(planned, roots, &host_roots, &base_roots).merge_root();
+        if !vdb_writable(root) {
+            blocked.entry(root).or_default().push(&planned.cpv);
+        }
+    }
+    if blocked.is_empty() {
+        return Ok(());
+    }
+    let mut msg = String::new();
+    for (root, cpvs) in &blocked {
+        msg.push_str(&format!(
+            "{} package(s) in this plan merge into {root}, which is not writable:\n",
+            cpvs.len()
+        ));
+        for cpv in cpvs {
+            msg.push_str(&format!("    {cpv}\n"));
+        }
+    }
+    msg.push_str("Please install them on the build host first");
+    bail!(msg)
+}
+
+/// Whether this user can write `root`'s VDB, or the nearest directory it would be created in
+fn vdb_writable(root: &camino::Utf8Path) -> bool {
+    let vdb = root.join("var/db/pkg");
+    let existing = vdb
+        .ancestors()
+        .find(|dir| dir.as_std_path().exists())
+        .unwrap_or(root);
+    rustix::fs::access(existing.as_std_path(), rustix::fs::Access::WRITE_OK).is_ok()
+}
+
 // Which local binpkg index a plan entry's reuse lookup consults: the host's
 // own (built with host CHOST/CFLAGS) for a `MergeRoot::Host` entry, the
 // target's otherwise. Mirrors [`entry_roots`]'s selection — see
@@ -1936,6 +1987,30 @@ mod entry_roots_tests {
             entry_desired_env(&target_entry, (&target_env, &dirs), (&host_env, &dirs));
         assert_eq!(picked.chost, "riscv64-unknown-linux-gnu");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod writable_root_tests {
+    use super::*;
+
+    // A root that does not exist yet is judged by the directory it would be created in; an
+    // existing VDB this user cannot write refuses the merge.
+    #[test]
+    fn vdb_writable_judges_the_nearest_existing_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = camino::Utf8Path::from_path(dir.path()).expect("utf-8 tempdir");
+        assert!(vdb_writable(&base.join("fresh-root")));
+        let locked = base.join("locked");
+        let vdb = locked.join("var/db/pkg");
+        std::fs::create_dir_all(&vdb).expect("create vdb");
+        std::fs::set_permissions(&vdb, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+        assert!(!vdb_writable(&locked));
+        std::fs::set_permissions(&vdb, std::fs::Permissions::from_mode(0o755)).expect("chmod back");
     }
 }
 
