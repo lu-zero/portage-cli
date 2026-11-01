@@ -814,12 +814,22 @@ async fn elogdir(globals: &crate::cli::Cli) -> Utf8PathBuf {
     };
     let logdir = match configured.map(|d| d.trim().to_string()) {
         Some(dir) if !dir.is_empty() => Utf8PathBuf::from(dir),
-        _ => roots
-            .broot()
-            .unwrap_or_else(|| Utf8Path::new("/"))
-            .join("var/log/portage"),
+        _ => default_logdir(roots.broot().unwrap_or_else(|| Utf8Path::new("/"))),
     };
     logdir.join("elog")
+}
+
+/// `<broot>/var/log/portage`, or `~/.cache/em/log` for a user who cannot write it
+///
+/// The build directory's rule: a run without the right to write the system's logs keeps them
+/// in the user's own directory, and `em read` looks there for the same user.
+pub(crate) fn default_logdir(broot: &Utf8Path) -> Utf8PathBuf {
+    let system = broot.join("var/log/portage");
+    if crate::merge::can_write(&system) {
+        return system;
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    Utf8PathBuf::from(home).join(".cache/em/log")
 }
 
 /// `em read` — show what the `save` module filed, the job `elogv` does

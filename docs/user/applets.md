@@ -251,8 +251,8 @@ three settings.
   to `summary.log`), and **`echo`** (the *"Messages for package …"* block at
   the end of the run). `mail`, `mail_summary`, `syslog` and `custom` are
   accepted and ignored, as portage ignores a module it cannot import.
-- `PORTAGE_LOGDIR` (default `<broot>/var/log/portage`) is where the file
-  modules write, under an `elog/` subdirectory.
+- `PORTAGE_LOGDIR` (default `<broot>/var/log/portage`, or `~/.cache/em/log` for a user who
+  cannot write that) is where the file modules write, under an `elog/` subdirectory.
 
 `em read` shows what `save` filed, newest first — the job `elogv` does
 interactively:

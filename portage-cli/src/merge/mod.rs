@@ -399,7 +399,7 @@ pub(crate) fn check_merge_roots_writable(
         std::collections::BTreeMap::new();
     for planned in plan {
         let root = entry_roots(planned, roots, &host_roots, &base_roots).merge_root();
-        if !vdb_writable(root) {
+        if !can_write(&root.join("var/db/pkg")) {
             blocked.entry(root).or_default().push(&planned.cpv);
         }
     }
@@ -420,14 +420,13 @@ pub(crate) fn check_merge_roots_writable(
     bail!(msg)
 }
 
-/// Whether this user can write `root`'s VDB, or the nearest directory it would be created in
-fn vdb_writable(root: &camino::Utf8Path) -> bool {
-    let vdb = root.join("var/db/pkg");
-    let existing = vdb
-        .ancestors()
+/// Whether this user can write `path`, or the nearest existing directory it would be created in
+pub(crate) fn can_write(path: &camino::Utf8Path) -> bool {
+    path.ancestors()
         .find(|dir| dir.as_std_path().exists())
-        .unwrap_or(root);
-    rustix::fs::access(existing.as_std_path(), rustix::fs::Access::WRITE_OK).is_ok()
+        .is_some_and(|dir| {
+            rustix::fs::access(dir.as_std_path(), rustix::fs::Access::WRITE_OK).is_ok()
+        })
 }
 
 // Which local binpkg index a plan entry's reuse lookup consults: the host's
@@ -1997,19 +1996,19 @@ mod writable_root_tests {
     // A root that does not exist yet is judged by the directory it would be created in; an
     // existing VDB this user cannot write refuses the merge.
     #[test]
-    fn vdb_writable_judges_the_nearest_existing_directory() {
+    fn can_write_judges_the_nearest_existing_directory() {
         use std::os::unix::fs::PermissionsExt;
         if rustix::process::geteuid().is_root() {
             return;
         }
         let dir = tempfile::tempdir().expect("tempdir");
         let base = camino::Utf8Path::from_path(dir.path()).expect("utf-8 tempdir");
-        assert!(vdb_writable(&base.join("fresh-root")));
+        assert!(can_write(&base.join("fresh-root/var/db/pkg")));
         let locked = base.join("locked");
         let vdb = locked.join("var/db/pkg");
         std::fs::create_dir_all(&vdb).expect("create vdb");
         std::fs::set_permissions(&vdb, std::fs::Permissions::from_mode(0o555)).expect("chmod");
-        assert!(!vdb_writable(&locked));
+        assert!(!can_write(&vdb));
         std::fs::set_permissions(&vdb, std::fs::Permissions::from_mode(0o755)).expect("chmod back");
     }
 }

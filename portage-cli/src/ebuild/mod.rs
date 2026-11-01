@@ -3694,7 +3694,7 @@ fn elog_setting(shell: &portage_repo::EbuildShell, name: &str) -> String {
 /// `${T}/logging`.
 ///
 /// The log directory follows portage's `mod_save`: `PORTAGE_LOGDIR` when set,
-/// otherwise `<broot>/var/log/portage` — `broot` rather than the merge root
+/// otherwise [`crate::elog::default_logdir`] of `broot` — `broot` rather than the merge root
 /// because the logs describe what *this* `em` did, and belong where `em` runs.
 fn dispatch_elog(
     shell: &portage_repo::EbuildShell,
@@ -3746,7 +3746,7 @@ fn dispatch_unmerge_elog(
 /// Resolve the elog settings from the live shell
 ///
 /// The log directory follows portage's `mod_save`: `PORTAGE_LOGDIR` when set,
-/// otherwise `<broot>/var/log/portage` — `broot` rather than the merge root
+/// otherwise [`crate::elog::default_logdir`] of `broot` — `broot` rather than the merge root
 /// because the logs describe what *this* `em` did, and belong where `em` runs.
 /// `broot_hint` is the caller's root model when it has one; otherwise the
 /// shell's own `BROOT`, which the build environment already set for the active
@@ -3762,7 +3762,7 @@ fn elog_config(
             .or_else(|| shell.get_var("BROOT").map(Utf8PathBuf::from))
             .filter(|b| !b.as_str().is_empty())
             .unwrap_or_else(|| Utf8PathBuf::from("/"));
-        broot.join("var/log/portage")
+        crate::elog::default_logdir(&broot)
     } else {
         Utf8PathBuf::from(configured.trim())
     };
