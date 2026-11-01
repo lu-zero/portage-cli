@@ -1147,3 +1147,31 @@ fn a_blocked_package_only_the_installed_record_still_needs_is_unmerged() {
     let unmerged: Vec<String> = outcome.unmerges.iter().map(|u| u.cpv.to_string()).collect();
     assert_eq!(unmerged, ["app-misc/y-1"]);
 }
+
+// A `:*` dep keeps the installed slot that satisfies it unless updating: emerge -D, -ND and
+// -UD leave automake:1.18 for libtool's `>=automake-1.13:*`; -uD moves to the new slot.
+#[test]
+fn deep_without_update_keeps_an_installed_any_slot_choice() {
+    let slotted = |cpv, slot| Pkg {
+        slot,
+        ..plain(cpv, "", "")
+    };
+    let pkgs = [
+        Pkg {
+            rdepend: ">=app-misc/tool-1:*",
+            ..plain("app-misc/top-1", "", "")
+        },
+        slotted("app-misc/tool-1", "1"),
+        slotted("app-misc/tool-2", "2"),
+    ];
+    let fix = fixture(&pkgs, &["app-misc/top-1"]);
+    plant_installed(&fix.root, "app-misc/tool-1", "1", "", "");
+    let top = [TargetAtom::explicit("app-misc/top")];
+    let mut deep = Solve::new(&top);
+    deep.deep = true;
+    assert_eq!(names(&solve(&fix, deep)), ["app-misc/top-1"]);
+    let mut update = Solve::new(&top);
+    update.deep = true;
+    update.update = true;
+    assert_eq!(names(&solve(&fix, update)), ["app-misc/tool-2"]);
+}

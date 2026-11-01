@@ -943,7 +943,7 @@ impl PortageDependencyProvider {
         self.rebuild_tree = active;
     }
 
-    /// `--deep` / native `--emptytree`: bump `:*` any-slot deps (`SlotChoice`)
+    /// `--update --deep` / native `--emptytree`: bump `:*` any-slot deps (`SlotChoice`)
     /// to the newest slot rather than keeping a satisfying installed slot
     pub fn set_prefer_newest_slot(&mut self, active: bool) {
         self.prefer_newest_slot = active;

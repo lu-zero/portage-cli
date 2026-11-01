@@ -353,7 +353,9 @@ impl RoundCtx<'_> {
         }
         provider.set_nodeps(self.nodeps);
         provider.set_rebuild_tree(self.emptytree_native);
-        provider.set_prefer_newest_slot(self.deep || self.emptytree_native);
+        // emerge picks a new slot for a `:*` dep only when updating (`-uD`) or with
+        // `--emptytree`; `-D`, `-ND` and `-UD` keep an installed slot that satisfies it.
+        provider.set_prefer_newest_slot((self.deep && self.update) || self.emptytree_native);
         // `-uD` upgrades in-slot across the whole solve; `-N` alone must not (Portage parity).
         provider.set_prefer_update(self.update && self.deep && !self.emptytree_native);
         provider.set_walk_satisfied_build_deps(
