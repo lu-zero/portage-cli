@@ -660,6 +660,14 @@ Gentoo profile these still coincide exactly — no shipped profile declares
 `profile-set` profile format (or a site-local `/etc/portage/profile` with
 plain `packages` lines) — documented here as a known low-severity divergence.
 
+**`=V*` with zero-led components (intentional).** em matches a glob component
+by component, as PMS 8.3.1 describes it, so a component written with a leading
+zero compares by Algorithm 3.3: `=1.0*` matches `1.00` and `=1.01*` matches
+`1.010.5`. Portage compares the written text and requires a non-digit after the
+prefix, so it rejects both. Under PMS `1.0` and `1.00` are the same version, and
+no atom in the Gentoo tree depends on the difference; only a hand-written
+`package.*` glob with such a component can match more under em.
+
 Plus two **intentional** cosmetic divergences: install-*order* positions (valid
 topological order, different scheduler — emerge: target-driven DFS; here: SCC
 condensation + lexicographic Kahn) and the `:slot` suffix on autounmask
