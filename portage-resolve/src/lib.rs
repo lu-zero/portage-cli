@@ -61,6 +61,6 @@ pub mod use_env;
 pub mod use_reinstall;
 
 pub use bdepend_avail::{
-    Avail, all_cpns, broot_vdb_packages, collect_unsatisfied, unsatisfied_cpns,
+    Avail, all_cpns, broot_vdb_packages, collect_unsatisfied, unsatisfied_atoms,
 };
 pub use roots::Roots;

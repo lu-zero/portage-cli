@@ -385,22 +385,21 @@ pub fn broot_vdb_packages(roots: &Roots) -> Vec<InstalledPackage> {
     BrootSnapshot::load(roots).into_vec()
 }
 
-/// The CPNs of every unsatisfied (non-blocker) atom in `entries`
+/// Every unsatisfied (non-blocker) atom in `entries`
 ///
-/// An `AnyOf` (`||`) or `ExactlyOneOf` (`^^`) group contributes its branch CPNs
-/// only when no member is available. `AtMostOneOf` (`??`) is optional and
-/// contributes none. `UseConditional`s are assumed already resolved by
-/// `evaluate_use`. Used to find build-dep edges a root lacks (e.g. the native
-/// offset host build-closure walk).
-pub fn unsatisfied_cpns(entries: &[DepEntry], avail: &Avail) -> Vec<Cpn> {
+/// An unsatisfied `AnyOf` (`||`) or `ExactlyOneOf` (`^^`) group contributes the missing atoms of
+/// one branch: the one missing the fewest, the earliest on a tie, as Portage prefers the choice
+/// closest to installed. `AtMostOneOf` (`??`) is optional and contributes none. `UseConditional`s
+/// are assumed already resolved by `evaluate_use`.
+pub fn unsatisfied_atoms<'a>(entries: &'a [DepEntry], avail: &Avail) -> Vec<&'a Dep> {
     let mut out = Vec::new();
-    unsat_cpns_rec(entries, avail, &mut out);
+    unsat_atoms_rec(entries, avail, &mut out);
     out
 }
 
 /// Every non-blocker atom CPN in `entries`, satisfied or not
 ///
-/// Unlike [`unsatisfied_cpns`], not filtered by `Avail`: used where a caller
+/// Unlike [`unsatisfied_atoms`], not filtered by `Avail`: used where a caller
 /// needs to know *which provider a dependency resolves to* even when that
 /// provider was already scheduled by an earlier, unrelated consumer (e.g.
 /// `root_closure` recording a blocker edge on a shared entry).
@@ -412,17 +411,23 @@ pub fn all_cpns(entries: &[DepEntry]) -> Vec<Cpn> {
     out
 }
 
-fn unsat_cpns_rec(entries: &[DepEntry], avail: &Avail, out: &mut Vec<Cpn>) {
+fn unsat_atoms_rec<'a>(entries: &'a [DepEntry], avail: &Avail, out: &mut Vec<&'a Dep>) {
     for e in entries {
         match e {
             DepEntry::Atom(dep) if dep.blocker.is_none() && !avail.atom_satisfied(dep) => {
-                out.push(dep.cpn);
+                out.push(dep);
             }
-            DepEntry::AllOf(c) => unsat_cpns_rec(c, avail, out),
+            DepEntry::AllOf(c) => unsat_atoms_rec(c, avail, out),
             DepEntry::AnyOf(c) | DepEntry::ExactlyOneOf(c) if !group_satisfied(c, avail) => {
-                for branch in c {
-                    cpns_of(branch, out);
-                }
+                let fewest = c
+                    .iter()
+                    .map(|branch| {
+                        let mut missing = Vec::new();
+                        unsat_atoms_rec(std::slice::from_ref(branch), avail, &mut missing);
+                        missing
+                    })
+                    .min_by_key(Vec::len);
+                out.extend(fewest.unwrap_or_default());
             }
             _ => {}
         }
@@ -680,45 +685,50 @@ mod tests {
         assert!(out.is_empty(), "{out:?}");
     }
 
+    fn missing(entries: &[DepEntry], avail: &Avail) -> Vec<String> {
+        unsatisfied_atoms(entries, avail)
+            .into_iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+
     #[test]
-    fn unsatisfied_cpns_returns_missing() {
+    fn unsatisfied_atoms_returns_missing() {
         let avail = atoms(&["dev-libs/foo-1.2"]);
-        let cpns: Vec<String> = unsatisfied_cpns(&parse("dev-libs/foo dev-libs/bar"), &avail)
-            .into_iter()
-            .map(|c| c.to_string())
-            .collect();
-        assert_eq!(cpns, ["dev-libs/bar"]);
+        assert_eq!(
+            missing(&parse("dev-libs/foo dev-libs/bar"), &avail),
+            ["dev-libs/bar"]
+        );
+    }
+
+    // llvm's `|| ( ( python:3.13 sphinx ) ( python:3.14 sphinx ) )` on a host with python 3.14
+    // and no sphinx: only sphinx is missing, from the branch that is nearly there.
+    #[test]
+    fn unsatisfied_any_of_takes_the_branch_missing_the_fewest() {
+        let avail = atoms(&["dev-lang/python-3.14.5"]);
+        let deps = parse(
+            "|| ( ( =dev-lang/python-3.13* dev-python/sphinx ) \
+             ( =dev-lang/python-3.14* dev-python/sphinx ) )",
+        );
+        assert_eq!(missing(&deps, &avail), ["dev-python/sphinx"]);
+        let none = Avail::default();
+        assert_eq!(
+            missing(&parse("|| ( dev-libs/a dev-libs/b )"), &none),
+            ["dev-libs/a"]
+        );
     }
 
     #[test]
-    fn unsatisfied_cpns_any_of_unsatisfied_lists_branches() {
-        // A fully-unsatisfied || group contributes every branch's CPN.
-        let avail = Avail::default();
-        let cpns: Vec<String> = unsatisfied_cpns(&parse("|| ( dev-libs/a dev-libs/b )"), &avail)
-            .into_iter()
-            .map(|c| c.to_string())
-            .collect();
-        assert_eq!(cpns, ["dev-libs/a", "dev-libs/b"]);
-    }
-
-    #[test]
-    fn unsatisfied_cpns_any_of_satisfied_is_empty() {
+    fn unsatisfied_atoms_any_of_satisfied_is_empty() {
         let avail = atoms(&["dev-libs/b-1"]);
-        let cpns = unsatisfied_cpns(&parse("|| ( dev-libs/a dev-libs/b )"), &avail);
-        assert!(cpns.is_empty());
+        assert!(missing(&parse("|| ( dev-libs/a dev-libs/b )"), &avail).is_empty());
     }
 
     #[test]
     fn exactly_one_of_reports_missing_branches() {
         let avail = Avail::default();
         let deps = parse("^^ ( dev-libs/a dev-libs/b )");
-        assert_eq!(
-            unsatisfied_cpns(&deps, &avail)
-                .into_iter()
-                .map(|cpn| cpn.to_string())
-                .collect::<Vec<_>>(),
-            ["dev-libs/a", "dev-libs/b"]
-        );
+        assert_eq!(missing(&deps, &avail), ["dev-libs/a"]);
         assert!(avail.has_unsatisfied_atom_for_cpn(&deps, Cpn::parse("dev-libs/a").unwrap()));
 
         let mut out = Vec::new();
@@ -726,7 +736,7 @@ mod tests {
         assert_eq!(out, ["^^ ( dev-libs/a dev-libs/b )"]);
 
         let optional = parse("?? ( dev-libs/c dev-libs/d )");
-        assert!(unsatisfied_cpns(&optional, &avail).is_empty());
+        assert!(missing(&optional, &avail).is_empty());
         assert!(!avail.has_unsatisfied_atom_for_cpn(&optional, Cpn::parse("dev-libs/c").unwrap()));
     }
 

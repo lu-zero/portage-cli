@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use portage_atom::{Cpn, Cpv, Version};
+use portage_atom::{Cpn, Cpv, Dep, Slot, Version};
 use portage_atom_pubgrub::{DepClass, MergeRoot, PortagePackage};
 
 use crate::Roots;
@@ -15,7 +15,7 @@ use crate::effective_use;
 use crate::installed::{BrootSnapshot, VdbSnapshotCache};
 use crate::repo::Adapter;
 use crate::root_aware::CrossContext;
-use crate::{Avail, all_cpns, unsatisfied_cpns};
+use crate::{Avail, all_cpns, unsatisfied_atoms};
 
 /// A finished Target plan with a second root's missing build closure spliced in
 pub struct Plan {
@@ -49,7 +49,14 @@ const BASE: Spec = Spec {
 const HOST: Spec = Spec {
     stamp: MergeRoot::Host,
     top: &[DepClass::Depend, DepClass::Bdepend, DepClass::Idepend],
-    deep: &[DepClass::Depend, DepClass::Bdepend, DepClass::Idepend],
+    // A build tool runs on the host, so what it needs at runtime must be there too.
+    deep: &[
+        DepClass::Depend,
+        DepClass::Bdepend,
+        DepClass::Idepend,
+        DepClass::Rdepend,
+        DepClass::Pdepend,
+    ],
 };
 
 /// Splice the toolchain sysroot's missing `DEPEND` closure
@@ -180,9 +187,13 @@ fn run(
         }
     }
 
+    // Seeds the solver stamped for this root are closure nodes too: what they need there
+    // must be there.
     for i in 0..graph.fixed {
-        if graph.node[i].0.merge_root() == MergeRoot::Target {
-            visit(&ctx, &mut graph, &mut avail, i, spec.top, true);
+        match graph.node[i].0.merge_root() {
+            MergeRoot::Target => visit(&ctx, &mut graph, &mut avail, i, spec.top, true),
+            root if root == spec.stamp => visit(&ctx, &mut graph, &mut avail, i, spec.deep, false),
+            _ => {}
         }
     }
     emit(&graph, spec.stamp)
@@ -216,7 +227,8 @@ fn visit(
             DepClass::Pdepend => deps.pdepend(),
             DepClass::Idepend => deps.idepend(),
         };
-        for cpn in unsatisfied_cpns(listed, avail) {
+        for dep in unsatisfied_atoms(listed, avail) {
+            let cpn = dep.cpn;
             if graph.of_cpn.contains_key(&cpn) {
                 continue;
             }
@@ -229,7 +241,7 @@ fn visit(
                     "root_closure {stamp:?}: top-level {class} gap for {cpn} (from {pkg})"
                 );
             }
-            let Some((cver, cpkg)) = resolve(cpn, ctx) else {
+            let Some((cver, cpkg)) = resolve(dep, ctx) else {
                 graph.of_cpn.insert(cpn, None);
                 continue;
             };
@@ -241,8 +253,14 @@ fn visit(
             graph.of_cpn.insert(cpn, Some(v));
             avail.record_merge(Cpv::new(cpn, cver), ctx.spec.stamp);
             visit(ctx, graph, avail, v, ctx.spec.deep, false);
+            // A PDEPEND merges after the package that wants it, not before.
+            if class == DepClass::Pdepend {
+                graph.needs[v].push(u);
+            }
         }
-        entries.extend_from_slice(listed);
+        if class != DepClass::Pdepend {
+            entries.extend_from_slice(listed);
+        }
     }
     // Source dependency-string order, never sorted or routed through a set:
     // the emission DFS follows this list, so the final plan order depends on
@@ -273,6 +291,12 @@ fn emit(graph: &Graph, stamp: MergeRoot) -> Plan {
     let mut order = Vec::with_capacity(graph.node.len());
     for root in 0..graph.fixed {
         emit_node(graph, root, stamp, &mut state, &mut pos, &mut order);
+    }
+    // What no anchor waits on (a PDEPEND) goes last, after what it needs.
+    for v in graph.fixed..graph.node.len() {
+        if matches!(state[v], State::New) {
+            emit_node(graph, v, stamp, &mut state, &mut pos, &mut order);
+        }
     }
     let blockers = graph
         .needs
@@ -315,18 +339,24 @@ fn emit_node(
     order.push(graph.node[u].clone());
 }
 
-/// Resolve `(version, package)` for a closure entry on `cpn`
+/// Resolve `(version, package)` for a closure entry satisfying `dep`
 ///
-/// The Target plan's version when the CPN is also built for Target, else the
-/// newest keyword/mask/license-accepted repo version (`ctx.adapter`'s
+/// The Target plan's version when the CPN is also built for Target and `dep` takes it, else
+/// the newest keyword/mask/license-accepted repo version `dep` matches (`ctx.adapter`'s
 /// `accept_keywords` is already scoped to the arch the entry builds at).
 ///
-/// `None` when the CPN is absent from the repo or has no accepted version.
-fn resolve(cpn: Cpn, ctx: &Ctx<'_>) -> Option<(Version, PortagePackage)> {
-    if let Some((v, p)) = ctx.target_ver.get(&cpn) {
+/// `None` when the CPN is absent from the repo or no accepted version matches.
+fn resolve(dep: &Dep, ctx: &Ctx<'_>) -> Option<(Version, PortagePackage)> {
+    let cpn = dep.cpn;
+    if let Some((v, p)) = ctx.target_ver.get(&cpn)
+        && dep.matches_cpv(
+            &Cpv::new(cpn, v.clone()),
+            p.slot().map(Slot::from_name).as_ref(),
+        )
+    {
         return Some((v.clone(), p.clone()));
     }
-    let (cpv, cache) = ctx.adapter.newest_accepted(cpn)?;
+    let (cpv, cache) = ctx.adapter.newest_accepted(dep)?;
     let slot = &cache.metadata.slot.slot;
     let pkg = if slot.as_str() == "0" {
         PortagePackage::unslotted(cpn)
@@ -1000,6 +1030,79 @@ mod tests {
         assert!(
             !edges.contains(&("dev-libs/b".to_string(), "dev-libs/a".to_string())),
             "the cycle's back edge must be dropped: {edges:?}"
+        );
+    }
+
+    // llvm's BDEPEND `|| ( ( python:3.13 sphinx ) ( python:3.14 sphinx ) )` on a host with
+    // python 3.14: only sphinx is missing, and no other python is planned for the host.
+    #[test]
+    fn a_host_any_of_takes_the_branch_the_host_nearly_has() {
+        let data = repo_from(&[
+            (
+                "sys-apps/consumer-1.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\nBDEPEND=|| ( ( =dev-lang/py-3.13* dev-python/doc ) ( =dev-lang/py-3.14* dev-python/doc ) )\n",
+            ),
+            (
+                "dev-lang/py-3.13.17",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+            (
+                "dev-lang/py-3.14.5",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+            (
+                "dev-python/doc-9.2",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let target_order = vec![(pkg("sys-apps/consumer"), ver("1.0"))];
+        let (host_dir, _prefix, roots, cross) = offset_roots();
+        write_fake_vdb_entry(host_dir.path(), "dev-lang/py-3.14.5");
+        test_adapter!(a, &data, "amd64");
+        assert_eq!(
+            names(&host(&target_order, &a, &roots, &cross)),
+            ["dev-python/doc", "sys-apps/consumer"]
+        );
+    }
+
+    // A build tool runs on the host: its runtime deps go there before it, and its PDEPEND after.
+    #[test]
+    fn a_host_build_tool_brings_its_runtime_deps_and_pdepend() {
+        let data = repo_from(&[
+            (
+                "sys-apps/consumer-1.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\nBDEPEND=dev-util/tool\n",
+            ),
+            (
+                "dev-util/tool-1.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\nRDEPEND=dev-libs/rt\nPDEPEND=dev-util/tool-extra\n",
+            ),
+            (
+                "dev-libs/rt-1.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+            (
+                "dev-util/tool-extra-1.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let target_order = vec![(pkg("sys-apps/consumer"), ver("1.0"))];
+        let (_host, _prefix, roots, cross) = offset_roots();
+        test_adapter!(a, &data, "amd64");
+        let plan = host(&target_order, &a, &roots, &cross);
+        assert_eq!(
+            names(&plan),
+            [
+                "dev-libs/rt",
+                "dev-util/tool",
+                "sys-apps/consumer",
+                "dev-util/tool-extra"
+            ]
+        );
+        assert!(
+            edge_names(&plan).contains(&("dev-util/tool-extra".into(), "dev-util/tool".into())),
+            "{:?}",
+            edge_names(&plan)
         );
     }
 }

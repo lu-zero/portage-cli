@@ -1423,18 +1423,21 @@ impl Adapter<'_> {
         version_accepted_for(&self.policy(), cpv, cache, repo_name_of(self.data, cpv))
     }
 
-    /// The newest keyword/mask/license-accepted version of `cpn`, with its cache entry
+    /// The newest keyword/mask/license-accepted version `dep` matches, with its cache entry
     ///
-    /// `None` when the CPN is absent from the repo or has no accepted version.
+    /// `None` when the CPN is absent from the repo or no accepted version matches.
     /// Centralizes the "newest accepted version" pick so a caller can't drift from
     /// `version_accepted` the way `root_closure`'s own inline copy once did (the
     /// `dev-vcs/git-9999` selection bug).
-    pub fn newest_accepted(&self, cpn: Cpn) -> Option<(&Cpv, &CacheEntry)> {
+    pub fn newest_accepted(&self, dep: &Dep) -> Option<(&Cpv, &CacheEntry)> {
         self.data
             .versions
-            .get(&cpn)?
+            .get(&dep.cpn)?
             .iter()
-            .filter(|(cpv, cache)| self.version_accepted(cpv, cache))
+            .filter(|(cpv, cache)| {
+                dep.matches_cpv(cpv, Some(&cache.metadata.slot))
+                    && self.version_accepted(cpv, cache)
+            })
             .max_by(|a, b| a.0.version.cmp(&b.0.version))
             .map(|(cpv, cache)| (cpv, cache))
     }
