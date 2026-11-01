@@ -1292,9 +1292,10 @@ fn package_needs_use_reinstall(
         }
     };
     let best = data.versions.get(&e.cpn).and_then(|vers| {
+        // The list is in file-name order: `1.10.2` comes before `1.9.2`.
         vers.iter()
-            .rev()
-            .find(|(cpv, entry)| same_slot(entry) && policy.accepts_version(data, cpv, entry))
+            .filter(|(cpv, entry)| same_slot(entry) && policy.accepts_version(data, cpv, entry))
+            .max_by(|(a, _), (b, _)| a.version.cmp(&b.version))
     });
     let (plan_ver, cache) = match best {
         Some((cpv, c)) => (cpv.version.clone(), c),
