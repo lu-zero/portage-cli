@@ -239,7 +239,7 @@ pub fn init(quiet: bool, verbose: u8, parallel: bool) {
     // bridge (mirrors info/warn/error onto the current session's bus as
     // ActivityEvent::Diagnostic). Both honour the same level floor.
     let fmt = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
+        .with_writer(crate::console::MakeStderr)
         .with_target(false)
         .without_time()
         .with_ansi(colored)

@@ -5,6 +5,7 @@
 
 mod bus;
 mod bus_layer;
+mod candy;
 mod emergelog;
 mod event;
 mod history;
@@ -16,6 +17,7 @@ mod projection;
 
 pub use bus::{ActivityBus, ActivitySink, BackgroundSink, RecordingSink};
 pub use bus_layer::{BusLayer, clear_session, set_session};
+pub use candy::CandySink;
 pub use emergelog::EmergeLogSink;
 pub use event::{
     ACTIVITY_EVENT_VERSION, ActivityEvent, ActivityMergeRoot, ActivityMode, ActivityPlanPkg,
@@ -187,12 +189,21 @@ pub fn worker_activity_bus(live_root: &Utf8Path, reemit_path: Option<&str>) -> A
     bus
 }
 
-/// Attach the emerge-style terminal renderer
+/// Attach the terminal renderers: emerge-style banners, and with `candy` live bars under them
 ///
-/// Renders `PkgStart`/`PhaseEnter` banners from the bus (a direct, inline sink so output is
-/// immediate). `quiet` suppresses everything; `verbose` adds per-phase timings.
-pub fn attach_human_stdout(bus: &ActivityBus, quiet: bool, verbose: u8) {
-    bus.add_sink(Arc::new(HumanStdoutSink::new(quiet, verbose)));
+/// The banners are a direct, inline sink so output is immediate; `quiet` suppresses them and
+/// `verbose` adds per-phase timings. `candy` (`FEATURES=candy`) applies only when stdout and
+/// stderr are terminals and the run is not quiet. Returns whether it did: the bars then own the
+/// terminal, the banners report failures only, and build output goes to the build log only.
+pub fn attach_terminal(bus: &ActivityBus, quiet: bool, verbose: u8, candy: bool) -> bool {
+    use std::io::IsTerminal;
+    let candy =
+        candy && !quiet && std::io::stdout().is_terminal() && std::io::stderr().is_terminal();
+    bus.add_sink(Arc::new(HumanStdoutSink::new(quiet || candy, verbose)));
+    if candy {
+        bus.add_sink(Arc::new(CandySink::new()));
+    }
+    candy
 }
 
 /// Attach optional JSONL FD / path sinks to an existing bus
@@ -416,6 +427,7 @@ mod tests {
             of: 3,
             kind: PkgKind::Source,
             at: 101.0,
+            log: None,
         });
         p.apply(&ActivityEvent::PhaseEnter {
             v: ACTIVITY_EVENT_VERSION,
@@ -659,6 +671,7 @@ mod tests {
             of: 1,
             kind: PkgKind::Source,
             at: 2.0,
+            log: None,
         });
         bus.emit(ActivityEvent::PhaseEnter {
             v: ACTIVITY_EVENT_VERSION,

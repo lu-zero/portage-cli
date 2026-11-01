@@ -399,7 +399,7 @@ pub fn estimate_remaining_with_blockers(
 
 /// Discrete-event simulation: up to `jobs` concurrent builds; a node starts
 /// only after all `blockers[i]` predecessors have finished.
-fn critical_path_wall(durations: &[f64], blockers: &[Vec<usize>], jobs: usize) -> f64 {
+pub(crate) fn critical_path_wall(durations: &[f64], blockers: &[Vec<usize>], jobs: usize) -> f64 {
     let n = durations.len();
     if n == 0 {
         return 0.0;

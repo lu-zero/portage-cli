@@ -207,10 +207,14 @@ fn provided_features(configured: &str, preserve_libs: bool, as_root: bool) -> St
 /// Whether `settings` keeps `preserve-libs` on: as Portage stacks it, so `-preserve-libs` turns it
 /// off; on without settings
 fn preserves_libs(settings: Option<&Settings>) -> bool {
-    settings.is_none_or(|s| {
-        s.get("FEATURES")
-            .is_some_and(|v| v.split_whitespace().any(|f| f == "preserve-libs"))
-    })
+    settings.is_none_or(|s| feature_on(s, "preserve-libs"))
+}
+
+/// Whether `name` is on in the stacked `FEATURES`
+pub(crate) fn feature_on(settings: &Settings, name: &str) -> bool {
+    settings
+        .get("FEATURES")
+        .is_some_and(|v| v.split_whitespace().any(|f| f == name))
 }
 
 /// Replace the shell's `FEATURES` with [`provided_features`], and return it

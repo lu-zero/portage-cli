@@ -790,7 +790,11 @@ async fn emerge_atoms_inner(
     // Terminal banners render from the bus (one verbosity decision point); the
     // `quiet` here is the user's `-q`, NOT the jobs-derived phase-log quiet —
     // `-j>1` keeps banners while still sending build output to build.log.
-    crate::activity::attach_human_stdout(&activity, cli.quiet(), cli.verbose());
+    let candy = crate::settings::load(cli)
+        .await?
+        .is_some_and(|s| crate::settings::feature_on(&s, "candy"));
+    let builds_log_only =
+        crate::activity::attach_terminal(&activity, cli.quiet(), cli.verbose(), candy);
     let activity_args = cli.effective_activity();
     crate::activity::attach_jsonl_outputs(
         &activity,
@@ -900,6 +904,7 @@ async fn emerge_atoms_inner(
                 job_id: job_id.clone(),
                 parent_job_id: parent_job_id.clone(),
                 live_root: live_root.clone(),
+                builds_log_only,
             }),
         })
         .await

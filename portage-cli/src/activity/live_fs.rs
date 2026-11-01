@@ -442,6 +442,7 @@ fn load_inflight_dir(
                 of: p.of,
                 kind: p.kind,
                 at: p.pkg_started_at,
+                log: None,
             });
             for (phase, secs) in &p.phases_done {
                 proj.apply(&ActivityEvent::PhaseLeave {

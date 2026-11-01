@@ -182,6 +182,9 @@ pub enum ActivityEvent {
         of: u32,
         kind: PkgKind,
         at: f64,
+        /// The build log a source build writes
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        log: Option<Arc<str>>,
     },
     PhaseEnter {
         v: u32,

@@ -232,10 +232,12 @@ pub const C_DISABLED: Style = Style::new()
 /// [`anyhow::Error`]'s `Display`): `anstream` strips ANSI escapes from the
 /// byte stream itself, regardless of where in the pipeline they were added.
 pub(crate) fn warn_line_impl(args: std::fmt::Arguments<'_>) {
-    use std::io::Write;
-    let mut out = anstream::stderr();
-    let _ = writeln!(out, "{C_WARN}!!!{C_WARN:#} {args}");
-    let _ = out.flush();
+    crate::console::suspend(|| {
+        use std::io::Write;
+        let mut out = anstream::stderr();
+        let _ = writeln!(out, "{C_WARN}!!!{C_WARN:#} {args}");
+        let _ = out.flush();
+    });
 }
 
 /// Underlying writer for [`error_line!`] — print an error line to stderr:
@@ -244,10 +246,12 @@ pub(crate) fn warn_line_impl(args: std::fmt::Arguments<'_>) {
 /// `eprintln!("!!! …")`. For an item's requested operation that definitively
 /// failed, whether or not the overall command carries on to the next item.
 pub(crate) fn error_line_impl(args: std::fmt::Arguments<'_>) {
-    use std::io::Write;
-    let mut out = anstream::stderr();
-    let _ = writeln!(out, "{C_ERROR}!!!{C_ERROR:#} {args}");
-    let _ = out.flush();
+    crate::console::suspend(|| {
+        use std::io::Write;
+        let mut out = anstream::stderr();
+        let _ = writeln!(out, "{C_ERROR}!!!{C_ERROR:#} {args}");
+        let _ = out.flush();
+    });
 }
 
 /// Underlying writer for [`einfo_line!`] — print an informational line to
@@ -263,10 +267,12 @@ pub(crate) fn error_line_impl(args: std::fmt::Arguments<'_>) {
 /// where a pipe consumer may want the report separate from diagnostics).
 /// `args` is the text after the marker — the `" * "` prefix is added here.
 pub(crate) fn einfo_line_impl(args: std::fmt::Arguments<'_>) {
-    use std::io::Write;
-    let mut out = anstream::stdout();
-    let _ = writeln!(out, "{C_MARKER_INFO} * {C_MARKER_INFO:#}{args}");
-    let _ = out.flush();
+    crate::console::suspend(|| {
+        use std::io::Write;
+        let mut out = anstream::stdout();
+        let _ = writeln!(out, "{C_MARKER_INFO} * {C_MARKER_INFO:#}{args}");
+        let _ = out.flush();
+    });
 }
 
 /// Underlying writer for [`einfo_stderr_line!`] — [`einfo_line_impl`]'s
@@ -278,10 +284,12 @@ pub(crate) fn einfo_line_impl(args: std::fmt::Arguments<'_>) {
 /// bytes in event messages. Nothing here consults the log level or `-q`, so
 /// a caller that should stay quiet under `-q` checks that itself.
 pub(crate) fn einfo_stderr_line_impl(args: std::fmt::Arguments<'_>) {
-    use std::io::Write;
-    let mut out = anstream::stderr();
-    let _ = writeln!(out, "{C_MARKER_INFO} * {C_MARKER_INFO:#}{args}");
-    let _ = out.flush();
+    crate::console::suspend(|| {
+        use std::io::Write;
+        let mut out = anstream::stderr();
+        let _ = writeln!(out, "{C_MARKER_INFO} * {C_MARKER_INFO:#}{args}");
+        let _ = out.flush();
+    });
 }
 
 /// Underlying writer for [`ewarn_sub_bullet!`] — print an indented `einfo`
@@ -294,10 +302,12 @@ pub(crate) fn einfo_stderr_line_impl(args: std::fmt::Arguments<'_>) {
 /// A single [`tracing::warn!`] per item would lose the visual hierarchy
 /// and prefix every continuation line, so this keeps the listing shape.
 pub(crate) fn ewarn_sub_bullet_impl(args: std::fmt::Arguments<'_>) {
-    use std::io::Write;
-    let mut out = anstream::stderr();
-    let _ = writeln!(out, "  {C_WARN}*{C_WARN:#} {args}");
-    let _ = out.flush();
+    crate::console::suspend(|| {
+        use std::io::Write;
+        let mut out = anstream::stderr();
+        let _ = writeln!(out, "  {C_WARN}*{C_WARN:#} {args}");
+        let _ = out.flush();
+    });
 }
 
 // ── Public macro forms (println!-style format-arg ergonomics) ─────────────
@@ -425,14 +435,16 @@ fn split_edo_die(msg: &str) -> Option<(String, String)> {
 /// [`render_error_chain`]): `head` leads the first line, every further line
 /// prints beneath it, indented so the breakdown reads as subordinate.
 pub(crate) fn print_failure_banner(head: std::fmt::Arguments<'_>, message: &str) {
-    use std::io::Write;
-    let mut out = anstream::stderr();
-    let mut lines = message.lines();
-    let _ = writeln!(out, "{head}{}", lines.next().unwrap_or_default());
-    for line in lines {
-        let _ = writeln!(out, "    {line}");
-    }
-    let _ = out.flush();
+    crate::console::suspend(|| {
+        use std::io::Write;
+        let mut out = anstream::stderr();
+        let mut lines = message.lines();
+        let _ = writeln!(out, "{head}{}", lines.next().unwrap_or_default());
+        for line in lines {
+            let _ = writeln!(out, "    {line}");
+        }
+        let _ = out.flush();
+    });
 }
 
 /// Style for a profile's stability status (same palette as keyword stability)

@@ -44,8 +44,8 @@ What the tree tests (`has X ${FEATURES}` in ebuilds and eclasses): `userpriv` 43
 
 A build's `FEATURES` is now `settings::provided_features`:
 - Honoured switches the configuration sets (`package.env` included): `test`, `keepwork`, `keeptemp`, `noclean`,
-  `nostrip`, `binpkg-signing`, `binpkg-request-signature`. (`candy`, emerge's resolve spinner, is not implemented:
-  the 2026-10-22 list above counted a profile test's sample text.)
+  `nostrip`, `binpkg-signing`, `binpkg-request-signature`. (`candy` selects em's merge display and is
+  not passed to builds; see below.)
 - `preserve-libs` as Portage stacks it, so `-preserve-libs` now switches preservation off (Luca: "interesting to
   implement just to see how it is"). Without make.globals em's own globals layer is `FEATURES="preserve-libs"`.
 - `binpkg-multi-instance`, always (every package gets a build id).
@@ -62,7 +62,7 @@ Open: ccache support; whether `--info` should say that the build value differs f
 **`candy` (Luca, 2026-10-27):** Portage's is a scrolling-message spinner while the resolver runs; em's resolve is too
 fast to need one. Instead, `FEATURES=candy` selects a richer build progress display: a sink on the activity bus
 (next to `HumanStdoutSink`, see [[activity-status]]) drawing per-package/phase bars and the ETA from the duration
-history, with indicatif (already a dependency, used for sync) or ratatui. Not started.
+history. Landed 2026-11-01 with indicatif (`activity/candy.rs`, `console.rs`); live-checked in a sandbox.
 - indicatif's `MultiProgress` can keep each running build's last output line under its bar, so parallel
   (`--jobs N`) builds stay readable; the mode works for both verbose and quiet runs.
 - It may become the default display once it exists.

@@ -62,6 +62,8 @@ pub(crate) struct ActivityTrack {
     pub parent_job_id: Option<String>,
     /// Session live-FS root so install workers can re-open the same tree
     pub live_root: camino::Utf8PathBuf,
+    /// A live display owns the terminal, so build output goes to `build.log` only
+    pub builds_log_only: bool,
 }
 
 /// The one binpkg lookup shared by status rendering and the action path.
@@ -120,17 +122,29 @@ fn find_binpkg_reuse(
     BinpkgReuse { local, remote }
 }
 
+/// `work_base` and `merge_root` locate a source build's log
 fn emit_pkg_start(
     activity: &Option<ActivityTrack>,
     planned: &query::depgraph::PlannedMerge,
-    index: u32,
-    of: u32,
+    (index, of): (u32, u32),
     kind: crate::activity::PkgKind,
+    work_base: &camino::Utf8Path,
+    merge_root: &camino::Utf8Path,
 ) -> f64 {
     let at = crate::activity::ActivityEvent::now();
     let Some(act) = activity else {
         return at;
     };
+    let log = (kind == crate::activity::PkgKind::Source).then(|| {
+        let pf = format!("{}-{}", planned.cpv.cpn.package, planned.cpv.version);
+        let dir = ebuild::package_work_dir(
+            work_base,
+            merge_root,
+            planned.cpv.cpn.category.as_str(),
+            &pf,
+        );
+        dir.join("build.log").as_str().into()
+    });
     act.bus.emit(crate::activity::ActivityEvent::PkgStart {
         v: crate::activity::ACTIVITY_EVENT_VERSION,
         job_id: act.job_id.as_str().into(),
@@ -142,6 +156,7 @@ fn emit_pkg_start(
         of,
         kind,
         at,
+        log,
     });
     at
 }
@@ -429,8 +444,8 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // unreadable, so send it to build.log only (real emerge does the same
     // under `--jobs`: the tee comes off, the one-line banners stay — those are
     // now rendered from the activity bus by `HumanStdoutSink`). `-q` silences
-    // the sink too. So this `quiet` (phase-log only) is `-q || -j>1`.
-    let quiet = globals.quiet() || jobs > 1;
+    // the sink too, and `FEATURES=candy`'s bars own the terminal.
+    let quiet = globals.quiet() || jobs > 1 || activity.as_ref().is_some_and(|a| a.builds_log_only);
     let buildpkg = merge_flags.buildpkg;
     let buildpkgonly = merge_flags.buildpkgonly;
     // `-F`/`--fetch-all-uri` is fetch-only too (just a different SRC_URI
@@ -673,22 +688,24 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     }
 
     let fail_verb = if fetchonly { "fetch" } else { "merge" };
-    eprintln!("\n>>> {} package(s) failed to {fail_verb}:", failures.len());
-    for f in &failures {
-        crate::style::ewarn_sub_bullet!("{}", f.cpv);
-        for line in f.cause.lines() {
-            eprintln!("      {line}");
+    crate::console::suspend(|| {
+        eprintln!("\n>>> {} package(s) failed to {fail_verb}:", failures.len());
+        for f in &failures {
+            crate::style::ewarn_sub_bullet!("{}", f.cpv);
+            for line in f.cause.lines() {
+                eprintln!("      {line}");
+            }
+            if f.log.exists() {
+                eprintln!("      log: {}", f.log);
+            }
         }
-        if f.log.exists() {
-            eprintln!("      log: {}", f.log);
+        if merged > 0 || skipped > 0 {
+            eprintln!(
+                "    ({merged} ok, {skipped} already installed, {} failed of {total})",
+                failures.len()
+            );
         }
-    }
-    if merged > 0 || skipped > 0 {
-        eprintln!(
-            "    ({merged} ok, {skipped} already installed, {} failed of {total})",
-            failures.len()
-        );
-    }
+    });
     bail!(
         "{} of {total} package(s) failed to {fail_verb}",
         failures.len()
@@ -1181,8 +1198,14 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
         // `>>> Emerging (N of M)` is rendered by `HumanStdoutSink` from the
         // `PkgStart` event emitted below — no ad-hoc print here.
         let kind = reuse.kind(&flags);
-        let pkg_started =
-            emit_pkg_start(&run.activity, planned, (i + 1) as u32, total as u32, kind);
+        let pkg_started = emit_pkg_start(
+            &run.activity,
+            planned,
+            ((i + 1) as u32, total as u32),
+            kind,
+            run.work_base,
+            merge_root,
+        );
         let activity_pkg = activity_pkg_ctx(&run.activity, planned);
         let result = act_on_package(PackageAction {
             planned,
@@ -1485,8 +1508,14 @@ async fn merge_parallel(
             // `>>> Emerging (N of M)` is rendered by `HumanStdoutSink` from the
             // `PkgStart` event emitted below — no ad-hoc print here.
             let kind = reuse.kind(&flags);
-            let pkg_started =
-                emit_pkg_start(&run.activity, planned, started as u32, total as u32, kind);
+            let pkg_started = emit_pkg_start(
+                &run.activity,
+                planned,
+                (started as u32, total as u32),
+                kind,
+                run.work_base,
+                merge_root,
+            );
             let gate = &merge_gate;
             let entry_roots_clone = entry_roots.clone();
             let flags_ref = &flags;

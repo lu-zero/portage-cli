@@ -54,6 +54,17 @@ consume, not parallel ad-hoc prints. Verbosity is decided in one place:
 | `-j>1` | banners (one line/pkg; readable) | `build.log` only (no interleaving) |
 | `-q` | nothing (failures still print) | `build.log` only |
 | `-v` | banners + per-phase elapsed time | copied to both |
+| `FEATURES=candy` | live bars; failures and warnings above them (see below) | `build.log` only |
+
+### `FEATURES=candy`
+
+With `candy` in `FEATURES` (make.conf or the environment), a merge on a terminal draws live bars
+instead of the banners: one for the plan, with an ETA, and one per running package with its phase,
+its elapsed time against its usual build time, and the last line of its `build.log`. Failures and
+warnings print above the bars; em's other narration is held back, as under `--jobs`. The ETA uses
+the target root's build history, then the host's, and counts running packages by their time left.
+Without a terminal, or with `-q`, the display is the usual one. Portage's `candy` is a spinner while dependencies resolve;
+em's resolve is quick enough that the build is where the display goes.
 
 ### The phase's terminal
 
@@ -93,7 +104,7 @@ pty tee (fetch is native Rust, not a phase function), so they check
 `EbuildShell::phase_output_quiet()` directly instead — same `--jobs N`/`-q`
 rule, redirected to `build.log` rather than dropped when quiet. Library
 callers that don't attach the sink get the events on the bus to render their own
-UI (see `attach_human_stdout`).
+UI (see `attach_terminal`).
 
 ## `em log` — history and live status
 
@@ -143,7 +154,8 @@ One JSON object per line, versioned for forward compatibility:
 {"v":1,"event":"session_end","job_id":"…","ok":true,…}
 ```
 
-A failed source build's `pkg_end` has `"ok":false`, the rendered `error`, and
+A source build's `pkg_start` carries `log`, the path of its build log. A failed source build's
+`pkg_end` has `"ok":false`, the rendered `error`, and
 `failed_phase` and `log` (the build log's path). A merge that stops before its
 session starts sends one `plan_failed` event instead, with a `reason` and the
 `message` em printed:

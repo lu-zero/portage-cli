@@ -10,6 +10,7 @@ pub(crate) mod binpkg;
 pub(crate) mod clean;
 pub mod cli;
 pub(crate) mod config_plan;
+pub(crate) mod console;
 pub(crate) mod crossdev;
 pub(crate) mod depclean;
 pub mod diag;

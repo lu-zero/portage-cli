@@ -422,13 +422,15 @@ impl ActivitySink for HumanStdoutSink {
                 self.erase_status(job_id);
                 let style = pkg_style(*kind);
                 let suffix = self.root_suffix(job_id, *merge_root, "for");
-                let mut out = anstream::stdout();
-                let _ = writeln!(
-                    out,
-                    ">>> {} ({C_COUNT}{index}{C_COUNT:#} of {C_COUNT}{of}{C_COUNT:#}) {style}{cpv}{style:#}{suffix}",
-                    action_for(*kind)
-                );
-                let _ = out.flush();
+                crate::console::suspend(|| {
+                    let mut out = anstream::stdout();
+                    let _ = writeln!(
+                        out,
+                        ">>> {} ({C_COUNT}{index}{C_COUNT:#} of {C_COUNT}{of}{C_COUNT:#}) {style}{cpv}{style:#}{suffix}",
+                        action_for(*kind)
+                    );
+                    let _ = out.flush();
+                });
                 self.draw_status(job_id);
             }
             ActivityEvent::PhaseEnter {
@@ -452,13 +454,15 @@ impl ActivitySink for HumanStdoutSink {
                     let style = pkg_style(loc.kind);
                     let suffix = self.root_suffix(job_id, *merge_root, "to");
                     self.erase_status(job_id);
-                    let mut out = anstream::stdout();
-                    let _ = writeln!(
-                        out,
-                        ">>> Installing ({C_COUNT}{}{C_COUNT:#} of {C_COUNT}{}{C_COUNT:#}) {style}{cpv}{style:#}{suffix}",
-                        loc.index, loc.of
-                    );
-                    let _ = out.flush();
+                    crate::console::suspend(|| {
+                        let mut out = anstream::stdout();
+                        let _ = writeln!(
+                            out,
+                            ">>> Installing ({C_COUNT}{}{C_COUNT:#} of {C_COUNT}{}{C_COUNT:#}) {style}{cpv}{style:#}{suffix}",
+                            loc.index, loc.of
+                        );
+                        let _ = out.flush();
+                    });
                     self.draw_status(job_id);
                     return;
                 }
@@ -469,8 +473,10 @@ impl ActivitySink for HumanStdoutSink {
                     return;
                 };
                 self.erase_status(job_id);
-                println!("=== ({} of {}) {label} ({cpv})", loc.index, loc.of);
-                let _ = std::io::stdout().flush();
+                crate::console::suspend(|| {
+                    println!("=== ({} of {}) {label} ({cpv})", loc.index, loc.of);
+                    let _ = std::io::stdout().flush();
+                });
                 self.draw_status(job_id);
             }
             ActivityEvent::PhaseLeave {
@@ -483,8 +489,10 @@ impl ActivitySink for HumanStdoutSink {
                 if self.quiet || self.is_parallel(job_id) {
                     return;
                 }
-                println!("  >> {cpv} {phase}: {seconds:.1}s");
-                let _ = std::io::stdout().flush();
+                crate::console::suspend(|| {
+                    println!("  >> {cpv} {phase}: {seconds:.1}s");
+                    let _ = std::io::stdout().flush();
+                });
             }
             ActivityEvent::PkgEnd {
                 job_id,
@@ -557,13 +565,15 @@ impl ActivitySink for HumanStdoutSink {
                         self.erase_status(job_id);
                         let style = pkg_style(*kind);
                         let suffix = self.root_suffix(job_id, *merge_root, "to");
-                        let mut out = anstream::stdout();
-                        let _ = writeln!(
-                            out,
-                            ">>> Completed ({C_COUNT}{}{C_COUNT:#} of {C_COUNT}{}{C_COUNT:#}) {style}{cpv}{style:#}{suffix}",
-                            loc.index, loc.of
-                        );
-                        let _ = out.flush();
+                        crate::console::suspend(|| {
+                            let mut out = anstream::stdout();
+                            let _ = writeln!(
+                                out,
+                                ">>> Completed ({C_COUNT}{}{C_COUNT:#} of {C_COUNT}{}{C_COUNT:#}) {style}{cpv}{style:#}{suffix}",
+                                loc.index, loc.of
+                            );
+                            let _ = out.flush();
+                        });
                     }
                 } else {
                     // Failures always surface, even under `-q` — real emerge
@@ -626,6 +636,7 @@ mod tests {
             of,
             kind: PkgKind::Source,
             at: 1.0,
+            log: None,
         }
     }
 
