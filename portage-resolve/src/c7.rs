@@ -465,6 +465,12 @@ fn a_plain_demand_wins_over_a_mirror_one_by_flipping_its_parent() {
     assert!(
         lines
             .iter()
+            .any(|(atom, flags, _)| atom == ">=dev/foo-1:0" && flags == &["bar".to_string()]),
+        "the winning demand still needs its own line: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
             .all(|(_, flags, _)| !flags.contains(&"-bar".to_string())),
         "{lines:?}"
     );

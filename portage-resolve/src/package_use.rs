@@ -361,6 +361,9 @@ where
     // solves, as forcing one side is what violates the other.
     let mut seen: HashMap<Key, (PortagePackage, Version, Vec<UseDemand>)> = HashMap::new();
     let mut decisions: HashMap<Key, Settled> = HashMap::new();
+    // Settled flags whose winning requirement is already in `applied_reqs`: the target's own
+    // `package.use` line comes from it, next to the "# to match" lines for flipped parents.
+    let mut settled_reported: HashSet<Key> = HashSet::new();
     let mut solved = None;
     for _ in 0..8 {
         let Some(solution) = solve(&package_use) else {
@@ -449,6 +452,12 @@ where
             let mut contributed = false;
             for (cpn, flag, enable) in req_targets(&req, data) {
                 let key = (cpn, flag);
+                if let Some(Settled::Matched(m)) = decisions.get(&key) {
+                    if m.enable == enable && settled_reported.insert(key) {
+                        contributed = true;
+                    }
+                    continue;
+                }
                 if pinned.contains(&key)
                     || decisions.contains_key(&key)
                     || applied.contains_key(&key)
