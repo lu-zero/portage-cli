@@ -18,18 +18,13 @@ pub enum UseReinstallMode {
 
 /// Return `true` when Portage would reinstall for USE/IUSE drift
 ///
-/// Portage reference (`_emerge/depgraph.py` `_reinstall_for_flags`), with one
-/// practical filter for multi-impl noise:
-/// - **newuse**: IUSE set XOR (minus forced/masked, minus *stale never-enabled*
-///   tokens only on the installed IUSE) ∪ enabled-set XOR within IUSE
+/// Portage reference (`_emerge/depgraph.py` `_reinstall_for_flags`):
+/// - **newuse**: IUSE set XOR (minus forced/masked) ∪ enabled-set XOR within IUSE
 /// - **changed-use**: enabled-set XOR only (`orig_iuse∩orig_use ⊕ cur_iuse∩cur_use`)
 ///
 /// `forced_flags` is `use.force ∪ use.mask` for the package.
 ///
-/// Stale IUSE-only tokens (e.g. VDB still lists `python_targets_python3_11`
-/// though it was never enabled) are ignored so shallow `-Np` does not flood
-/// the plan; real enabled-target flips and new IUSE flags still rebuild.
-/// Full python-target cleanups belong on **`-uND`**, matching Portage.
+/// A flag the best ebuild dropped from IUSE counts even when it was never enabled.
 pub fn needs_use_reinstall(
     mode: UseReinstallMode,
     forced_flags: &HashSet<Interned<DefaultInterner>>,
@@ -43,17 +38,9 @@ pub fn needs_use_reinstall(
 
     match mode {
         UseReinstallMode::Newuse => {
-            // IUSE set change, minus forced/masked. Drop *stale never-enabled*
-            // tokens that exist only on installed IUSE (common PYTHON_TARGETS:
-            // VDB still lists python3_11 while the ebuild dropped them). New
-            // IUSE flags and enabled-set flips still count.
-            // Each f is in exactly one of orig_iuse / cur_iuse: keep if new in
-            // the ebuild, or was enabled on the install; drop stale never-on
-            // IUSE-only tokens.
+            // IUSE set change, minus forced/masked, then the enabled-set change.
             let mut flags: HashSet<_> = orig_iuse.symmetric_difference(cur_iuse).copied().collect();
-            flags.retain(|f| {
-                !forced_flags.contains(f) && (cur_iuse.contains(f) || orig_use.contains(f))
-            });
+            flags.retain(|f| !forced_flags.contains(f));
             let old_en: HashSet<_> = orig_iuse.intersection(&orig_use).copied().collect();
             let new_en: HashSet<_> = cur_iuse.intersection(cur_use_enabled).copied().collect();
             flags.extend(old_en.symmetric_difference(&new_en).copied());
@@ -110,8 +97,9 @@ mod tests {
     }
 
     #[test]
-    fn newuse_ignores_stale_never_enabled_iuse_only() {
-        // VDB IUSE still has python3_11; ebuild dropped it; never was enabled.
+    fn newuse_counts_dropped_never_enabled_iuse() {
+        // VDB IUSE still has python3_11; the best ebuild dropped it; it was never enabled.
+        // Portage's `_reinstall_for_flags` XORs the IUSE sets, so the drop alone reinstalls.
         let forced = HashSet::new();
         let orig_use = vec![i("python_targets_python3_13")];
         let orig_iuse = vec![
@@ -140,9 +128,9 @@ mod tests {
             &cur_en,
             &cur_iuse,
         ));
-        // Same enabled set: only stale IUSE token → no reinstall.
+        // Same enabled set: the dropped IUSE token alone still reinstalls.
         let cur_en2: HashSet<_> = [i("python_targets_python3_13")].into_iter().collect();
-        assert!(!needs_use_reinstall(
+        assert!(needs_use_reinstall(
             UseReinstallMode::Newuse,
             &forced,
             &orig_use,
@@ -150,6 +138,24 @@ mod tests {
             &cur_en2,
             &cur_iuse,
         ));
+    }
+
+    // json-c 0.18 (IUSE has `doc`, off) against 0.19-r3 (no `doc`): emerge -N reinstalls,
+    // -U does not; a dropped flag that is forced or masked counts for neither.
+    #[test]
+    fn newuse_counts_a_dropped_disabled_flag_and_changed_use_does_not() {
+        let forced = HashSet::new();
+        let orig_use = vec![i("threads")];
+        let orig_iuse = vec![i("doc"), i("threads")];
+        let cur_iuse: HashSet<_> = [i("threads")].into_iter().collect();
+        let cur_en: HashSet<_> = [i("threads")].into_iter().collect();
+        let check = |mode, forced: &HashSet<_>| {
+            needs_use_reinstall(mode, forced, &orig_use, &orig_iuse, &cur_en, &cur_iuse)
+        };
+        assert!(check(UseReinstallMode::Newuse, &forced));
+        assert!(!check(UseReinstallMode::ChangedUse, &forced));
+        let doc_masked: HashSet<_> = [i("doc")].into_iter().collect();
+        assert!(!check(UseReinstallMode::Newuse, &doc_masked));
     }
 
     #[test]

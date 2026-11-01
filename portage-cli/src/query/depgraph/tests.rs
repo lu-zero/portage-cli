@@ -1175,3 +1175,33 @@ fn deep_without_update_keeps_an_installed_any_slot_choice() {
     update.update = true;
     assert_eq!(names(&solve(&fix, update)), ["app-misc/tool-2"]);
 }
+
+// The best version is the highest by version, not the last read: `1.10` beats `1.9`, whose
+// missing IUSE must not make the installed `1.10` look drifted.
+#[test]
+fn newuse_compares_with_the_highest_version_not_the_last_listed() {
+    let pkgs = [
+        plain("app-misc/kbd-1.10", "", "xkb"),
+        plain("app-misc/kbd-1.9", "", ""),
+    ];
+    let fix = fixture(&pkgs, &[]);
+    plant_installed(&fix.root, "app-misc/kbd-1.10", "0", "", "xkb");
+    let kbd = [TargetAtom::explicit("app-misc/kbd")];
+    assert!(names(&solve(&fix, newuse(&kbd, false))).is_empty());
+}
+
+// emerge counts an IUSE flag the best version dropped even if it was never enabled.
+#[test]
+fn newuse_rebuilds_when_the_best_version_drops_a_disabled_flag() {
+    let pkgs = [
+        plain("app-misc/json-1", "", "doc"),
+        plain("app-misc/json-2", "", ""),
+    ];
+    let fix = fixture(&pkgs, &[]);
+    plant_installed(&fix.root, "app-misc/json-1", "0", "", "doc");
+    let json = [TargetAtom::explicit("app-misc/json")];
+    assert_eq!(
+        names(&solve(&fix, newuse(&json, false))),
+        ["app-misc/json-2"]
+    );
+}
