@@ -467,7 +467,7 @@ fn worktree_path(workdir: &Path, rela_path: &BStr) -> Option<PathBuf> {
     if rela_path.is_empty() {
         return None;
     }
-    let rel = gix::path::try_from_bstr(rela_path).ok()?;
+    let rel = gix::path::from_bstr(rela_path).ok()?;
     if rel.is_absolute() {
         return None;
     }
@@ -595,7 +595,8 @@ mod tests {
         let mut repo = gix::open(&work).unwrap();
         assert!(
             repo.merge_base(repo.head_id().unwrap().detach(), unrelated)
-                .is_err(),
+                .unwrap()
+                .is_none(),
             "fixture must have no common ancestor"
         );
 

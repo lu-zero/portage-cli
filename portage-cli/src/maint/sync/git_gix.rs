@@ -139,7 +139,7 @@ fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result
     // Portage never shallows a volatile repo the user cloned in full — its
     // `sync_depth` only drops to 0 (full fetch) in that one case; a
     // non-volatile repo always gets the shallow treatment.
-    let shallow = if volatile { repo.is_shallow() } else { true };
+    let shallow = if volatile { repo.is_shallow()? } else { true };
 
     if !quiet {
         info_line(&format!(
@@ -329,7 +329,7 @@ mod tests {
     }
 
     fn is_shallow(path: &Utf8Path) -> bool {
-        gix::open(path.as_std_path()).unwrap().is_shallow()
+        gix::open(path.as_std_path()).unwrap().is_shallow().unwrap()
     }
 
     #[test]

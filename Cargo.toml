@@ -75,7 +75,7 @@ miette = { version = "7.6.0", default-features = false, features = ["derive", "f
 # performance bundle (parallel pack, caches) + zlib-rs — without those, fetch
 # "read pack" looks hung even in --release. Always optimised under profile.dev
 # (see [profile.dev.package."*"] below).
-gix = { version = "0.87.1", default-features = false, features = [
+gix = { version = "0.90", default-features = false, features = [
     "blocking-http-transport-reqwest-rust-tls",
     "worktree-mutation",
     "revision",
@@ -83,8 +83,7 @@ gix = { version = "0.87.1", default-features = false, features = [
     "sha256",
     "comfort",
     "progress-tree",
-    # gix 0.86 always uses zlib-rs; the old `zlib-rs` feature flag was removed.
-    "max-performance-safe",
+    "max-performance",
     # `status` (pulls `dirwalk`) backs the two guards `em sync`'s gix backend
     # needs: `Repository::is_dirty` (refuse to clobber a volatile repo's
     # uncommitted work) and `Repository::dirwalk_iter` (the `git clean -d -x`
