@@ -5,9 +5,10 @@
 //! blocker edges their ordering needs. Post-solve: the solver already aliases
 //! Target to Host, and a third root would triple the pubgrub package universe.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use portage_atom::{Cpn, Cpv, Dep, Slot, Version};
+use portage_atom::interner::{DefaultInterner, Interned};
+use portage_atom::{Cpn, Cpv, Dep, DepEntry, Slot, Version};
 use portage_atom_pubgrub::{DepClass, MergeRoot, PortagePackage};
 
 use crate::Roots;
@@ -15,7 +16,7 @@ use crate::effective_use;
 use crate::installed::{BrootSnapshot, VdbSnapshotCache};
 use crate::repo::Adapter;
 use crate::root_aware::CrossContext;
-use crate::{Avail, all_cpns, unsatisfied_atoms};
+use crate::{Avail, unsatisfied_atoms};
 
 /// A finished Target plan with a second root's missing build closure spliced in
 pub struct Plan {
@@ -136,7 +137,8 @@ fn passthrough(target_order: &[(PortagePackage, Version)]) -> Plan {
 /// Static inputs shared across the walk
 struct Ctx<'a> {
     adapter: &'a Adapter<'a>,
-    target_ver: &'a HashMap<Cpn, (Version, PortagePackage)>,
+    /// The Target plan's entries by package, one per slot
+    target_ver: &'a HashMap<Cpn, Vec<(Version, PortagePackage)>>,
     spec: &'a Spec,
 }
 
@@ -147,8 +149,46 @@ struct Graph {
     node: Vec<(PortagePackage, Version)>,
     /// `needs[u]` — nodes that must build before `u`
     needs: Vec<Vec<usize>>,
-    /// `None` records a CPN [`resolve`] already failed on, so it is not retried
-    of_cpn: HashMap<Cpn, Option<usize>>,
+    /// This root's seeds and closure nodes by package, one per slot
+    at_root: HashMap<Cpn, Vec<usize>>,
+    /// Atoms [`resolve`] already failed on, so they are not retried
+    failed: HashSet<Dep>,
+}
+
+impl Graph {
+    /// Add a node of this root and make it visible to later availability checks
+    fn add(&mut self, avail: &mut Avail, pkg: PortagePackage, ver: Version) -> usize {
+        let v = self.node.len();
+        let cpn = *pkg.cpn();
+        avail.record(Cpv::new(cpn, ver.clone()), Some(slot_of(&pkg)));
+        self.at_root.entry(cpn).or_default().push(v);
+        self.node.push((pkg, ver));
+        self.needs.push(Vec::new());
+        v
+    }
+
+    /// This root's nodes `dep` takes
+    fn taking<'a>(&'a self, dep: &'a Dep) -> impl Iterator<Item = usize> + 'a {
+        self.at_root
+            .get(&dep.cpn)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(move |&v| takes(dep, &self.node[v].0, &self.node[v].1))
+    }
+}
+
+/// The plan's `SLOT 0` packages carry no slot
+fn slot_of(pkg: &PortagePackage) -> Interned<DefaultInterner> {
+    pkg.slot().unwrap_or_else(|| Interned::intern("0"))
+}
+
+/// Whether `dep` takes `(pkg, ver)`, slot included
+fn takes(dep: &Dep, pkg: &PortagePackage, ver: &Version) -> bool {
+    dep.matches_cpv(
+        &Cpv::new(*pkg.cpn(), ver.clone()),
+        Some(&Slot::from_name(slot_of(pkg))),
+    )
 }
 
 fn run(
@@ -160,11 +200,15 @@ fn run(
     // A closure entry for a CPN also built for Target reuses the Target
     // version: both satisfy the same atom for the same consumers in the same
     // run, and a version split would break the `:=` subslot invariant.
-    let target_ver: HashMap<Cpn, (Version, PortagePackage)> = target_order
-        .iter()
-        .filter(|(p, _)| p.merge_root() == MergeRoot::Target)
-        .map(|(p, v)| (*p.cpn(), (v.clone(), p.clone())))
-        .collect();
+    let mut target_ver: HashMap<Cpn, Vec<(Version, PortagePackage)>> = HashMap::new();
+    for (p, v) in target_order {
+        if p.merge_root() == MergeRoot::Target {
+            target_ver
+                .entry(*p.cpn())
+                .or_default()
+                .push((v.clone(), p.clone()));
+        }
+    }
     let ctx = Ctx {
         adapter,
         target_ver: &target_ver,
@@ -174,7 +218,8 @@ fn run(
         fixed: target_order.len(),
         node: target_order.to_vec(),
         needs: vec![Vec::new(); target_order.len()],
-        of_cpn: HashMap::new(),
+        at_root: HashMap::new(),
+        failed: HashSet::new(),
     };
 
     // Seed from entries the solver already stamped for this root, wherever
@@ -182,8 +227,8 @@ fn run(
     // availability must see every one before the walk starts.
     for (i, (pkg, ver)) in target_order.iter().enumerate() {
         if pkg.merge_root() == spec.stamp {
-            graph.of_cpn.insert(*pkg.cpn(), Some(i));
-            avail.record_merge(Cpv::new(*pkg.cpn(), ver.clone()), spec.stamp);
+            graph.at_root.entry(*pkg.cpn()).or_default().push(i);
+            avail.record(Cpv::new(*pkg.cpn(), ver.clone()), Some(slot_of(pkg)));
         }
     }
 
@@ -227,31 +272,42 @@ fn visit(
             DepClass::Pdepend => deps.pdepend(),
             DepClass::Idepend => deps.idepend(),
         };
+        let stamp = ctx.spec.stamp;
         for dep in unsatisfied_atoms(listed, avail) {
-            let cpn = dep.cpn;
-            if graph.of_cpn.contains_key(&cpn) {
+            // A node added for an earlier atom of this list may already satisfy it.
+            if avail.atom_satisfied(dep) || graph.failed.contains(dep) {
                 continue;
             }
+            let cpn = dep.cpn;
             // Developer signal, not user-facing: the solver should already
             // cover a plan entry's own host tools, so a hit here means that
             // path missed one.
             if top_level && class != DepClass::Depend {
-                let stamp = ctx.spec.stamp;
                 tracing::debug!(
-                    "root_closure {stamp:?}: top-level {class} gap for {cpn} (from {pkg})"
+                    "root_closure {stamp:?}: top-level {class} gap for {dep} (from {pkg})"
                 );
             }
             let Some((cver, cpkg)) = resolve(dep, ctx) else {
-                graph.of_cpn.insert(cpn, None);
+                graph.failed.insert(dep.clone());
                 continue;
             };
-            let v = graph.node.len();
-            graph
-                .node
-                .push((cpkg.at_merge_root(ctx.spec.stamp), cver.clone()));
-            graph.needs.push(Vec::new());
-            graph.of_cpn.insert(cpn, Some(v));
-            avail.record_merge(Cpv::new(cpn, cver), ctx.spec.stamp);
+            let cpkg = cpkg.at_merge_root(stamp);
+            let slot = slot_of(&cpkg);
+            // One version per slot: a node already there that `dep` rejects is a conflict the
+            // plan cannot settle by adding another.
+            if let Some(&held) = graph
+                .at_root
+                .get(&cpn)
+                .and_then(|vs| vs.iter().find(|&&v| slot_of(&graph.node[v].0) == slot))
+            {
+                let (hpkg, hver) = &graph.node[held];
+                tracing::debug!(
+                    "root_closure {stamp:?}: {pkg} needs {dep}, but {hpkg}-{hver} holds that slot"
+                );
+                graph.failed.insert(dep.clone());
+                continue;
+            }
+            let v = graph.add(avail, cpkg, cver);
             visit(ctx, graph, avail, v, ctx.spec.deep, false);
             // A PDEPEND merges after the package that wants it, not before.
             if class == DepClass::Pdepend {
@@ -266,12 +322,15 @@ fn visit(
     // the emission DFS follows this list, so the final plan order depends on
     // it. A dep already satisfied by an earlier consumer's node still belongs
     // here — `u` cannot build until that node is done either.
-    for cpn in all_cpns(&entries) {
-        if let Some(Some(v)) = graph.of_cpn.get(&cpn) {
-            let v = *v;
-            if !graph.needs[u].contains(&v) {
-                graph.needs[u].push(v);
-            }
+    let mut needs = Vec::new();
+    DepEntry::walk_atoms(&entries, &mut |dep| {
+        if dep.blocker.is_none() {
+            needs.extend(graph.taking(dep));
+        }
+    });
+    for v in needs {
+        if !graph.needs[u].contains(&v) {
+            graph.needs[u].push(v);
         }
     }
 }
@@ -348,11 +407,12 @@ fn emit_node(
 /// `None` when the CPN is absent from the repo or no accepted version matches.
 fn resolve(dep: &Dep, ctx: &Ctx<'_>) -> Option<(Version, PortagePackage)> {
     let cpn = dep.cpn;
-    if let Some((v, p)) = ctx.target_ver.get(&cpn)
-        && dep.matches_cpv(
-            &Cpv::new(cpn, v.clone()),
-            p.slot().map(Slot::from_name).as_ref(),
-        )
+    if let Some((v, p)) = ctx
+        .target_ver
+        .get(&cpn)
+        .into_iter()
+        .flatten()
+        .find(|(v, p)| takes(dep, p, v))
     {
         return Some((v.clone(), p.clone()));
     }
@@ -1103,6 +1163,73 @@ mod tests {
             edge_names(&plan).contains(&("dev-util/tool-extra".into(), "dev-util/tool".into())),
             "{:?}",
             edge_names(&plan)
+        );
+    }
+
+    // Two build tools pin different slots of one package: the host needs both.
+    #[test]
+    fn a_second_slot_of_a_host_tool_is_planned_too() {
+        let data = repo_from(&[
+            (
+                "app-misc/a-1",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\nBDEPEND=dev-build/automake:1.18\n",
+            ),
+            (
+                "app-misc/b-1",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\nBDEPEND=>=dev-build/automake-1.17:1.17\n",
+            ),
+            (
+                "dev-build/automake-1.17.1",
+                "EAPI=8\nSLOT=1.17\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+            (
+                "dev-build/automake-1.18",
+                "EAPI=8\nSLOT=1.18\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let target_order = vec![(pkg("app-misc/a"), ver("1")), (pkg("app-misc/b"), ver("1"))];
+        let (_host, _prefix, roots, cross) = offset_roots();
+        test_adapter!(a, &data, "amd64");
+        let plan = host(&target_order, &a, &roots, &cross);
+        let got: Vec<String> = plan
+            .order
+            .iter()
+            .map(|(p, v)| format!("{}-{v}", p.cpn()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "dev-build/automake-1.18",
+                "app-misc/a-1",
+                "dev-build/automake-1.17.1",
+                "app-misc/b-1"
+            ]
+        );
+    }
+
+    // An atom nothing in the repo satisfies does not stop another atom of the same package.
+    #[test]
+    fn an_unresolvable_atom_does_not_hide_its_package_from_other_consumers() {
+        let data = repo_from(&[
+            (
+                "app-misc/a-1",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\nBDEPEND=>=dev-util/tool-9\n",
+            ),
+            (
+                "app-misc/b-1",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\nBDEPEND=dev-util/tool\n",
+            ),
+            (
+                "dev-util/tool-1",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let target_order = vec![(pkg("app-misc/a"), ver("1")), (pkg("app-misc/b"), ver("1"))];
+        let (_host, _prefix, roots, cross) = offset_roots();
+        test_adapter!(a, &data, "amd64");
+        assert_eq!(
+            names(&host(&target_order, &a, &roots, &cross)),
+            ["app-misc/a", "dev-util/tool", "app-misc/b"]
         );
     }
 }

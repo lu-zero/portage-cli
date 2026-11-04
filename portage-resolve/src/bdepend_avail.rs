@@ -10,7 +10,7 @@ use camino::Utf8Path;
 use portage_atom::Slot;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, DepEntry, UseDefault, UseDep, UseDepKind};
-use portage_atom_pubgrub::{DepClass, MergeRoot};
+use portage_atom_pubgrub::DepClass;
 use portage_vdb::InstalledPackage;
 
 use crate::Roots;
@@ -172,54 +172,14 @@ impl Avail {
         )
     }
 
-    /// Record a `package.provided` entry as present with its slot
+    /// Record `cpv` as present: a `package.provided` entry or an earlier merge in this run
     ///
-    /// A system-supplied package, so a build dep on it is satisfied without
-    /// a merge.
-    ///
-    /// Slot is authoritative for the match; USE-deps on such an atom are treated as
-    /// satisfied (`installed: None`), matching the solver, which counts the
-    /// provided package as present regardless of flags.
-    pub fn record_provided(&mut self, cpv: Cpv, slot: Option<Interned<DefaultInterner>>) {
+    /// `slot` decides which slot atoms it satisfies (`None` satisfies any); USE-deps on it count
+    /// as satisfied, as the solver counts a planned or provided package regardless of flags.
+    pub fn record(&mut self, cpv: Cpv, slot: Option<Interned<DefaultInterner>>) {
         self.push(AvailEntry {
             cpv,
             slot,
-            installed: None,
-            interned_use: OnceCell::new(),
-        });
-    }
-
-    /// Record a host merge visible to later `BDEPEND` checks
-    pub fn record_merge_bdepend(&mut self, cpv: Cpv) {
-        self.push(AvailEntry {
-            cpv,
-            slot: None,
-            installed: None,
-            interned_use: OnceCell::new(),
-        });
-    }
-
-    /// Record a target merge for both DEPEND and BDEPEND views (preflight)
-    pub fn record_target_merge(&mut self, depend: &mut Self, cpv: Cpv) {
-        depend.push(AvailEntry {
-            cpv: cpv.clone(),
-            slot: None,
-            installed: None,
-            interned_use: OnceCell::new(),
-        });
-        self.push(AvailEntry {
-            cpv,
-            slot: None,
-            installed: None,
-            interned_use: OnceCell::new(),
-        });
-    }
-
-    /// Record a merge for within-run `BDEPEND` trim (host or target)
-    pub fn record_merge(&mut self, cpv: Cpv, _merge_root: MergeRoot) {
-        self.push(AvailEntry {
-            cpv,
-            slot: None,
             installed: None,
             interned_use: OnceCell::new(),
         });
@@ -397,20 +357,6 @@ pub fn unsatisfied_atoms<'a>(entries: &'a [DepEntry], avail: &Avail) -> Vec<&'a 
     out
 }
 
-/// Every non-blocker atom CPN in `entries`, satisfied or not
-///
-/// Unlike [`unsatisfied_atoms`], not filtered by `Avail`: used where a caller
-/// needs to know *which provider a dependency resolves to* even when that
-/// provider was already scheduled by an earlier, unrelated consumer (e.g.
-/// `root_closure` recording a blocker edge on a shared entry).
-pub fn all_cpns(entries: &[DepEntry]) -> Vec<Cpn> {
-    let mut out = Vec::new();
-    for e in entries {
-        cpns_of(e, &mut out);
-    }
-    out
-}
-
 fn unsat_atoms_rec<'a>(entries: &'a [DepEntry], avail: &Avail, out: &mut Vec<&'a Dep>) {
     for e in entries {
         match e {
@@ -432,16 +378,6 @@ fn unsat_atoms_rec<'a>(entries: &'a [DepEntry], avail: &Avail, out: &mut Vec<&'a
             _ => {}
         }
     }
-}
-
-/// Collect every non-blocker atom CPN mentioned in `e` (for an unsatisfied
-/// `||`-group's branches)
-fn cpns_of(e: &DepEntry, out: &mut Vec<Cpn>) {
-    DepEntry::walk_atoms(std::slice::from_ref(e), &mut |dep| {
-        if dep.blocker.is_none() {
-            out.push(dep.cpn);
-        }
-    });
 }
 
 /// Append the display form of each unsatisfied requirement in `entries` to `out`
@@ -738,20 +674,6 @@ mod tests {
         let optional = parse("?? ( dev-libs/c dev-libs/d )");
         assert!(missing(&optional, &avail).is_empty());
         assert!(!avail.has_unsatisfied_atom_for_cpn(&optional, Cpn::parse("dev-libs/c").unwrap()));
-    }
-
-    #[test]
-    fn all_cpns_walks_exactly_one_and_at_most_one_groups() {
-        let cpns = all_cpns(&parse(
-            "^^ ( dev-libs/a dev-libs/b ) ?? ( dev-libs/c dev-libs/d )",
-        ))
-        .into_iter()
-        .map(|cpn| cpn.to_string())
-        .collect::<Vec<_>>();
-        assert_eq!(
-            cpns,
-            ["dev-libs/a", "dev-libs/b", "dev-libs/c", "dev-libs/d"]
-        );
     }
 
     #[test]

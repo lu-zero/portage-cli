@@ -1708,6 +1708,7 @@ mod entry_roots_tests {
         Ok(PlannedMerge {
             merge_root,
             cpv: portage_atom::Cpv::parse("dev-python/jinja2-3.1.6")?,
+            slot: None,
             ebuild_path: camino::Utf8PathBuf::new(),
             use_flags: Vec::new(),
             depend: Vec::new(),
@@ -2023,6 +2024,7 @@ mod unmerge_scheduling_tests {
         PlannedMerge {
             merge_root: MergeRoot::Target,
             cpv: portage_atom::Cpv::parse(cpv).unwrap(),
+            slot: None,
             ebuild_path: camino::Utf8PathBuf::new(),
             use_flags: Vec::new(),
             depend: Vec::new(),

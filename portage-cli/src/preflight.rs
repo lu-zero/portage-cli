@@ -98,9 +98,9 @@ pub fn check_with_snapshot_and_cache(
         let slot = slot
             .as_deref()
             .map(portage_atom::interner::Interned::intern);
-        depend_avail.record_provided(cpv.clone(), slot);
-        bdepend_avail.record_provided(cpv.clone(), slot);
-        base_avail.record_provided(cpv.clone(), slot);
+        depend_avail.record(cpv.clone(), slot);
+        bdepend_avail.record(cpv.clone(), slot);
+        base_avail.record(cpv.clone(), slot);
     }
 
     let mut problems: Vec<String> = Vec::new();
@@ -151,11 +151,11 @@ pub fn check_with_snapshot_and_cache(
             }
         }
 
-        // Within-run visibility: this entry satisfies later entries' deps once
-        // merged. Slot is left unknown (None) — a permissive presence check,
-        // which is the right bias for a guard that must not block a valid plan.
+        // Within-run visibility: this entry satisfies later entries' deps once merged, in its own
+        // slot only, so a plan missing a second slot of one package fails here, not mid-build.
+        let (cpv, slot) = (planned.cpv.clone(), planned.slot);
         match planned.merge_root {
-            MergeRoot::Host => bdepend_avail.record_merge_bdepend(planned.cpv.clone()),
+            MergeRoot::Host => bdepend_avail.record(cpv, slot),
             // A sysroot merge satisfies both its own root's later DEPEND
             // checks and a later Target entry's build-time DEPEND — that's
             // the entire reason it exists. `depend_avail` (`initial_depend`)
@@ -163,11 +163,12 @@ pub fn check_with_snapshot_and_cache(
             // with its own seed. `bdepend_avail` is deliberately NOT grown:
             // a cross-built library is not a build-host tool.
             MergeRoot::Base => {
-                base_avail.record_merge(planned.cpv.clone(), MergeRoot::Base);
-                depend_avail.record_merge(planned.cpv.clone(), MergeRoot::Base);
+                base_avail.record(cpv.clone(), slot);
+                depend_avail.record(cpv, slot);
             }
             MergeRoot::Target => {
-                bdepend_avail.record_target_merge(&mut depend_avail, planned.cpv.clone())
+                bdepend_avail.record(cpv.clone(), slot);
+                depend_avail.record(cpv, slot);
             }
         }
     }
@@ -193,6 +194,7 @@ mod tests {
         Ok(PlannedMerge {
             merge_root,
             cpv,
+            slot: None,
             ebuild_path: camino::Utf8PathBuf::new(),
             use_flags: Vec::new(),
             depend: DepEntry::parse(depend)?,
@@ -252,6 +254,26 @@ mod tests {
             )?,
         ];
         assert!(check(&plan, &roots, &[], &[]).is_err());
+        Ok(())
+    }
+
+    // A planned merge satisfies its own slot only: a second slot the plan lacks is reported.
+    #[test]
+    fn an_earlier_entry_satisfies_only_its_own_slot() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let roots = roots_at(&tmp)?;
+        let plan = |dep: &str| -> Result<[PlannedMerge; 2]> {
+            let mut automake =
+                planned(MergeRoot::Host, Cpv::parse("dev-build/automake-1.18")?, "")?;
+            automake.slot = Some(Interned::intern("1.18"));
+            let mut consumer = planned(MergeRoot::Target, Cpv::parse("app-misc/c-1")?, "")?;
+            consumer.bdepend = DepEntry::parse(dep)?;
+            Ok([automake, consumer])
+        };
+        assert!(check(&plan("dev-build/automake:1.18")?, &roots, &[], &[]).is_ok());
+        let plan = plan(">=dev-build/automake-1.17:1.17")?;
+        let err = check(&plan, &roots, &[], &[]).unwrap_err().to_string();
+        assert!(err.contains("automake-1.17:1.17"), "{err}");
         Ok(())
     }
 

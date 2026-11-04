@@ -489,6 +489,7 @@ pub(super) fn assemble(
             PlannedMerge {
                 merge_root: entry.merge_root,
                 cpv: cpv.clone(),
+                slot: pkg.slot(),
                 ebuild_path,
                 use_flags: flags,
                 depend,
