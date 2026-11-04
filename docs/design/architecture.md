@@ -497,15 +497,20 @@ for every bundled locale) keeps every flag on — which is exactly what real
 `L10N="en-GB"` plus `/etc/portage/package.use` `l10n_fr` → `en-GB fr`; env
 `L10N=de` on top of both → `de` alone.
 
-A `<group>_*` wildcard behaves in two ways, depending on where it comes from. As a USE token
-(`USE="l10n_*"`, package.use `L10N: *`, a make.defaults `L10N="*"`) it expands in place into the
-package's IUSE values. So `l10n_* -l10n_de` keeps `de` off, in the same layer or across layers,
-and `-l10n_de l10n_*` turns it back on. A make.conf or env `L10N="*"` stays a literal that enables
-the whole group at the end, past any later `-value`. Both fold steps (`merge_flag_lists_signed`,
-`UseLayer::parse`) drop a group's tokens that come before its wildcard. `resolve_effective_use`
-rewrites the lower layers' entries for the group. `expand_use_expand_wildcards` then enables only
-the values nothing set, or every value for a literal wildcard (`UseLayer::is_literal_wildcard`).
-Checked with emerge on sys-apps/man-pages in 15 combinations.
+Each layer is a list of `gentoo_core::UseToken`s. PMS defines the profile grammar: flag names,
+`-flag` and `-*` (`UseToken::profile`). A profile `package.use` takes no `-*` or wildcard;
+emerge drops them with a warning, and so does `em`. User configuration is Portage's
+(`UseToken::user`, `UseToken::assignment`), in each layer's order: unprefixed `USE_EXPAND`
+values, then `USE`, then each `USE_EXPAND` variable assigned.
+
+- A `<prefix>_*` token (USE=, user package.use, `L10N: *`) expands in place over IUSE, so a
+  later `-l10n_de` in any layer keeps `de` off. Only a trailing `_*` is a glob: `l10n_pt*` is not.
+- A make.conf or env `USE_EXPAND` variable replaces its group (`ClearPrefix`), including the
+  layer's own earlier USE tokens. `-value` and `+value` are ignored with a warning, and `*` stays a
+  literal that enables every IUSE value at the end (`LiteralPrefix`).
+
+`resolve_effective_use` leaves the standing globs in `UseConfig::globs`, and `expand_globs`
+expands them over the package's IUSE. Checked with emerge on sys-apps/man-pages in 26 cases.
 
 Layers 2 (`profile package.use`) and 4 (`/etc/portage/package.use`) are applied
 **per package** at solve/display time. Layer 6 force/mask is applied as a true

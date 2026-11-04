@@ -17,6 +17,7 @@ use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpv, Dep, UseFlagLookup};
 
 use crate::IUseDefault;
+use gentoo_core::UseToken;
 
 /// How a single USE flag should be evaluated during dependency conversion
 ///
@@ -63,6 +64,8 @@ pub struct UseConfig {
     base: Option<Arc<HashMap<Interned<DefaultInterner>, bool>>>,
     /// Package-local and higher-priority decisions (win over [`Self::base`])
     overlay: HashMap<Interned<DefaultInterner>, UseFlagState>,
+    /// Prefix globs the fold left standing, for the caller to expand over IUSE
+    globs: Vec<(Interned<DefaultInterner>, Glob)>,
 }
 
 impl UseConfig {
@@ -78,7 +81,7 @@ impl UseConfig {
         } else {
             Self {
                 base: Some(map),
-                overlay: HashMap::new(),
+                ..Self::default()
             }
         }
     }
@@ -150,6 +153,11 @@ impl UseConfig {
         v
     }
 
+    /// The prefix globs the fold left standing (`l10n_` for `L10N="*"`), in fold order
+    pub fn globs(&self) -> &[(Interned<DefaultInterner>, Glob)] {
+        &self.globs
+    }
+
     /// Returns all flags marked `SolverDecided` (the ones ceded to the
     /// solver for Level-C `REQUIRED_USE` handling).
     ///
@@ -201,67 +209,38 @@ impl UseOverride {
     }
 }
 
-/// One token inside a [`UseLayer`]: clear-all or a signed flag
+/// A prefix glob still standing after a layer or a whole fold
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LayerTok {
-    /// `-*` — discard everything accumulated from lower layers so far
-    ClearAll,
-    /// `flag` / `+flag` / `-flag` with the name already interned
-    Flag {
-        flag: Interned<DefaultInterner>,
-        enable: bool,
-    },
+pub enum Glob {
+    /// `<prefix>*` as a USE token, already expanded where it stood: IUSE values nothing set since
+    /// are on
+    Expand,
+    /// `*` in a user `USE_EXPAND` variable: every IUSE value is on
+    Literal,
 }
 
-/// A pre-tokenized USE layer (profile `pre_env` or process `env_use`)
+type Flag = Interned<DefaultInterner>;
+
+/// A pre-tokenized USE layer: profile `make.defaults`, `make.conf`, or the environment
 ///
-/// Profile USE_EXPAND folding can put a hundred-plus flags into `pre_env`.
-/// Parse that string **once** at config load ([`UseLayer::parse`]): intern
-/// tokens and freeze the layer's standalone fold into an [`Arc`] map so every
-/// per-package [`resolve_effective_use`] can share the profile base without
-/// re-applying those flags into a fresh map.
-#[derive(Debug, Clone)]
+/// Folded alone **once** at config load into an [`Arc`] map, so every per-package
+/// [`resolve_effective_use`] shares the profile base instead of re-applying a hundred-plus flags.
+#[derive(Debug, Clone, Default)]
 pub struct UseLayer {
-    tokens: Vec<LayerTok>,
+    tokens: Vec<UseToken>,
     /// Whether this layer contains any `-*` (clears lower layers when applied)
     has_clear_all: bool,
-    /// This layer folded alone from empty — shared via [`Arc`]
-    frozen: Arc<HashMap<Interned<DefaultInterner>, bool>>,
-    /// Lowercased flag prefixes (`l10n_`, `video_cards_`, …) of the
-    /// `USE_EXPAND` groups this layer *explicitly assigned*.
-    ///
-    /// Portage's `is_not_incremental` branch: assigning a `USE_EXPAND`
-    /// variable at any non-`defaults` config layer wipes every accumulated
-    /// flag with that group's prefix from lower layers before this layer's
-    /// own values apply. The flat USE string gets that treatment already
-    /// (`strip_expand_tokens`), but the ebuild's own `+`-defaulted IUSE is
-    /// only known per package — so the group travels with the layer.
-    group_clears: Arc<[String]>,
-    /// The `<group>_*` tokens this layer leaves on or off after its own fold
-    wildcards: Vec<(Interned<DefaultInterner>, bool)>,
-    /// Wildcards a `USE_EXPAND` variable assigned (`L10N="*"`): Portage keeps those as a literal
-    /// that enables the whole group at the end, past any later `-value`
-    literal_wildcards: Arc<[Interned<DefaultInterner>]>,
-}
-
-impl Default for UseLayer {
-    fn default() -> Self {
-        Self {
-            tokens: Vec::new(),
-            has_clear_all: false,
-            frozen: Arc::new(HashMap::new()),
-            group_clears: Arc::from([]),
-            wildcards: Vec::new(),
-            literal_wildcards: Arc::from([]),
-        }
-    }
+    /// This layer's flags folded alone from empty — shared via [`Arc`]
+    frozen: Arc<HashMap<Flag, bool>>,
+    /// Prefixes this layer drops from the layers below: `-<prefix>*`, or a `USE_EXPAND` assignment
+    clears: Arc<[Flag]>,
+    /// Globs standing after this layer's own fold; its frozen flags of their prefix came after them
+    globs: Arc<[(Flag, Glob)]>,
 }
 
 impl PartialEq for UseLayer {
     fn eq(&self, other: &Self) -> bool {
         self.tokens == other.tokens
-            && self.group_clears == other.group_clears
-            && self.literal_wildcards == other.literal_wildcards
     }
 }
 
@@ -273,92 +252,50 @@ impl UseLayer {
         Self::default()
     }
 
-    /// Split and intern a whitespace-separated USE string once
-    ///
-    /// Accepts the same tokens as a profile/`make.conf`/`USE=` fold:
-    /// `flag`, `+flag`, `-flag`, and `-*`.
-    pub fn parse(s: &str) -> Self {
-        let mut tokens = Vec::new();
-        for tok in s.split_whitespace() {
-            if tok == "-*" {
-                tokens.push(LayerTok::ClearAll);
-                continue;
-            }
-            let name = tok.strip_prefix('+').unwrap_or(tok);
-            match name.strip_prefix('-') {
-                Some(rest) => tokens.push(LayerTok::Flag {
-                    flag: Interned::intern(rest),
-                    enable: false,
-                }),
-                None => tokens.push(LayerTok::Flag {
-                    flag: Interned::intern(name),
-                    enable: true,
-                }),
+    /// Fold `tokens`, in order, into a layer
+    pub fn new(tokens: impl IntoIterator<Item = UseToken>) -> Self {
+        let tokens: Vec<UseToken> = tokens.into_iter().collect();
+        let mut state: HashMap<Flag, bool> = HashMap::new();
+        let mut has_clear_all = false;
+        let mut clears: Vec<Flag> = Vec::new();
+        let mut globs: Vec<(Flag, Glob)> = Vec::new();
+        for &tok in &tokens {
+            match tok {
+                UseToken::Flag { flag, enable } => {
+                    state.insert(flag, enable);
+                }
+                UseToken::ClearAll => {
+                    state.clear();
+                    globs.clear();
+                    has_clear_all = true;
+                }
+                UseToken::ClearPrefix(prefix) => {
+                    let p = prefix.as_str();
+                    state.retain(|f, _| !f.as_str().starts_with(p));
+                    globs.retain(|(g, _)| !g.as_str().starts_with(p));
+                    clears.push(prefix);
+                }
+                UseToken::ExpandPrefix(prefix) => {
+                    // Expanded here, so the prefix's earlier flags are on; the glob says so.
+                    let p = prefix.as_str();
+                    state.retain(|f, _| !f.as_str().starts_with(p));
+                    add_glob(&mut globs, prefix, Glob::Expand);
+                }
+                UseToken::LiteralPrefix(prefix) => add_glob(&mut globs, prefix, Glob::Literal),
             }
         }
-        let (frozen, has_clear_all) = freeze_tokens(&tokens);
-        let wildcards = frozen
-            .iter()
-            .filter(|(flag, _)| is_wildcard(**flag))
-            .map(|(&flag, &on)| (flag, on))
-            .collect();
         Self {
             tokens,
             has_clear_all,
-            frozen: Arc::new(frozen),
-            group_clears: Arc::from([]),
-            wildcards,
-            literal_wildcards: Arc::from([]),
+            frozen: Arc::new(state),
+            clears: clears.into(),
+            globs: globs.into(),
         }
     }
 
-    /// The `<group>_*` wildcards this layer enables; whether one stays on is the fold's to say
-    pub fn wildcards(&self) -> impl Iterator<Item = Interned<DefaultInterner>> + '_ {
-        self.wildcards
-            .iter()
-            .filter(|(_, on)| *on)
-            .map(|(flag, _)| *flag)
-    }
-
-    /// Whether a `USE_EXPAND` variable of this layer assigned `wildcard` (see `literal_wildcards`)
-    pub fn is_literal_wildcard(&self, wildcard: Interned<DefaultInterner>) -> bool {
-        self.literal_wildcards.contains(&wildcard)
-    }
-
-    /// Record the `USE_EXPAND` variables this layer explicitly assigned, by name as declared
-    /// (`L10N`, `VIDEO_CARDS`, …), each with whether its value holds `*`
-    ///
-    /// See the `group_clears` and `literal_wildcards` field docs.
-    pub fn with_expand_assignments(
-        mut self,
-        vars: impl IntoIterator<Item = (String, bool)>,
-    ) -> Self {
-        let mut clears = Vec::new();
-        let mut literals = Vec::new();
-        for (var, wildcard) in vars {
-            let prefix = format!("{}_", var.to_lowercase());
-            if wildcard {
-                literals.push(Interned::intern(&format!("{prefix}*")));
-            }
-            clears.push(prefix);
-        }
-        self.group_clears = clears.into();
-        self.literal_wildcards = literals.into();
-        self
-    }
-
-    /// Whether `flag` belongs to a `USE_EXPAND` group this layer explicitly
-    /// assigned — i.e. whether the fold must drop `flag` when it came from a
-    /// layer below this one.
-    fn clears_group(&self, flag: Interned<DefaultInterner>) -> bool {
-        if self.group_clears.is_empty() {
-            // Hot path: skip resolving the interned name entirely.
-            return false;
-        }
-        let name = flag.as_str();
-        self.group_clears
-            .iter()
-            .any(|p| name.starts_with(p.as_str()))
+    /// Split a whitespace-separated user USE string (`flag`, `-flag`, `-*`, `<prefix>_*`)
+    pub fn parse(s: &str) -> Self {
+        Self::new(s.split_whitespace().filter_map(UseToken::user))
     }
 
     /// Whether this layer contributes no tokens
@@ -377,8 +314,24 @@ impl UseLayer {
     }
 
     /// Whether this layer assigned `flag` (enabled or disabled).
-    pub fn mentions(&self, flag: Interned<DefaultInterner>) -> bool {
+    pub fn mentions(&self, flag: Flag) -> bool {
         self.frozen.contains_key(&flag)
+    }
+
+    /// Whether this layer drops or globs `flag`'s prefix, so an IUSE default below it is moot
+    fn covers(&self, flag: Flag) -> bool {
+        let name = flag.as_str();
+        self.clears.iter().any(|p| name.starts_with(p.as_str()))
+            || self.globs.iter().any(|(p, _)| name.starts_with(p.as_str()))
+    }
+}
+
+/// A literal glob outlives an in-place one of the same prefix, as Portage's literal `l10n_*` does
+fn add_glob(globs: &mut Vec<(Flag, Glob)>, prefix: Flag, glob: Glob) {
+    match globs.iter_mut().find(|(p, _)| *p == prefix) {
+        Some(standing) if standing.1 == Glob::Literal => {}
+        Some(standing) => standing.1 = glob,
+        None => globs.push((prefix, glob)),
     }
 }
 
@@ -394,41 +347,6 @@ pub struct ProfileUseNode {
     pub defaults: UseLayer,
     /// This node's `package.use` lines.
     pub package_use: Vec<(Dep, Vec<UseOverride>)>,
-}
-
-/// Whether `flag` is a `<group>_*` wildcard token
-fn is_wildcard(flag: Interned<DefaultInterner>) -> bool {
-    flag.as_str().ends_with("_*")
-}
-
-/// Fold tokens from empty into a map; report whether any `-*` appeared
-///
-/// A `<group>_*` token expands in place, as in Portage, so it drops the group's earlier tokens.
-fn freeze_tokens(tokens: &[LayerTok]) -> (HashMap<Interned<DefaultInterner>, bool>, bool) {
-    let mut state: HashMap<Interned<DefaultInterner>, bool> = HashMap::new();
-    let mut has_clear = false;
-    for tok in tokens {
-        match *tok {
-            LayerTok::ClearAll => {
-                state.clear();
-                has_clear = true;
-            }
-            LayerTok::Flag { flag, enable } => {
-                if is_wildcard(flag) {
-                    let prefix = wildcard_prefix(&flag);
-                    state.retain(|f, _| !f.as_str().starts_with(prefix));
-                }
-                state.insert(flag, enable);
-            }
-        }
-    }
-    (state, has_clear)
-}
-
-/// `l10n_` for `l10n_*`
-fn wildcard_prefix(wildcard: &Interned<DefaultInterner>) -> &str {
-    let name = wildcard.as_str();
-    &name[..name.len() - 1]
 }
 
 /// Resolve a single package's effective USE
@@ -450,12 +368,15 @@ fn wildcard_prefix(wildcard: &Interned<DefaultInterner>) -> &str {
 /// 4. `conf` — `make.conf` only, above profile `package.use`.
 /// 5. `package_use` — `/etc/portage/package.use` (`pkg`).
 /// 6. `env_use` — process-environment USE ([`UseLayer`]), unmerged.
+///
+/// Prefix globs still standing at the end are in [`UseConfig::globs`]; the caller, which knows
+/// IUSE, expands them.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_effective_use(
-    iuse_defaults: &HashMap<Interned<DefaultInterner>, IUseDefault>,
+    iuse_defaults: &HashMap<Flag, IUseDefault>,
     defaults: &UseLayer,
     cpv: &Cpv,
-    slot: Option<Interned<DefaultInterner>>,
+    slot: Option<Flag>,
     package_use: &[(Dep, Vec<UseOverride>)],
     env_use: &UseLayer,
     profile_package_use: &[ProfileUseNode],
@@ -463,146 +384,146 @@ pub fn resolve_effective_use(
 ) -> UseConfig {
     // Env-level `-*` wipes everything below — frozen env is the answer.
     if env_use.has_clear_all {
-        return UseConfig::from_base_map(Arc::clone(&env_use.frozen));
+        let mut cfg = UseConfig::from_base_map(Arc::clone(&env_use.frozen));
+        cfg.globs = env_use.globs.to_vec();
+        return cfg;
     }
 
     let conf_wipes_below = conf.has_clear_all;
-    let mut overlay: HashMap<Interned<DefaultInterner>, UseFlagState> = HashMap::new();
     // The shared layer every package's overlay sits on.
     let base_layer = if conf_wipes_below { conf } else { defaults };
-    let below = &*base_layer.frozen;
+    let mut fold = Fold {
+        below: &base_layer.frozen,
+        overlay: HashMap::new(),
+        globs: base_layer.globs.to_vec(),
+    };
 
     if !conf_wipes_below {
-        apply_iuse(&mut overlay, iuse_defaults, defaults);
-        apply_profile_package_use(&mut overlay, below, profile_package_use, cpv, slot);
+        fold.iuse(iuse_defaults, defaults);
+        fold.profile_package_use(profile_package_use, cpv, slot);
+        fold.layer(conf);
     }
+    fold.overrides(package_use, cpv, slot, |_| false);
+    fold.layer(env_use);
 
-    if !conf_wipes_below {
-        apply_group_clears(&mut overlay, conf, defaults);
-        apply_layer_tokens(&mut overlay, below, conf);
+    let below = fold.below;
+    UseConfig {
+        base: (!below.is_empty()).then(|| Arc::clone(&base_layer.frozen)),
+        overlay: fold.overlay,
+        globs: fold.globs,
     }
-
-    apply_overrides(&mut overlay, below, package_use, cpv, slot, |_| false);
-
-    apply_group_clears(&mut overlay, env_use, base_layer);
-    apply_layer_tokens(&mut overlay, below, env_use);
-
-    let base = (!below.is_empty()).then(|| Arc::clone(&base_layer.frozen));
-
-    UseConfig { base, overlay }
 }
 
-fn node_matches(node: &ProfileUseNode, cpv: &Cpv, slot: Option<Interned<DefaultInterner>>) -> bool {
+fn node_matches(node: &ProfileUseNode, cpv: &Cpv, slot: Option<Flag>) -> bool {
     node.package_use
         .iter()
         .any(|(dep, _)| dep.cpn == cpv.cpn && atom_matches_cpv(dep, cpv, slot))
 }
 
-fn apply_iuse(
-    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    iuse_defaults: &HashMap<Interned<DefaultInterner>, IUseDefault>,
-    defaults: &UseLayer,
-) {
-    if defaults.has_clear_all {
-        return;
-    }
-    for (flag, def) in iuse_defaults {
-        if matches!(def, IUseDefault::Enabled)
-            && !defaults.frozen.contains_key(flag)
-            && !defaults.clears_group(*flag)
-            && !defaults
-                .wildcards
-                .iter()
-                .any(|(w, _)| flag.as_str().starts_with(wildcard_prefix(w)))
-        {
-            overlay.insert(*flag, UseFlagState::Enabled);
-        }
-    }
+/// One package's fold in progress, over the shared base
+struct Fold<'a> {
+    below: &'a HashMap<Flag, bool>,
+    overlay: HashMap<Flag, UseFlagState>,
+    globs: Vec<(Flag, Glob)>,
 }
 
-fn apply_profile_package_use(
-    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    below: &HashMap<Interned<DefaultInterner>, bool>,
-    nodes: &[ProfileUseNode],
-    cpv: &Cpv,
-    slot: Option<Interned<DefaultInterner>>,
-) {
-    if nodes.is_empty() {
-        return;
-    }
-    for (i, node) in nodes.iter().enumerate() {
-        if !node_matches(node, cpv, slot) {
-            continue;
+impl Fold<'_> {
+    fn iuse(&mut self, iuse_defaults: &HashMap<Flag, IUseDefault>, defaults: &UseLayer) {
+        if defaults.has_clear_all {
+            return;
         }
-        apply_overrides(overlay, below, &node.package_use, cpv, slot, |flag| {
-            nodes[i + 1..]
-                .iter()
-                .any(|later| later.defaults.has_clear_all || later.defaults.mentions(flag))
-        });
+        for (flag, def) in iuse_defaults {
+            if matches!(def, IUseDefault::Enabled)
+                && !defaults.frozen.contains_key(flag)
+                && !defaults.covers(*flag)
+            {
+                self.overlay.insert(*flag, UseFlagState::Enabled);
+            }
+        }
     }
-}
 
-fn apply_overrides(
-    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    below: &HashMap<Interned<DefaultInterner>, bool>,
-    entries: &[(Dep, Vec<UseOverride>)],
-    cpv: &Cpv,
-    slot: Option<Interned<DefaultInterner>>,
-    skip: impl Fn(Interned<DefaultInterner>) -> bool,
-) {
-    for (dep, overrides) in entries {
-        if dep.cpn != cpv.cpn {
-            continue;
-        }
-        if !atom_matches_cpv(dep, cpv, slot) {
-            continue;
-        }
-        for ov in overrides {
-            if skip(ov.flag) {
+    fn profile_package_use(&mut self, nodes: &[ProfileUseNode], cpv: &Cpv, slot: Option<Flag>) {
+        for (i, node) in nodes.iter().enumerate() {
+            if !node_matches(node, cpv, slot) {
                 continue;
             }
-            if is_wildcard(ov.flag) {
-                expand_wildcard(overlay, below, ov.flag, ov.enable, &skip);
-            }
-            overlay.insert(ov.flag, flag_state(ov.enable));
+            self.overrides(&node.package_use, cpv, slot, |flag| {
+                nodes[i + 1..]
+                    .iter()
+                    .any(|later| later.defaults.has_clear_all || later.defaults.mentions(flag))
+            });
         }
     }
-}
 
-/// Apply `layer` over `below` and `overlay`; its wildcards expand first, since its frozen fold
-/// holds no token of their group from before them
-fn apply_layer_tokens(
-    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    below: &HashMap<Interned<DefaultInterner>, bool>,
-    layer: &UseLayer,
-) {
-    for &(wildcard, enable) in &layer.wildcards {
-        expand_wildcard(overlay, below, wildcard, enable, &|_| false);
+    /// `package.use` lines in order; `<prefix>_*` and `-<prefix>_*` act on the prefix
+    fn overrides(
+        &mut self,
+        entries: &[(Dep, Vec<UseOverride>)],
+        cpv: &Cpv,
+        slot: Option<Flag>,
+        skip: impl Fn(Flag) -> bool,
+    ) {
+        for (dep, overrides) in entries {
+            if dep.cpn != cpv.cpn || !atom_matches_cpv(dep, cpv, slot) {
+                continue;
+            }
+            for ov in overrides {
+                if skip(ov.flag) {
+                    continue;
+                }
+                let name = ov.flag.as_str();
+                match name.strip_suffix('*').filter(|p| p.ends_with('_')) {
+                    Some(prefix) if ov.enable => {
+                        self.expand(Interned::intern(prefix), Glob::Expand, &skip)
+                    }
+                    Some(prefix) => self.clear(Interned::intern(prefix)),
+                    None => {
+                        self.overlay.insert(ov.flag, flag_state(ov.enable));
+                    }
+                }
+            }
+        }
     }
-    for (&flag, &enable) in layer.frozen.iter() {
-        overlay.insert(flag, flag_state(enable));
-    }
-}
 
-/// Expand `wildcard` in place: every flag of its group set so far takes its sign
-///
-/// Values nothing set yet are left to [`resolve_effective_use`]'s caller, which knows IUSE.
-fn expand_wildcard(
-    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    below: &HashMap<Interned<DefaultInterner>, bool>,
-    wildcard: Interned<DefaultInterner>,
-    enable: bool,
-    skip: &impl Fn(Interned<DefaultInterner>) -> bool,
-) {
-    let prefix = wildcard_prefix(&wildcard);
-    let group: Vec<_> = below
-        .keys()
-        .chain(overlay.keys())
-        .filter(|f| f.as_str().starts_with(prefix) && !skip(**f))
-        .copied()
-        .collect();
-    for flag in group {
-        overlay.insert(flag, flag_state(enable));
+    /// Apply `layer`: its clears and globs came before its own flags of their prefix
+    fn layer(&mut self, layer: &UseLayer) {
+        for &prefix in layer.clears.iter() {
+            self.clear(prefix);
+        }
+        for &(prefix, glob) in layer.globs.iter() {
+            self.expand(prefix, glob, &|_| false);
+        }
+        for (&flag, &enable) in layer.frozen.iter() {
+            self.overlay.insert(flag, flag_state(enable));
+        }
+    }
+
+    /// Drop every flag and glob with `prefix` set so far
+    fn clear(&mut self, prefix: Flag) {
+        let p = prefix.as_str();
+        self.set_prefixed(p, UseFlagState::Disabled, &|_| false);
+        self.globs.retain(|(g, _)| !g.as_str().starts_with(p));
+    }
+
+    /// Stand a glob; an in-place one turns on the prefix's flags set so far
+    fn expand(&mut self, prefix: Flag, glob: Glob, skip: &impl Fn(Flag) -> bool) {
+        if glob == Glob::Expand {
+            self.set_prefixed(prefix.as_str(), UseFlagState::Enabled, skip);
+        }
+        add_glob(&mut self.globs, prefix, glob);
+    }
+
+    fn set_prefixed(&mut self, prefix: &str, state: UseFlagState, skip: &impl Fn(Flag) -> bool) {
+        let hits: Vec<Flag> = self
+            .below
+            .keys()
+            .chain(self.overlay.keys())
+            .filter(|f| f.as_str().starts_with(prefix) && !skip(**f))
+            .copied()
+            .collect();
+        for flag in hits {
+            self.overlay.insert(flag, state);
+        }
     }
 }
 
@@ -611,26 +532,6 @@ fn flag_state(enable: bool) -> UseFlagState {
         UseFlagState::Enabled
     } else {
         UseFlagState::Disabled
-    }
-}
-
-fn apply_group_clears(
-    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    layer: &UseLayer,
-    below: &UseLayer,
-) {
-    if layer.group_clears.is_empty() {
-        return;
-    }
-    for flag in below.frozen.keys() {
-        if layer.clears_group(*flag) {
-            overlay.insert(*flag, UseFlagState::Disabled);
-        }
-    }
-    for (flag, state) in overlay.iter_mut() {
-        if layer.clears_group(*flag) {
-            *state = UseFlagState::Disabled;
-        }
     }
 }
 
@@ -734,6 +635,11 @@ mod tests {
         UseLayer::parse(s)
     }
 
+    // A make.conf/env `var="value"` assignment
+    fn assigned(var: &str, value: &str) -> UseLayer {
+        UseLayer::new(UseToken::assignment(var, value).map(Result::unwrap))
+    }
+
     fn pnodes(atom: &str, overrides: &[&str]) -> Vec<ProfileUseNode> {
         vec![ProfileUseNode {
             defaults: UseLayer::empty(),
@@ -787,7 +693,7 @@ mod tests {
             &[],
             &layer(""),
             &[],
-            &layer("l10n_en-GB").with_expand_assignments([("L10N".to_string(), false)]),
+            &assigned("L10N", "en-GB"),
         );
         assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
         assert_eq!(cfg.get(flag("l10n_en-GB")), UseFlagState::Enabled);
@@ -809,7 +715,7 @@ mod tests {
             &pkg_use("dev-libs/openssl", &["l10n_fr"]),
             &layer(""),
             &pnodes("dev-libs/openssl", &["l10n_de"]),
-            &layer("l10n_en-GB").with_expand_assignments([("L10N".to_string(), false)]),
+            &assigned("L10N", "en-GB"),
         );
         assert_eq!(cfg.get(flag("l10n_en-GB")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
@@ -837,9 +743,9 @@ mod tests {
             &cpv(),
             None,
             &pkg_use("dev-libs/openssl", &["l10n_fr"]),
-            &layer("l10n_de").with_expand_assignments([("L10N".to_string(), false)]),
+            &assigned("L10N", "de"),
             &[],
-            &layer("l10n_en-GB").with_expand_assignments([("L10N".to_string(), false)]),
+            &assigned("L10N", "en-GB"),
         );
         assert_eq!(cfg.get(flag("l10n_de")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
@@ -860,7 +766,7 @@ mod tests {
             &[],
             &layer(""),
             &[],
-            &layer("").with_expand_assignments([("L10N".to_string(), false)]),
+            &assigned("L10N", ""),
         );
         assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
     }

@@ -38,7 +38,7 @@ pub mod use_token;
 pub mod variant;
 
 pub use error::Error;
-pub use use_token::{InvalidUseToken, UseToken};
+pub use use_token::InvalidUseToken;
 
 pub use arch::KnownArch;
 
@@ -47,6 +47,9 @@ pub type Arch = arch::Arch<interner::DefaultInterner>;
 
 /// A Gentoo release media variant (e.g., `amd64-openrc`, `arm64-systemd`)
 pub type Variant = variant::Variant<interner::DefaultInterner>;
+
+/// One operation of a USE configuration layer (`flag`, `-*`, `l10n_*`, …)
+pub type UseToken = use_token::UseToken<interner::DefaultInterner>;
 
 #[cfg(test)]
 mod tests {

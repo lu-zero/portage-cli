@@ -16,5 +16,6 @@ lasso = ["portage-atom/lasso"]
 symbol-table = ["portage-atom/symbol-table"]
 
 [dependencies]
+gentoo-core = { workspace = true }
 portage-atom = { workspace = true }
 thiserror = { workspace = true }

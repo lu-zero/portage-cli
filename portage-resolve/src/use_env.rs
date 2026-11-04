@@ -25,7 +25,7 @@ pub struct UseEnv {
     pub defaults: UseLayer,
     /// `make.conf` / extra_confs USE delta (Portage's `conf` layer)
     pub conf: UseLayer,
-    /// Process-environment USE layer (`ResolvedUse::env_use`), **parsed once**
+    /// Process-environment USE layer (`ResolvedUse::env`), **parsed once**
     ///
     /// Portage's `env` layer, folded in *after* `package_use`. A `-*` here
     /// wipes `package_use`; a conf-level `-*` must not.
@@ -333,20 +333,11 @@ async fn compute_use_env(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/var/cache/distfiles".to_string());
 
-    // Profile/make.conf fold and process-env USE, tokenized once here so
-    // every per-package `resolve_effective_use` reuses interned layer tokens
-    // (USE_EXPAND can put 100+ flags into pre_env — re-splitting that string
-    // per CPV is pure waste). Kept as two layers: a `-*` in env must still
-    // wipe package.use while a conf-level `-*` must not. Each layer also
-    // carries the USE_EXPAND groups it explicitly assigned, so the per-package
-    // fold can apply portage's non-incremental group replace to the ebuild's
-    // own `+`-defaulted IUSE — `L10N="en-US"` in make.conf must beat
-    // chromium-2.eclass's `IUSE="+l10n_${lang}"` for every bundled locale.
-    let defaults = UseLayer::parse(&resolved.defaults_use);
-    let conf =
-        UseLayer::parse(&resolved.conf_use).with_expand_assignments(resolved.conf_expand_assigned);
-    let env_use =
-        UseLayer::parse(&resolved.env_use).with_expand_assignments(resolved.env_expand_assigned);
+    // Folded once, so every per-package `resolve_effective_use` shares the layers. Env stays a
+    // layer of its own: its `-*` wipes package.use, a conf-level `-*` does not.
+    let defaults = profile_layer(&resolved.defaults_use, "make.defaults");
+    let conf = UseLayer::new(resolved.conf);
+    let env_use = UseLayer::new(resolved.env);
 
     // Profile `package.use` is inside Portage's `defaults` layer, after that
     // node's make.defaults and below make.conf. Per-node so a child
@@ -372,7 +363,7 @@ async fn compute_use_env(
             let md = p.path().join("make.defaults");
             let layer_defaults = defaults_by_path
                 .remove(&md)
-                .map(|s| UseLayer::parse(&s))
+                .map(|s| profile_layer(&s, "make.defaults"))
                 .unwrap_or_else(UseLayer::empty);
             ProfileUseNode {
                 defaults: layer_defaults,
@@ -595,6 +586,21 @@ async fn load_package_env_use(portage_dir: &Utf8Path) -> Vec<(Dep, Vec<UseOverri
         }
     }
     out
+}
+
+/// A profile USE string as a layer; a token PMS does not allow there is dropped with a warning
+fn profile_layer(use_str: &str, file: &str) -> UseLayer {
+    UseLayer::new(
+        use_str
+            .split_whitespace()
+            .filter_map(|tok| match UseToken::profile(tok) {
+                Ok(tok) => Some(tok),
+                Err(e) => {
+                    tracing::warn!("profile {file}: {e}");
+                    None
+                }
+            }),
+    )
 }
 
 /// A profile `package.use`'s lines as overrides

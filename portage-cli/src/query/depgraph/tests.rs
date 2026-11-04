@@ -549,7 +549,7 @@ fn l10n_flags(fix: &Fix) -> Vec<(String, Vec<String>)> {
                 .use_flags
                 .iter()
                 .map(|f| f.as_str().to_owned())
-                .filter(|f| f.starts_with("l10n_") && f != "l10n_*")
+                .filter(|f| f.starts_with("l10n_"))
                 .collect();
             flags.sort();
             (p.cpv.cpn.to_string(), flags)
@@ -609,6 +609,26 @@ fn a_wildcard_token_expands_where_it_stands() {
             .unwrap()
             .1;
         assert_eq!(foo, want, "make.conf {conf:?}, package.use {package_use:?}");
+    }
+}
+
+// A make.conf USE_EXPAND variable replaces its group after the layer's own USE, ignores
+// `-value`, and keeps `*` as a literal. Each row checked with emerge on sys-apps/man-pages.
+#[test]
+fn a_use_expand_assignment_replaces_its_group() {
+    let cases: [(&str, &[&str]); 3] = [
+        ("L10N=\"de fr -de\"\n", &["l10n_de", "l10n_fr"]),
+        ("L10N=\"* -*\"\n", &["l10n_de", "l10n_fr"]),
+        ("USE=\"${USE} l10n_fr\"\nL10N=\"de\"\n", &["l10n_de"]),
+    ];
+    for (conf, want) in cases {
+        let fix = l10n_fixture(conf, "");
+        let foo = l10n_flags(&fix)
+            .into_iter()
+            .find(|(cpn, _)| cpn == "app-misc/foo")
+            .unwrap()
+            .1;
+        assert_eq!(foo, want, "make.conf {conf:?}");
     }
 }
 

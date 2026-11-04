@@ -68,7 +68,7 @@ pub use repository::{
 };
 pub use required_use::RequiredUse;
 pub use use_config::{
-    ProfileUseNode, UseConfig, UseFlagState, UseLayer, UseOverride, resolve_effective_use,
+    Glob, ProfileUseNode, UseConfig, UseFlagState, UseLayer, UseOverride, resolve_effective_use,
 };
 pub use validate::{BlockerHit, BlockerVictim, HeldBackTarget, SlotOperatorBinding};
 pub use version_set::PortageVersionSet;

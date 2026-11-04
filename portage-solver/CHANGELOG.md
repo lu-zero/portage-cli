@@ -11,7 +11,8 @@
 
 ### Features
 
-- `UseLayer::wildcards` lists the `<group>_*` USE_EXPAND wildcards a layer enables.
+- `UseLayer::new` folds `gentoo_core::UseToken`s; `UseConfig::globs` hands the prefix globs still
+  standing (`l10n_*`, `L10N="*"`) to the caller, which knows IUSE.
 
 ### Bug fixes
 

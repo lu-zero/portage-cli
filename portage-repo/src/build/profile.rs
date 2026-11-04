@@ -5,6 +5,7 @@
 //! dependency from the repo module into the build module.  They live here
 //! instead and are added to `Profile` / `ProfileStack` via second impl blocks.
 
+use gentoo_core::UseToken;
 use std::collections::{HashMap, HashSet};
 
 use portage_atom::interner::{DefaultInterner, Interned};
@@ -354,10 +355,10 @@ pub async fn configure_shell(
 /// flags an explicit `-flag` USE token turned off, so the per-package step
 /// can record them as explicit `Disabled` and override a `+flag` IUSE
 /// default. `enabled`/`disabled` are disjoint. Package-independent — see
-/// [`Self::pre_env`]/[`Self::env_use`] for the pieces a per-package fold
+/// [`Self::pre_env`]/[`Self::env`] for the pieces a per-package fold
 /// still needs.
 ///
-/// `defaults_use`/`conf_use`/`env_use` exist because real portage resolves
+/// `defaults_use`/`conf`/`env` exist because real portage resolves
 /// USE as one ordered fold (`pkginternal < defaults < conf < pkg < env`)
 /// where `-*` clears whatever lower layers accumulated so far — a single
 /// collapsed `enabled`/`disabled` set can't express *where in the fold
@@ -368,36 +369,16 @@ pub struct ResolvedUse {
     pub disabled: Vec<Interned<DefaultInterner>>,
     /// Folded profile `make.defaults` USE, before `make.conf`.
     pub defaults_use: String,
-    /// `make.conf` / extra_confs / in-process override USE delta only.
-    pub conf_use: String,
-    /// Raw, marker-preserving fold of `defaults_use` + `conf_use`, i.e. the
+    /// `make.conf`, extra confs and the in-process override, in order, as USE tokens.
+    pub conf: Vec<UseToken>,
+    /// Raw, marker-preserving fold of `defaults_use` + `conf`, i.e. the
     /// shell's `USE` value immediately before the environment layer is applied.
     pub pre_env: String,
     /// Per `make.defaults` file, that layer's translated USE contribution.
     pub profile_defaults: Vec<(std::path::PathBuf, String)>,
-    /// The environment layer's `USE` contribution, unmerged: the raw `USE`
-    /// from the process environment plus the environment's translated
-    /// `USE_EXPAND`/`USE_EXPAND_UNPREFIXED` values (see [`env_layer_use`]).
-    /// This is specifically what determines whether `package.use` gets wiped:
-    /// it must be folded in *after* `package.use`, matching portage's
-    /// `pkg < env` layer order.
-    pub env_use: String,
-    /// `USE_EXPAND`-listed variables a conf-layer source (`make.conf`,
-    /// `extra_confs`, the in-process override) *explicitly assigned* — even to
-    /// `""` — by name as declared (`L10N`, `VIDEO_CARDS`, …).
-    ///
-    /// [`Self::pre_env`] alone can't express this: a bare `l10n_en-US` token
-    /// says a flag is on, not that the rest of the group was replaced. The
-    /// group replace has to reach the ebuild's own `+`-defaulted IUSE, and
-    /// that is only known per package, long after this string is flat — so
-    /// the assigned names travel separately and become
-    /// `UseLayer::with_expand_assignments` on the conf layer. Each name carries whether its value
-    /// holds `*`, which Portage keeps as a literal that enables the whole group at the end.
-    pub conf_expand_assigned: Vec<(String, bool)>,
-    /// As [`Self::conf_expand_assigned`], for the process-environment layer:
-    /// the `USE_EXPAND` variables present in `std::env`. One layer higher, so
-    /// its replace also wipes `package.use`.
-    pub env_expand_assigned: Vec<(String, bool)>,
+    /// The environment layer as USE tokens: unprefixed `USE_EXPAND` values, `USE`, then each
+    /// `USE_EXPAND` variable present, which replaces its group. Folded after `package.use`.
+    pub env: Vec<UseToken>,
 }
 
 /// Resolve the effective USE flags for a profile stack without setting the
@@ -460,11 +441,11 @@ pub(super) async fn resolve_use_flags_observed(
     let profile_defaults: Vec<(std::path::PathBuf, String)> =
         layers.into_iter().map(|l| (l.path, l.use_tokens)).collect();
 
-    let mut conf_expand_assigned: Vec<(String, bool)> = Vec::new();
+    let mut conf: Vec<UseToken> = Vec::new();
     let mut conf_deltas: Vec<String> = Vec::new();
-    for conf in extra_confs {
-        let contrib = source_incremental(shell, *conf).await?;
-        merge_assigned(&mut conf_expand_assigned, contrib.expand_assigned);
+    for source in extra_confs {
+        let contrib = source_incremental(shell, *source).await?;
+        conf.extend(contrib.tokens);
         if !contrib.use_delta.is_empty() {
             conf_deltas.push(contrib.use_delta);
         }
@@ -476,29 +457,24 @@ pub(super) async fn resolve_use_flags_observed(
     // would land at (which would incorrectly wipe `package.use`, layer 5).
     if let Some(content) = extra_use_override {
         let contrib = source_incremental(shell, ConfSource::Str(content)).await?;
-        merge_assigned(&mut conf_expand_assigned, contrib.expand_assigned);
+        conf.extend(contrib.tokens);
         if !contrib.use_delta.is_empty() {
             conf_deltas.push(contrib.use_delta);
         }
     }
-    let conf_use = merge_flag_lists_signed(conf_deltas.iter().map(String::as_str)).join(" ");
     observe(Stage::Conf, shell);
-
-    // The environment layer's own explicit `USE_EXPAND` assignments — same
-    // non-incremental group replace as a conf layer's, one layer higher.
-    let env_expand_assigned: Vec<(String, bool)> = shell
-        .get_var("USE_EXPAND")
-        .unwrap_or_default()
-        .split_whitespace()
-        .filter_map(|k| Some((k.to_string(), has_wildcard(env.get(k)?))))
-        .collect();
 
     // Snapshot the fold immediately before the environment layer — this is
     // `pkginternal < defaults < conf` in portage's layer order, the state a
     // per-package fold must resume from *before* `package.use`/`env`. See
     // `ResolvedUse::pre_env`'s doc.
     let pre_env = shell.get_var("USE").unwrap_or_default();
-    let env_use = env_layer_use(shell, env).join(" ");
+    let env_tokens = layer_tokens(
+        |k| env.get(k).map(str::to_owned),
+        env.get("USE"),
+        &var_list(shell, "USE_EXPAND_UNPREFIXED"),
+        &var_list(shell, "USE_EXPAND"),
+    );
 
     apply_env_layer(shell, env).await?;
 
@@ -530,30 +506,56 @@ pub(super) async fn resolve_use_flags_observed(
             .map(|f| Interned::<DefaultInterner>::intern(f.as_str()))
             .collect(),
         defaults_use,
-        conf_use,
+        conf,
         pre_env,
         profile_defaults,
-        env_use,
-        conf_expand_assigned,
-        env_expand_assigned,
+        env: env_tokens,
     })
 }
 
 /// Append `new` to `acc`, skipping names already recorded (a variable assigned
 /// by two conf layers still clears its group exactly once).
-/// A later layer's assignment of the same variable replaces the earlier one's wildcard
-fn merge_assigned(acc: &mut Vec<(String, bool)>, new: Vec<(String, bool)>) {
-    for (k, wildcard) in new {
-        match acc.iter_mut().find(|(a, _)| *a == k) {
-            Some(slot) => slot.1 = wildcard,
-            None => acc.push((k, wildcard)),
-        }
-    }
+/// The whitespace-separated names in `var` (`USE_EXPAND`, `USE_EXPAND_UNPREFIXED`)
+fn var_list(shell: &EbuildShell, var: &str) -> Vec<String> {
+    shell
+        .get_var(var)
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
 }
 
-/// Whether a `USE_EXPAND` variable's value holds the `*` wildcard
-fn has_wildcard(value: &str) -> bool {
-    value.split_whitespace().any(|v| v == "*")
+/// One make.conf or environment layer as USE tokens, in Portage's order: unprefixed `USE_EXPAND`
+/// values, `USE`, then each `USE_EXPAND` variable the layer assigned, which replaces its group
+fn layer_tokens(
+    get: impl Fn(&str) -> Option<String>,
+    use_var: Option<&str>,
+    unprefixed_keys: &[String],
+    expand_keys: &[String],
+) -> Vec<UseToken> {
+    let mut out: Vec<UseToken> = Vec::new();
+    for key in unprefixed_keys {
+        if let Some(val) = get(key) {
+            out.extend(val.split_whitespace().filter_map(UseToken::user));
+        }
+    }
+    out.extend(
+        use_var
+            .into_iter()
+            .flat_map(str::split_whitespace)
+            .filter_map(UseToken::user),
+    );
+    for key in expand_keys {
+        if let Some(val) = get(key) {
+            for tok in UseToken::assignment(key, &val) {
+                match tok {
+                    Ok(tok) => out.push(tok),
+                    Err(e) => tracing::warn!("{key}: {e}; ignored"),
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Translate a single config layer's `USE_EXPAND` / `USE_EXPAND_UNPREFIXED`
@@ -719,7 +721,7 @@ pub enum ConfSource<'a> {
 
 /// One conf-layer's own incremental contribution (not merged with saved state).
 pub(super) struct IncrementalContribution {
-    expand_assigned: Vec<(String, bool)>,
+    tokens: Vec<UseToken>,
     use_delta: String,
 }
 
@@ -735,9 +737,8 @@ pub(super) struct IncrementalContribution {
 /// variables (`ARCH`, …) keep a plain incremental add — no structural prefix
 /// to strip by. See `portage-repo/docs/pms-notes.md` for the details.
 ///
-/// Returns the `USE_EXPAND`-listed variables this layer explicitly assigned,
-/// so the caller can surface them as [`ResolvedUse::conf_expand_assigned`] —
-/// the flat `USE` strip below can't reach the per-package IUSE defaults.
+/// Also returns the layer as USE tokens for the per-package fold, which the flat `USE` strip
+/// cannot serve: an assignment replaces its group among the package's own IUSE defaults too.
 pub(super) async fn source_incremental(
     shell: &mut EbuildShell,
     source: ConfSource<'_>,
@@ -796,11 +797,9 @@ pub(super) async fn source_incremental(
     // USE before this layer's own combined delta is merged on top.
     let mut use_base = saved.get("USE").cloned().unwrap_or_default();
     let mut merged_expand: HashMap<String, String> = saved_expand;
-    let mut assigned_expand: Vec<(String, bool)> = Vec::new();
     for key in &expand_keys {
         if let Some(val) = shell.get_var(key) {
             use_base = strip_expand_tokens(&use_base, key);
-            assigned_expand.push((key.clone(), has_wildcard(&val)));
             if val.is_empty() {
                 merged_expand.remove(key);
             } else {
@@ -817,6 +816,14 @@ pub(super) async fn source_incremental(
             }
         }
     }
+
+    // Read before `restore` below sets every accumulated variable again.
+    let tokens = layer_tokens(
+        |k| shell.get_var(k),
+        contributed.get("USE").map(String::as_str),
+        &unprefixed_keys,
+        &expand_keys,
+    );
 
     // This layer's own combined USE delta: unprefixed values, then this
     // layer's own USE=, then prefixed (expand) values — portage's conf/env
@@ -859,7 +866,7 @@ pub(super) async fn source_incremental(
     shell.run_string(&restore).await?;
 
     Ok(IncrementalContribution {
-        expand_assigned: assigned_expand,
+        tokens,
         use_delta: delta.join(" "),
     })
 }
@@ -878,7 +885,7 @@ fn shell_quote(s: &str) -> String {
 /// [`configure_shell`] (real ebuild execution, which needs a simple flag
 /// list for the `use()`/`usex()` builtins, no `package.use`/per-package IUSE
 /// involved). The per-package resolver reads [`ResolvedUse::pre_env`]/
-/// [`ResolvedUse::env_use`] instead, which preserve *where* a `-*` appeared.
+/// [`ResolvedUse::env`] instead, which preserve *where* a `-*` appeared.
 struct CollectedUse {
     enabled: Vec<String>,
     disabled: Vec<String>,
@@ -1445,11 +1452,31 @@ mod tests {
 
     // `use_flags_with_override`'s whole point: a transient conf-layer
     // override (`em stages --stage1`'s `USE="-* build ${BOOTSTRAP_USE}"`)
-    // must land in `pre_env`, not `env_use` — otherwise it behaves like a
+    // must land in `pre_env`, not `env` — otherwise it behaves like a
     // `std::env::set_var("USE", ...)` mutation (the pre-2026-07-12
     // mechanism), which sits *above* `package.use` and wipes it. Folding it
-    // as one more conf file instead keeps `env_use` as the real,
+    // as one more conf file instead keeps `env` as the real,
     // untouched process environment.
+    // A group the profile set but the conf layer leaves alone is no assignment of that layer.
+    #[tokio::test]
+    async fn the_conf_layer_holds_only_what_it_assigned() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let profile = make_profile(&dir, "test", &[]);
+        std::fs::write(
+            profile.join("make.defaults"),
+            "USE_EXPAND=\"L10N\"\nL10N=\"fr\"\n",
+        )
+        .unwrap();
+        let stack = ProfileStack::build(profile).unwrap();
+        let mut shell = repo.shell().await.unwrap();
+        let resolved = stack
+            .use_flags_with_override(&mut shell, &[], "USE=\"l10n_*\"\n")
+            .await
+            .unwrap();
+        assert_eq!(resolved.conf, [UseToken::user("l10n_*").unwrap()]);
+    }
+
     #[tokio::test]
     async fn use_flags_with_override_lands_in_pre_env_not_env_use() {
         let dir = tempfile::tempdir().unwrap();
@@ -1474,21 +1501,20 @@ mod tests {
             "the override's own -* clears the lower defaults layer: {pre_env:?}"
         );
         assert!(
-            resolved.env_use.is_empty(),
-            "the override must not leak into env_use (the real process env): {:?}",
-            resolved.env_use
+            resolved.env.is_empty(),
+            "the override must not leak into env (the real process env): {:?}",
+            resolved.env
         );
         let defaults: Vec<&str> = resolved.defaults_use.split_whitespace().collect();
         assert!(
             defaults.contains(&"unrelated"),
             "make.defaults stays in defaults_use: {defaults:?}"
         );
-        let conf: Vec<&str> = resolved.conf_use.split_whitespace().collect();
-        assert!(
-            conf.contains(&"-*") && conf.contains(&"build"),
-            "override is the conf delta: {conf:?}"
+        assert_eq!(
+            resolved.conf,
+            [UseToken::ClearAll, UseToken::user("build").unwrap()],
+            "the override is the conf layer, without defaults"
         );
-        assert!(!conf.contains(&"unrelated"), "conf delta excludes defaults");
     }
 
     #[tokio::test]

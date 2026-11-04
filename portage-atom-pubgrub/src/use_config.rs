@@ -8,5 +8,5 @@
 //! conversion sees flag state through the same trait.
 
 pub use portage_solver::{
-    ProfileUseNode, UseConfig, UseFlagState, UseLayer, UseOverride, resolve_effective_use,
+    Glob, ProfileUseNode, UseConfig, UseFlagState, UseLayer, UseOverride, resolve_effective_use,
 };

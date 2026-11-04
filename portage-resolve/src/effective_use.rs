@@ -4,10 +4,8 @@ use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpn, Cpv, Dep, DepEntry, Version};
-use portage_atom_pubgrub::{
-    CededFlag, IUseDefault, PortagePackage, UseConfig, UseFlagState, UseLayer, UseOverride,
-};
+use portage_atom::{Cpn, Cpv, DepEntry, Version};
+use portage_atom_pubgrub::{CededFlag, Glob, IUseDefault, PortagePackage, UseConfig, UseFlagState};
 use portage_metadata::{CacheEntry, EbuildMetadata, IUseDefault as MetaIUseDefault};
 
 use crate::force_mask::{ForceMask, IuseInjection, iuse_effective_set};
@@ -72,58 +70,17 @@ pub(crate) fn enabled_iuse_defaults_from_metadata(
         .collect()
 }
 
-/// Enable the package's IUSE values of each `USE_EXPAND` group whose `<group>_*` wildcard is
-/// still on after every layer, as Portage does; force/mask apply after this
-///
-/// A wildcard token expands in place, so the fold already holds any value set after it; the
-/// literal a make.conf/env `L10N="*"` leaves enables every value.
-fn expand_use_expand_wildcards(
-    cfg: &mut UseConfig,
-    policy: &ResolvePolicy,
-    cpv: &Cpv,
-    iuse: &HashSet<Interned<DefaultInterner>>,
-) {
-    let layers = [policy.defaults, policy.conf, policy.env_use]
-        .into_iter()
-        .chain(policy.profile_package_use.iter().map(|node| &node.defaults));
-    let package_use = enabled_for(policy.package_use, &cpv.cpn)
-        .chain(
-            policy
-                .profile_package_use
-                .iter()
-                .flat_map(|node| enabled_for(&node.package_use, &cpv.cpn)),
-        )
-        .filter(|flag| flag.as_str().ends_with("_*"));
-    let wildcards = layers.flat_map(UseLayer::wildcards).chain(package_use);
-    for wildcard in wildcards {
-        if cfg.get_opt(wildcard) != Some(UseFlagState::Enabled) {
-            continue;
-        }
-        let literal = policy.conf.is_literal_wildcard(wildcard)
-            || policy.env_use.is_literal_wildcard(wildcard);
-        let prefix = wildcard.as_str().trim_end_matches('*');
+/// Expand the prefix globs the fold left standing over the package's IUSE; force/mask apply after
+fn expand_globs(cfg: &mut UseConfig, iuse: &HashSet<Interned<DefaultInterner>>) {
+    for (prefix, glob) in cfg.globs().to_vec() {
         for &flag in iuse {
-            if flag != wildcard
-                && flag.as_str().starts_with(prefix)
-                && (literal || cfg.get_opt(flag).is_none())
+            if flag.as_str().starts_with(prefix.as_str())
+                && (glob == Glob::Literal || cfg.get_opt(flag).is_none())
             {
                 cfg.enable(flag);
             }
         }
     }
-}
-
-/// The flags `entries` enable for `cpn`'s packages
-fn enabled_for<'a>(
-    entries: &'a [(Dep, Vec<UseOverride>)],
-    cpn: &'a Cpn,
-) -> impl Iterator<Item = Interned<DefaultInterner>> + 'a {
-    entries
-        .iter()
-        .filter(move |(dep, _)| dep.cpn == *cpn)
-        .flat_map(|(_, overrides)| overrides)
-        .filter(|o| o.enable)
-        .map(|o| o.flag)
 }
 
 /// Apply profile force/mask as the unconditional post-fold step
@@ -179,7 +136,7 @@ fn fold_effective_use(
         policy.profile_package_use,
         policy.conf,
     );
-    expand_use_expand_wildcards(&mut cfg, policy, cpv, iuse);
+    expand_globs(&mut cfg, iuse);
     let slot_dep = slot.map(portage_atom::Slot::from_name);
     apply_force_mask(
         &mut cfg,
