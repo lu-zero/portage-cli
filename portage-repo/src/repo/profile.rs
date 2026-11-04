@@ -1,6 +1,8 @@
+use gentoo_core::UseToken;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use camino::Utf8Path;
 
@@ -128,6 +130,10 @@ pub struct Profile {
     profile_formats: Vec<String>,
     /// Root of the repository holding this profile, if it is inside one
     repo: Option<PathBuf>,
+    /// `use.force` and `use.mask`, read and checked once: the global fold and the per-package
+    /// force/mask both ask for them, and a bad line should warn once
+    use_force: OnceLock<Vec<String>>,
+    use_mask: OnceLock<Vec<String>>,
 }
 
 /// One entry from a profile `packages` file (PMS 5.2.6)
@@ -158,6 +164,8 @@ impl Profile {
             eapi,
             profile_formats,
             repo,
+            use_force: OnceLock::new(),
+            use_mask: OnceLock::new(),
         })
     }
 
@@ -322,42 +330,42 @@ impl Profile {
 
     /// Parse `use.force`
     pub fn use_force(&self) -> Result<Vec<String>> {
-        util::read_lines(self.path.join("use.force"))
+        cached_flag_file(&self.use_force, &self.path.join("use.force"))
     }
 
     /// Parse `use.mask`
     pub fn use_mask(&self) -> Result<Vec<String>> {
-        util::read_lines(self.path.join("use.mask"))
+        cached_flag_file(&self.use_mask, &self.path.join("use.mask"))
     }
 
     /// Parse `use.stable.force`
     pub fn use_stable_force(&self) -> Result<Vec<String>> {
-        util::read_lines(self.path.join("use.stable.force"))
+        flag_file(&self.path.join("use.stable.force"))
     }
 
     /// Parse `use.stable.mask`
     pub fn use_stable_mask(&self) -> Result<Vec<String>> {
-        util::read_lines(self.path.join("use.stable.mask"))
+        flag_file(&self.path.join("use.stable.mask"))
     }
 
     /// Parse `package.use.force`
     pub fn package_use_force(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        parse_atom_flags_list(&self.path.join("package.use.force"))
+        atom_flag_file(&self.path.join("package.use.force"))
     }
 
     /// Parse `package.use.mask`
     pub fn package_use_mask(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        parse_atom_flags_list(&self.path.join("package.use.mask"))
+        atom_flag_file(&self.path.join("package.use.mask"))
     }
 
     /// Parse `package.use.stable.force`
     pub fn package_use_stable_force(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        parse_atom_flags_list(&self.path.join("package.use.stable.force"))
+        atom_flag_file(&self.path.join("package.use.stable.force"))
     }
 
     /// Parse `package.use.stable.mask`
     pub fn package_use_stable_mask(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        parse_atom_flags_list(&self.path.join("package.use.stable.mask"))
+        atom_flag_file(&self.path.join("package.use.stable.mask"))
     }
 }
 
@@ -475,38 +483,22 @@ impl ProfileStack {
     ///
     /// See [PMS 5.2.9](https://projects.gentoo.org/pms/9/pms.html#use-flags).
     pub fn use_force(&self) -> Result<Vec<String>> {
-        merge_use_flags(
-            self.profiles
-                .iter()
-                .map(|p| read_profile_file(&p.path().join("use.force"))),
-        )
+        merge_use_flags(self.profiles.iter().map(|p| p.use_force()))
     }
 
     /// Merged `use.mask` across the full stack (incremental, `-` removes)
     pub fn use_mask(&self) -> Result<Vec<String>> {
-        merge_use_flags(
-            self.profiles
-                .iter()
-                .map(|p| read_profile_file(&p.path().join("use.mask"))),
-        )
+        merge_use_flags(self.profiles.iter().map(|p| p.use_mask()))
     }
 
     /// Merged `use.stable.force` across the full stack (incremental, `-` removes)
     pub fn use_stable_force(&self) -> Result<Vec<String>> {
-        merge_use_flags(
-            self.profiles
-                .iter()
-                .map(|p| read_profile_file(&p.path().join("use.stable.force"))),
-        )
+        merge_use_flags(self.profiles.iter().map(|p| p.use_stable_force()))
     }
 
     /// Merged `use.stable.mask` across the full stack (incremental, `-` removes)
     pub fn use_stable_mask(&self) -> Result<Vec<String>> {
-        merge_use_flags(
-            self.profiles
-                .iter()
-                .map(|p| read_profile_file(&p.path().join("use.stable.mask"))),
-        )
+        merge_use_flags(self.profiles.iter().map(|p| p.use_stable_mask()))
     }
 
     /// Merged `package.mask` across the full stack (incremental, `-atom` unmasks)
@@ -1078,6 +1070,46 @@ where
 
 /// Parse a file containing one dependency atom per line
 /// Parse a file containing `atom flag1 flag2 ...` per line.
+/// A profile flag file (`use.force`, `use.mask`, …): `flag` or `-flag` per PMS, anything else is
+/// dropped with a warning, as Portage does
+fn flag_file(path: &Path) -> Result<Vec<String>> {
+    Ok(checked_flags(util::read_lines(path)?, path))
+}
+
+/// [`flag_file`], kept in `cell` once read
+fn cached_flag_file(cell: &OnceLock<Vec<String>>, path: &Path) -> Result<Vec<String>> {
+    if let Some(flags) = cell.get() {
+        return Ok(flags.clone());
+    }
+    let flags = flag_file(path)?;
+    Ok(cell.get_or_init(|| flags).clone())
+}
+
+/// [`flag_file`] for an atom-keyed one (`package.use.force`, `package.use.mask`, …)
+fn atom_flag_file(path: &Path) -> Result<Vec<(Dep, Vec<String>)>> {
+    Ok(parse_atom_flags_list(path)?
+        .into_iter()
+        .map(|(dep, flags)| (dep, checked_flags(flags, path)))
+        .collect())
+}
+
+fn checked_flags(tokens: Vec<String>, path: &Path) -> Vec<String> {
+    tokens
+        .into_iter()
+        .filter(|tok| match UseToken::profile(tok) {
+            Ok(UseToken::Flag { .. }) => true,
+            Ok(_) => {
+                tracing::warn!("{}: `{tok}` is not valid there", path.display());
+                false
+            }
+            Err(e) => {
+                tracing::warn!("{}: {e}", path.display());
+                false
+            }
+        })
+        .collect()
+}
+
 fn parse_atom_flags_list(path: &Path) -> Result<Vec<(Dep, Vec<String>)>> {
     let lines = util::read_lines(path)?;
     let mut result = Vec::new();
@@ -1299,6 +1331,19 @@ mod tests {
         );
         assert!(masked.contains(&"bar".to_string()));
         assert!(masked.contains(&"baz".to_string()));
+    }
+
+    // emerge: "Invalid USE flag" for anything but `flag`/`-flag`, and the file's other lines stand.
+    #[test]
+    fn a_force_or_mask_file_keeps_only_pms_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let leaf = make_profile(&dir, "leaf", &[]);
+        std::fs::write(leaf.join("use.mask"), "foo\nl10n_*\n-*\n-bar\n").unwrap();
+        std::fs::write(leaf.join("package.use.force"), "app-misc/x ssl * -*\n").unwrap();
+        let stack = ProfileStack::build(leaf).unwrap();
+        let p = stack.leaf();
+        assert_eq!(p.use_mask().unwrap(), ["foo", "-bar"]);
+        assert_eq!(p.package_use_force().unwrap()[0].1, ["ssl"]);
     }
 
     #[test]
