@@ -6,9 +6,10 @@
 //! instead and are added to `Profile` / `ProfileStack` via second impl blocks.
 
 use gentoo_core::UseToken;
+use gentoo_core::use_token::global_use;
 use std::collections::{HashMap, HashSet};
 
-use portage_atom::interner::{DefaultInterner, Interned};
+use portage_atom::interner::Interned;
 
 use super::shell::EbuildShell;
 use crate::error::Result;
@@ -351,31 +352,22 @@ pub async fn configure_shell(
     shell.set_use_flags(&refs)
 }
 
-/// The outcome of resolving a profile stack's USE: the enabled flags plus the
-/// flags an explicit `-flag` USE token turned off, so the per-package step
-/// can record them as explicit `Disabled` and override a `+flag` IUSE
-/// default. `enabled`/`disabled` are disjoint. Package-independent — see
-/// [`Self::pre_env`]/[`Self::env`] for the pieces a per-package fold
-/// still needs.
+/// The outcome of resolving a profile stack's USE: the flags on with no package to fold for, and
+/// each layer's tokens for the per-package fold.
 ///
-/// `defaults_use`/`conf`/`env` exist because real portage resolves
-/// USE as one ordered fold (`pkginternal < defaults < conf < pkg < env`)
-/// where `-*` clears whatever lower layers accumulated so far — a single
-/// collapsed `enabled`/`disabled` set can't express *where in the fold
-/// order* a `-*` appeared. See `docs/design/architecture.md`'s USE stacking
-/// precedence section for the full model.
+/// The layers stay apart because Portage folds USE in order (`pkginternal < defaults < conf <
+/// pkg < env`) and a `-*` clears only what came before it; see `docs/design/architecture.md`'s
+/// USE stacking precedence section.
 pub struct ResolvedUse {
+    /// The flags on with no package to fold for: every layer, then `use.force`/`use.mask`
     pub enabled: UseFlags,
-    pub disabled: Vec<Interned<DefaultInterner>>,
-    /// Folded profile `make.defaults` USE, before `make.conf`.
-    pub defaults_use: String,
+    /// What the global config left in `USE` below the profiles (`make.globals`, env.d), then every
+    /// profile node's `make.defaults` tokens, in order.
+    pub defaults: Vec<UseToken>,
     /// `make.conf`, extra confs and the in-process override, in order, as USE tokens.
     pub conf: Vec<UseToken>,
-    /// Raw, marker-preserving fold of `defaults_use` + `conf`, i.e. the
-    /// shell's `USE` value immediately before the environment layer is applied.
-    pub pre_env: String,
     /// Per `make.defaults` file, that layer's translated USE contribution.
-    pub profile_defaults: Vec<(std::path::PathBuf, String)>,
+    pub profile_defaults: Vec<(std::path::PathBuf, Vec<UseToken>)>,
     /// The environment layer as USE tokens: unprefixed `USE_EXPAND` values, `USE`, then each
     /// `USE_EXPAND` variable present, which replaces its group. Folded after `package.use`.
     pub env: Vec<UseToken>,
@@ -394,9 +386,6 @@ pub struct ResolvedUse {
 /// 3. Process env: `USE`/`USE_EXPAND`/`USE_EXPAND_UNPREFIXED`, merged
 /// 4. Profile `use.force` — unconditional add
 /// 5. Profile `use.mask` — unconditional remove
-///
-/// `USE=-flag` disables (steps 1-3) are tracked separately and returned in
-/// [`ResolvedUse::disabled`]; `use.force` clears a flag from that set.
 ///
 /// The shell's bash state is updated as a side-effect.
 pub(super) async fn resolve_use_flags(
@@ -435,20 +424,25 @@ pub(super) async fn resolve_use_flags_observed(
     env: &Environment,
     observe: &mut dyn FnMut(Stage, &EbuildShell),
 ) -> Result<ResolvedUse> {
+    let below_profiles = shell.get_var("USE").unwrap_or_default();
     let ProfileEnv { layers } = stack.profile_env(shell).await?;
     observe(Stage::Defaults, shell);
-    let defaults_use = shell.get_var("USE").unwrap_or_default();
-    let profile_defaults: Vec<(std::path::PathBuf, String)> =
-        layers.into_iter().map(|l| (l.path, l.use_tokens)).collect();
+    let profile_defaults: Vec<(std::path::PathBuf, Vec<UseToken>)> = layers
+        .into_iter()
+        .map(|l| {
+            let tokens = profile_tokens(&l.use_tokens, &l.path);
+            (l.path, tokens)
+        })
+        .collect();
+    let mut defaults: Vec<UseToken> = below_profiles
+        .split_whitespace()
+        .filter_map(UseToken::user)
+        .collect();
+    defaults.extend(profile_defaults.iter().flat_map(|(_, t)| t.iter().copied()));
 
     let mut conf: Vec<UseToken> = Vec::new();
-    let mut conf_deltas: Vec<String> = Vec::new();
     for source in extra_confs {
-        let contrib = source_incremental(shell, *source).await?;
-        conf.extend(contrib.tokens);
-        if !contrib.use_delta.is_empty() {
-            conf_deltas.push(contrib.use_delta);
-        }
+        conf.extend(source_incremental(shell, *source).await?.tokens);
     }
     // A transient, in-process conf-layer override (e.g. `em stages --stage1`'s
     // `USE="-* build ${BOOTSTRAP_USE}"`) — folded at the exact same position
@@ -456,19 +450,14 @@ pub(super) async fn resolve_use_flags_observed(
     // rather than the process-environment layer a raw `std::env::set_var`
     // would land at (which would incorrectly wipe `package.use`, layer 5).
     if let Some(content) = extra_use_override {
-        let contrib = source_incremental(shell, ConfSource::Str(content)).await?;
-        conf.extend(contrib.tokens);
-        if !contrib.use_delta.is_empty() {
-            conf_deltas.push(contrib.use_delta);
-        }
+        conf.extend(
+            source_incremental(shell, ConfSource::Str(content))
+                .await?
+                .tokens,
+        );
     }
     observe(Stage::Conf, shell);
 
-    // Snapshot the fold immediately before the environment layer — this is
-    // `pkginternal < defaults < conf` in portage's layer order, the state a
-    // per-package fold must resume from *before* `package.use`/`env`. See
-    // `ResolvedUse::pre_env`'s doc.
-    let pre_env = shell.get_var("USE").unwrap_or_default();
     let env_tokens = layer_tokens(
         |k| env.get(k).map(str::to_owned),
         env.get("USE"),
@@ -478,43 +467,39 @@ pub(super) async fn resolve_use_flags_observed(
 
     apply_env_layer(shell, env).await?;
 
-    let CollectedUse {
-        mut enabled,
-        mut disabled,
-    } = collect_use_flags(shell);
-
-    let flag_set: HashSet<String> = enabled.iter().cloned().collect();
+    let mut enabled = global_use(defaults.iter().chain(&conf).chain(&env_tokens).copied());
     for flag in stack.use_force()? {
-        if !flag_set.contains(&flag) {
-            enabled.push(flag.clone());
+        let flag = Interned::intern(&flag);
+        if !enabled.contains(&flag) {
+            enabled.push(flag);
         }
-        disabled.retain(|f| f != &flag); // force wins over an explicit disable
     }
-
     let mask: HashSet<String> = stack.use_mask()?.into_iter().collect();
     enabled.retain(|f| !mask.contains(f.as_str()));
 
     Ok(ResolvedUse {
-        enabled: UseFlags(
-            enabled
-                .iter()
-                .map(|f| Interned::<DefaultInterner>::intern(f.as_str()))
-                .collect(),
-        ),
-        disabled: disabled
-            .iter()
-            .map(|f| Interned::<DefaultInterner>::intern(f.as_str()))
-            .collect(),
-        defaults_use,
+        enabled: UseFlags(enabled),
+        defaults,
         conf,
-        pre_env,
         profile_defaults,
         env: env_tokens,
     })
 }
 
-/// Append `new` to `acc`, skipping names already recorded (a variable assigned
-/// by two conf layers still clears its group exactly once).
+/// A `make.defaults` USE contribution as tokens; one PMS does not allow is dropped with a warning
+fn profile_tokens(use_tokens: &str, path: &std::path::Path) -> Vec<UseToken> {
+    use_tokens
+        .split_whitespace()
+        .filter_map(|tok| match UseToken::profile(tok) {
+            Ok(tok) => Some(tok),
+            Err(e) => {
+                tracing::warn!("{}: {e}", path.display());
+                None
+            }
+        })
+        .collect()
+}
+
 /// The whitespace-separated names in `var` (`USE_EXPAND`, `USE_EXPAND_UNPREFIXED`)
 fn var_list(shell: &EbuildShell, var: &str) -> Vec<String> {
     shell
@@ -722,7 +707,6 @@ pub enum ConfSource<'a> {
 /// One conf-layer's own incremental contribution (not merged with saved state).
 pub(super) struct IncrementalContribution {
     tokens: Vec<UseToken>,
-    use_delta: String,
 }
 
 /// Source a single config file (e.g. `make.conf`) with incremental USE semantics
@@ -865,69 +849,12 @@ pub(super) async fn source_incremental(
         .collect();
     shell.run_string(&restore).await?;
 
-    Ok(IncrementalContribution {
-        tokens,
-        use_delta: delta.join(" "),
-    })
+    Ok(IncrementalContribution { tokens })
 }
 
 /// Quote a value for use in a bash assignment (`VAR="..."` form)
 fn shell_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-/// Enabled and explicitly-disabled USE flags resolved from the shell state
-///
-/// `disabled` carries flags a `-flag` token turned off (from the signed `USE`
-/// merge), kept so the per-package step can override a `+flag` IUSE default.
-///
-/// This collapses the fold to a package-independent flat set — used by
-/// [`configure_shell`] (real ebuild execution, which needs a simple flag
-/// list for the `use()`/`usex()` builtins, no `package.use`/per-package IUSE
-/// involved). The per-package resolver reads [`ResolvedUse::pre_env`]/
-/// [`ResolvedUse::env`] instead, which preserve *where* a `-*` appeared.
-struct CollectedUse {
-    enabled: Vec<String>,
-    disabled: Vec<String>,
-}
-
-fn collect_use_flags(shell: &EbuildShell) -> CollectedUse {
-    let use_str = shell.get_var("USE").unwrap_or_default();
-    let mut flags: Vec<String> = Vec::new();
-    let mut disabled: Vec<String> = Vec::new();
-
-    for token in use_str.split_whitespace() {
-        // `-*` clear-all (make.conf(5)): discard everything gathered so far.
-        // `merge_flag_lists_signed` preserves it as a leading marker in the
-        // shell's `USE` value; this collapsed view has no further use for the
-        // marker itself (unlike the per-package fold), so it's just consumed.
-        if token == "-*" {
-            flags.clear();
-            disabled.clear();
-            continue;
-        }
-        if let Some(name) = token.strip_prefix('-') {
-            flags.retain(|f| f != name);
-            if !disabled.iter().any(|f| f == name) {
-                disabled.push(name.to_string());
-            }
-        } else {
-            disabled.retain(|f| f != token);
-            if !flags.iter().any(|f| f == token) {
-                flags.push(token.to_string());
-            }
-        }
-    }
-
-    // `USE_EXPAND`/`USE_EXPAND_UNPREFIXED` values are already translated into
-    // USE tokens per layer (see `expand_var_tokens`' callers), so the shell's
-    // `USE` is the complete fold — no post-hoc re-expansion, which would
-    // resurrect expansions a later layer's `-*`/`-flag` legitimately cleared.
-
-    CollectedUse {
-        enabled: flags,
-        disabled,
-    }
 }
 
 #[cfg(test)]
@@ -1057,19 +984,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_test_repo(&dir);
         let profile = make_profile(&dir, "test", &[]);
-        // `-cxx` for a flag never enabled elsewhere must survive as an explicit
-        // disable, so a per-package `+cxx` IUSE default can be overridden.
+        // `-cxx` for a flag never enabled elsewhere must reach the per-package fold, which
+        // overrides a `+cxx` IUSE default with it.
         std::fs::write(profile.join("make.defaults"), "USE=\"foo -cxx\"\n").unwrap();
         let stack = ProfileStack::build(profile).unwrap();
         let mut shell = repo.shell().await.unwrap();
         let resolved = stack.use_flags(&mut shell, &[]).await.unwrap();
         let enabled: Vec<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
-        let disabled: Vec<&str> = resolved.disabled.iter().map(|f| f.as_str()).collect();
         assert!(enabled.contains(&"foo"), "foo enabled");
         assert!(!enabled.contains(&"cxx"), "cxx not enabled");
         assert!(
-            disabled.contains(&"cxx"),
-            "explicit -cxx tracked as disabled"
+            resolved.defaults.contains(&UseToken::user("-cxx").unwrap()),
+            "explicit -cxx reaches the per-package fold"
         );
     }
 
@@ -1086,9 +1012,7 @@ mod tests {
         let mut shell = repo.shell().await.unwrap();
         let resolved = stack.use_flags(&mut shell, &[]).await.unwrap();
         let enabled: Vec<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
-        let disabled: Vec<&str> = resolved.disabled.iter().map(|f| f.as_str()).collect();
         assert!(enabled.contains(&"cxx"), "cxx re-enabled by child");
-        assert!(!disabled.contains(&"cxx"), "no longer disabled");
     }
 
     #[tokio::test]
@@ -1181,11 +1105,11 @@ mod tests {
     // Profile-injected USE_EXPAND defaults (the `elibc_glibc`/`kernel_linux`/
     // `python_targets_*` family: `profiles/base/make.defaults` sets
     // `USE_EXPAND="… ELIBC …"` + `ELIBC="glibc"`) must be translated into USE
-    // tokens *inside the fold*, so they reach `ResolvedUse::pre_env` and every
+    // tokens *inside the fold*, so they reach `ResolvedUse::defaults` and every
     // per-package `resolve_effective_use` downstream — dep conditionals like
     // `!elibc_glibc? ( dev-libs/libintl )` depend on it.
     #[tokio::test]
-    async fn use_expand_defaults_reach_pre_env() {
+    async fn use_expand_defaults_reach_the_fold() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_test_repo(&dir);
         let profile = make_profile(&dir, "test", &[]);
@@ -1205,17 +1129,14 @@ mod tests {
         let mut shell = repo.shell().await.unwrap();
         let resolved = stack.use_flags(&mut shell, &[]).await.unwrap();
 
-        let pre_env: HashSet<&str> = resolved.pre_env.split_whitespace().collect();
+        let on: HashSet<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
+        assert!(on.contains("elibc_glibc"), "ELIBC expanded: {on:?}");
         assert!(
-            pre_env.contains("elibc_glibc"),
-            "ELIBC expanded: {pre_env:?}"
+            on.contains("python_targets_python3_13"),
+            "PYTHON_TARGETS expanded: {on:?}"
         );
-        assert!(
-            pre_env.contains("python_targets_python3_13"),
-            "PYTHON_TARGETS expanded: {pre_env:?}"
-        );
-        assert!(pre_env.contains("amd64"), "ARCH added unprefixed");
-        assert!(pre_env.contains("foo"), "plain USE kept");
+        assert!(on.contains("amd64"), "ARCH added unprefixed");
+        assert!(on.contains("foo"), "plain USE kept");
     }
 
     // A `-*` in a child profile's own `USE=` *does* clear an ancestor's
@@ -1244,15 +1165,15 @@ mod tests {
         let mut shell = repo.shell().await.unwrap();
         let resolved = stack.use_flags(&mut shell, &[]).await.unwrap();
 
-        let pre_env: Vec<&str> = resolved.pre_env.split_whitespace().collect();
+        let on: Vec<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
         assert!(
-            pre_env.contains(&"-*"),
-            "clear-all marker preserved for the per-package fold: {pre_env:?}"
+            resolved.defaults.contains(&UseToken::ClearAll),
+            "the clear-all reaches the per-package fold"
         );
-        assert!(pre_env.contains(&"build"));
+        assert!(on.contains(&"build"));
         assert!(
-            !pre_env.contains(&"elibc_glibc"),
-            "child's -* wipes the parent's ELIBC expansion too, matching real portage: {pre_env:?}"
+            !on.contains(&"elibc_glibc"),
+            "child's -* wipes the parent's ELIBC expansion too, matching real portage: {on:?}"
         );
     }
 
@@ -1280,14 +1201,14 @@ mod tests {
         let mut shell = repo.shell().await.unwrap();
         let resolved = stack.use_flags(&mut shell, &[]).await.unwrap();
 
-        let pre_env: HashSet<&str> = resolved.pre_env.split_whitespace().collect();
+        let on: HashSet<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
         assert!(
-            pre_env.contains("video_cards_dummy"),
-            "base's video_cards_dummy survives (union, not last-wins): {pre_env:?}"
+            on.contains("video_cards_dummy"),
+            "base's video_cards_dummy survives (union, not last-wins): {on:?}"
         );
         assert!(
-            pre_env.contains("video_cards_fbdev"),
-            "arch's video_cards_fbdev also present: {pre_env:?}"
+            on.contains("video_cards_fbdev"),
+            "arch's video_cards_fbdev also present: {on:?}"
         );
     }
 
@@ -1316,18 +1237,18 @@ mod tests {
         let mut shell = repo.shell().await.unwrap();
         let resolved = stack.use_flags(&mut shell, &[]).await.unwrap();
 
-        let pre_env: HashSet<&str> = resolved.pre_env.split_whitespace().collect();
+        let on: HashSet<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
         assert!(
-            !pre_env.contains("video_cards_dummy"),
-            "arch's -dummy cancels base's video_cards_dummy: {pre_env:?}"
+            !on.contains("video_cards_dummy"),
+            "arch's -dummy cancels base's video_cards_dummy: {on:?}"
         );
         assert!(
-            pre_env.contains("video_cards_fbdev"),
-            "base's fbdev, untouched by arch, survives: {pre_env:?}"
+            on.contains("video_cards_fbdev"),
+            "base's fbdev, untouched by arch, survives: {on:?}"
         );
         assert!(
-            pre_env.contains("video_cards_amdgpu"),
-            "arch's own addition present: {pre_env:?}"
+            on.contains("video_cards_amdgpu"),
+            "arch's own addition present: {on:?}"
         );
     }
 
@@ -1362,18 +1283,18 @@ mod tests {
             .await
             .unwrap();
 
-        let pre_env: HashSet<&str> = resolved.pre_env.split_whitespace().collect();
+        let on: HashSet<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
         assert!(
-            pre_env.contains("video_cards_amdgpu"),
-            "final make.conf value present: {pre_env:?}"
+            on.contains("video_cards_amdgpu"),
+            "final make.conf value present: {on:?}"
         );
         assert!(
-            !pre_env.contains("video_cards_dummy"),
-            "base profile's overwritten value must not survive: {pre_env:?}"
+            !on.contains("video_cards_dummy"),
+            "base profile's overwritten value must not survive: {on:?}"
         );
         assert!(
-            !pre_env.contains("video_cards_fbdev"),
-            "arch profile's overwritten value must not survive: {pre_env:?}"
+            !on.contains("video_cards_fbdev"),
+            "arch profile's overwritten value must not survive: {on:?}"
         );
     }
 
@@ -1404,16 +1325,16 @@ mod tests {
             .await
             .unwrap();
 
-        let pre_env: Vec<&str> = resolved.pre_env.split_whitespace().collect();
+        let on: Vec<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
         assert!(
-            !pre_env.contains(&"python_targets_python3_12"),
-            "profile-layer expansion cleared by make.conf's -*: {pre_env:?}"
+            !on.contains(&"python_targets_python3_12"),
+            "profile-layer expansion cleared by make.conf's -*: {on:?}"
         );
         assert!(
-            pre_env.contains(&"python_targets_python3_13"),
-            "make.conf's own expand value folded after its USE: {pre_env:?}"
+            on.contains(&"python_targets_python3_13"),
+            "make.conf's own expand value folded after its USE: {on:?}"
         );
-        assert!(pre_env.contains(&"build"));
+        assert!(on.contains(&"build"));
     }
 
     // make.conf assigning a USE_EXPAND-listed variable to the *empty
@@ -1443,20 +1364,13 @@ mod tests {
             .await
             .unwrap();
 
-        let pre_env: Vec<&str> = resolved.pre_env.split_whitespace().collect();
+        let on: Vec<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
         assert!(
-            !pre_env.contains(&"video_cards_dummy") && !pre_env.contains(&"video_cards_fbdev"),
-            "make.conf's explicit empty VIDEO_CARDS clears the whole group: {pre_env:?}"
+            !on.contains(&"video_cards_dummy") && !on.contains(&"video_cards_fbdev"),
+            "make.conf's explicit empty VIDEO_CARDS clears the whole group: {on:?}"
         );
     }
 
-    // `use_flags_with_override`'s whole point: a transient conf-layer
-    // override (`em stages --stage1`'s `USE="-* build ${BOOTSTRAP_USE}"`)
-    // must land in `pre_env`, not `env` — otherwise it behaves like a
-    // `std::env::set_var("USE", ...)` mutation (the pre-2026-07-12
-    // mechanism), which sits *above* `package.use` and wipes it. Folding it
-    // as one more conf file instead keeps `env` as the real,
-    // untouched process environment.
     // A group the profile set but the conf layer leaves alone is no assignment of that layer.
     #[tokio::test]
     async fn the_conf_layer_holds_only_what_it_assigned() {
@@ -1477,8 +1391,10 @@ mod tests {
         assert_eq!(resolved.conf, [UseToken::user("l10n_*").unwrap()]);
     }
 
+    // A transient conf-layer override (`em stages --stage1`'s `USE="-* build ${BOOTSTRAP_USE}"`)
+    // is one more conf file, not the environment: an env `-*` would wipe `package.use` too.
     #[tokio::test]
-    async fn use_flags_with_override_lands_in_pre_env_not_env_use() {
+    async fn use_flags_with_override_is_a_conf_layer() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_test_repo(&dir);
         let profile = make_profile(&dir, "test", &[]);
@@ -1491,24 +1407,22 @@ mod tests {
             .await
             .unwrap();
 
-        let pre_env: Vec<&str> = resolved.pre_env.split_whitespace().collect();
-        assert!(
-            pre_env.contains(&"-*") && pre_env.contains(&"build"),
-            "override folded into pre_env: {pre_env:?}"
-        );
-        assert!(
-            !pre_env.contains(&"unrelated"),
-            "the override's own -* clears the lower defaults layer: {pre_env:?}"
+        let on: Vec<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
+        assert_eq!(
+            on,
+            ["build"],
+            "the override's own -* clears the defaults below"
         );
         assert!(
             resolved.env.is_empty(),
             "the override must not leak into env (the real process env): {:?}",
             resolved.env
         );
-        let defaults: Vec<&str> = resolved.defaults_use.split_whitespace().collect();
         assert!(
-            defaults.contains(&"unrelated"),
-            "make.defaults stays in defaults_use: {defaults:?}"
+            resolved
+                .defaults
+                .contains(&UseToken::user("unrelated").unwrap()),
+            "make.defaults stays in defaults"
         );
         assert_eq!(
             resolved.conf,

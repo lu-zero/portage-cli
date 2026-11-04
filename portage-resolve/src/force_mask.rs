@@ -5,8 +5,8 @@
 //! applied after `pkg`/`env`) — this module is that final step for `em`, for
 //! both the global (`use.force`/`use.mask`) and **package-level**
 //! (`package.use.force`/`package.use.mask`) sets, plus all the **`*.stable.*`**
-//! variants. None of these are folded into `resolve_effective_use`'s `pre_env`/
-//! `package_use`/`env_use` layers; `effective()`/`apply()` here are what
+//! variants. None of these are folded into `resolve_effective_use`'s profile, conf,
+//! `package_use` or `env_use` layers; `effective()`/`apply()` here are what
 //! layers them onto a package's already-resolved USE.
 //!
 //! The `.stable.*` files only influence a package "merged due to a stable
@@ -546,7 +546,7 @@ mod tests {
     // (`use-config-duplicate-fallback-logic`): global `use.force` used to be
     // excluded from `effective()` on the assumption it was already baked into
     // the base config by `resolve_use_flags`. Since `resolve_effective_use`'s
-    // `pre_env` no longer carries it, `effective()` must apply it directly —
+    // layers do not carry it, `effective()` must apply it directly —
     // mirrors `global_use_mask_only_applies_to_packages_own_iuse` for force.
     #[test]
     fn global_use_force_only_applies_to_packages_own_iuse() {

@@ -178,6 +178,45 @@ impl<I: Interner> UseToken<I> {
     }
 }
 
+/// The flags `tokens` leave on with no package to fold for, in the order first enabled
+///
+/// Without IUSE a prefix glob has nothing to expand over, so it stays on as the flag `<prefix>*`,
+/// as in Portage's global USE (`emerge --info` shows `L10N="fr *"`).
+///
+/// ```
+/// use gentoo_core::UseToken;
+/// use gentoo_core::use_token::global_use;
+///
+/// let tokens = ["a", "l10n_fr", "-a", "l10n_*"].into_iter().filter_map(UseToken::user);
+/// let on: Vec<_> = global_use(tokens).iter().map(|f| f.as_str().to_owned()).collect();
+/// assert_eq!(on, ["l10n_fr", "l10n_*"]);
+/// ```
+pub fn global_use<I: Interner>(tokens: impl IntoIterator<Item = UseToken<I>>) -> Vec<Interned<I>> {
+    let mut on: Vec<Interned<I>> = Vec::new();
+    let add = |on: &mut Vec<Interned<I>>, flag: Interned<I>| {
+        if !on.contains(&flag) {
+            on.push(flag);
+        }
+    };
+    for tok in tokens {
+        match tok {
+            UseToken::Flag { flag, enable: true } => add(&mut on, flag),
+            UseToken::Flag {
+                flag,
+                enable: false,
+            } => on.retain(|f| *f != flag),
+            UseToken::ClearAll => on.clear(),
+            UseToken::ClearPrefix(prefix) => {
+                on.retain(|f| !f.as_str().starts_with(prefix.as_str()));
+            }
+            UseToken::ExpandPrefix(prefix) | UseToken::LiteralPrefix(prefix) => {
+                add(&mut on, Interned::intern(&format!("{}*", prefix.as_str())));
+            }
+        }
+    }
+    on
+}
+
 /// PMS USE flag name: `[A-Za-z0-9+_@-]`, starting alphanumeric
 fn is_flag_name(name: &str) -> bool {
     let mut bytes = name.bytes();

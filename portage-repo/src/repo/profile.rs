@@ -877,7 +877,6 @@ pub(crate) fn merge_flag_lists<'a>(iter: impl Iterator<Item = &'a str>) -> Vec<S
 ///
 /// Keeping the token round-trips correctly: feeding this output back as
 /// `prev` re-fires the same clear and keeps propagating the signal forward.
-/// The top-level consumer (`build::profile::collect_use_flags`) strips it.
 ///
 /// Twinned with `portage_solver::UseLayer::parse` (deliberately duplicated, not
 /// shared); a PMS fix here must land there too.

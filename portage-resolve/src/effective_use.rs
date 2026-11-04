@@ -217,8 +217,8 @@ pub(crate) fn pinned_package_use(
     )
 }
 
-/// The full effective USE fold for one `(pkg, ver)`: IUSE defaults, `pre_env`,
-/// `package_use`, `env_use`, then profile force/mask, then any
+/// The full effective USE fold for one `(pkg, ver)`: IUSE defaults, profile and conf
+/// layers, `package_use`, `env_use`, then profile force/mask, then any
 /// `--autosolve-use` ceded flags on top.
 ///
 /// Force/mask is applied post-fold (not as synthetic `package.use`) so a

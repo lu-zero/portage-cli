@@ -334,7 +334,7 @@ async fn compute_use_env(
 
     // Folded once, so every per-package `resolve_effective_use` shares the layers. Env stays a
     // layer of its own: its `-*` wipes package.use, a conf-level `-*` does not.
-    let defaults = profile_layer(&resolved.defaults_use, "make.defaults");
+    let defaults = UseLayer::new(resolved.defaults);
     let conf = UseLayer::new(resolved.conf);
     let env_use = UseLayer::new(resolved.env);
 
@@ -347,7 +347,7 @@ async fn compute_use_env(
             .map(|(dep, tokens)| (dep, user_package_use_tokens(&tokens, expand_keys)))
             .collect::<Vec<_>>()
     };
-    let mut defaults_by_path: HashMap<std::path::PathBuf, String> =
+    let mut defaults_by_path: HashMap<std::path::PathBuf, Vec<UseToken>> =
         resolved.profile_defaults.into_iter().collect();
     let mut profile_package_use: Vec<ProfileUseNode> = stack
         .profiles()
@@ -356,7 +356,7 @@ async fn compute_use_env(
             let md = p.path().join("make.defaults");
             let layer_defaults = defaults_by_path
                 .remove(&md)
-                .map(|s| profile_layer(&s, "make.defaults"))
+                .map(UseLayer::new)
                 .unwrap_or_else(UseLayer::empty);
             ProfileUseNode {
                 defaults: layer_defaults,
@@ -433,7 +433,7 @@ async fn compute_use_env(
 
     // Profile USE force/mask. Both global use.force/use.mask are applied per
     // package by `ForceMask::apply` (force_mask.rs) — global use.force isn't
-    // folded into `pre_env` (unlike the pre-2026-07-12 collapsed `config`),
+    // folded into the profile layers (unlike the pre-2026-07-12 collapsed `config`),
     // so it must be applied here alongside use.mask, not assumed already
     // baked into the base state. The package-level and *.stable.* sets are
     // also per package; they carry raw `-flag` tokens so unforce/unmask is
@@ -584,21 +584,6 @@ async fn load_package_env_use(portage_dir: &Utf8Path) -> Vec<(Dep, Vec<UseToken>
         }
     }
     out
-}
-
-/// A profile USE string as a layer; a token PMS does not allow there is dropped with a warning
-fn profile_layer(use_str: &str, file: &str) -> UseLayer {
-    UseLayer::new(
-        use_str
-            .split_whitespace()
-            .filter_map(|tok| match UseToken::profile(tok) {
-                Ok(tok) => Some(tok),
-                Err(e) => {
-                    tracing::warn!("profile {file}: {e}");
-                    None
-                }
-            }),
-    )
 }
 
 /// A profile `package.use`'s lines as tokens

@@ -1486,7 +1486,7 @@ impl Adapter<'_> {
         }
 
         // Flags the user pinned via package.use: folding it against an empty
-        // base (no IUSE defaults, no pre_env, no env_use) leaves exactly
+        // base (no IUSE defaults, no profile/conf layers, no env_use) leaves exactly
         // those flags set.
         let pins = crate::effective_use::pinned_package_use(&self.policy(), cpv, slot);
         let iuse_flags: std::collections::HashSet<Interned<DefaultInterner>> =
