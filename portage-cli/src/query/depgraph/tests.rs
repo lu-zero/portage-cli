@@ -575,6 +575,43 @@ fn a_use_expand_wildcard_enables_every_value_in_iuse() {
     );
 }
 
+// A wildcard token expands in place, so a later `-value` in any layer stays off; a make.conf
+// `L10N="*"` stays a literal that wins. Each row checked with emerge on sys-apps/man-pages.
+#[test]
+fn a_wildcard_token_expands_where_it_stands() {
+    let cases: [(&str, &str, &[&str]); 8] = [
+        ("", "app-misc/foo L10N: * -de\n", &["l10n_fr"]),
+        ("", "app-misc/foo L10N: -de *\n", &["l10n_de", "l10n_fr"]),
+        (
+            "",
+            "app-misc/foo L10N: *\napp-misc/foo L10N: -de\n",
+            &["l10n_fr"],
+        ),
+        (
+            "",
+            "app-misc/foo L10N: *\n=app-misc/foo-0 L10N: * -de\n",
+            &["l10n_de", "l10n_fr"],
+        ),
+        ("L10N=\"* -de\"\n", "", &["l10n_de", "l10n_fr"]),
+        ("USE=\"${USE} l10n_* -l10n_de\"\n", "", &["l10n_fr"]),
+        (
+            "USE=\"${USE} l10n_*\"\n",
+            "app-misc/foo -l10n_de\n",
+            &["l10n_fr"],
+        ),
+        ("USE=\"${USE} l10n_de l10n_* -l10n_de\"\n", "", &["l10n_fr"]),
+    ];
+    for (conf, package_use, want) in cases {
+        let fix = l10n_fixture(conf, package_use);
+        let foo = l10n_flags(&fix)
+            .into_iter()
+            .find(|(cpn, _)| cpn == "app-misc/foo")
+            .unwrap()
+            .1;
+        assert_eq!(foo, want, "make.conf {conf:?}, package.use {package_use:?}");
+    }
+}
+
 // `cat/pkg L10N: *` in package.use reaches only that package.
 #[test]
 fn a_package_use_wildcard_stays_with_its_package() {

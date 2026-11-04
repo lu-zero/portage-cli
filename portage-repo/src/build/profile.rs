@@ -391,12 +391,13 @@ pub struct ResolvedUse {
     /// group replace has to reach the ebuild's own `+`-defaulted IUSE, and
     /// that is only known per package, long after this string is flat — so
     /// the assigned names travel separately and become
-    /// `UseLayer::with_group_clears` on the `pre_env` layer.
-    pub conf_expand_assigned: Vec<String>,
+    /// `UseLayer::with_expand_assignments` on the conf layer. Each name carries whether its value
+    /// holds `*`, which Portage keeps as a literal that enables the whole group at the end.
+    pub conf_expand_assigned: Vec<(String, bool)>,
     /// As [`Self::conf_expand_assigned`], for the process-environment layer:
     /// the `USE_EXPAND` variables present in `std::env`. One layer higher, so
     /// its replace also wipes `package.use`.
-    pub env_expand_assigned: Vec<String>,
+    pub env_expand_assigned: Vec<(String, bool)>,
 }
 
 /// Resolve the effective USE flags for a profile stack without setting the
@@ -459,7 +460,7 @@ pub(super) async fn resolve_use_flags_observed(
     let profile_defaults: Vec<(std::path::PathBuf, String)> =
         layers.into_iter().map(|l| (l.path, l.use_tokens)).collect();
 
-    let mut conf_expand_assigned: Vec<String> = Vec::new();
+    let mut conf_expand_assigned: Vec<(String, bool)> = Vec::new();
     let mut conf_deltas: Vec<String> = Vec::new();
     for conf in extra_confs {
         let contrib = source_incremental(shell, *conf).await?;
@@ -485,12 +486,11 @@ pub(super) async fn resolve_use_flags_observed(
 
     // The environment layer's own explicit `USE_EXPAND` assignments — same
     // non-incremental group replace as a conf layer's, one layer higher.
-    let env_expand_assigned: Vec<String> = shell
+    let env_expand_assigned: Vec<(String, bool)> = shell
         .get_var("USE_EXPAND")
         .unwrap_or_default()
         .split_whitespace()
-        .filter(|k| env.get(k).is_some())
-        .map(str::to_string)
+        .filter_map(|k| Some((k.to_string(), has_wildcard(env.get(k)?))))
         .collect();
 
     // Snapshot the fold immediately before the environment layer — this is
@@ -541,12 +541,19 @@ pub(super) async fn resolve_use_flags_observed(
 
 /// Append `new` to `acc`, skipping names already recorded (a variable assigned
 /// by two conf layers still clears its group exactly once).
-fn merge_assigned(acc: &mut Vec<String>, new: Vec<String>) {
-    for k in new {
-        if !acc.contains(&k) {
-            acc.push(k);
+/// A later layer's assignment of the same variable replaces the earlier one's wildcard
+fn merge_assigned(acc: &mut Vec<(String, bool)>, new: Vec<(String, bool)>) {
+    for (k, wildcard) in new {
+        match acc.iter_mut().find(|(a, _)| *a == k) {
+            Some(slot) => slot.1 = wildcard,
+            None => acc.push((k, wildcard)),
         }
     }
+}
+
+/// Whether a `USE_EXPAND` variable's value holds the `*` wildcard
+fn has_wildcard(value: &str) -> bool {
+    value.split_whitespace().any(|v| v == "*")
 }
 
 /// Translate a single config layer's `USE_EXPAND` / `USE_EXPAND_UNPREFIXED`
@@ -712,7 +719,7 @@ pub enum ConfSource<'a> {
 
 /// One conf-layer's own incremental contribution (not merged with saved state).
 pub(super) struct IncrementalContribution {
-    expand_assigned: Vec<String>,
+    expand_assigned: Vec<(String, bool)>,
     use_delta: String,
 }
 
@@ -789,11 +796,11 @@ pub(super) async fn source_incremental(
     // USE before this layer's own combined delta is merged on top.
     let mut use_base = saved.get("USE").cloned().unwrap_or_default();
     let mut merged_expand: HashMap<String, String> = saved_expand;
-    let mut assigned_expand: Vec<String> = Vec::new();
+    let mut assigned_expand: Vec<(String, bool)> = Vec::new();
     for key in &expand_keys {
         if let Some(val) = shell.get_var(key) {
             use_base = strip_expand_tokens(&use_base, key);
-            assigned_expand.push(key.clone());
+            assigned_expand.push((key.clone(), has_wildcard(&val)));
             if val.is_empty() {
                 merged_expand.remove(key);
             } else {

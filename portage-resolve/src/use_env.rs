@@ -341,9 +341,10 @@ async fn compute_use_env(
     // own `+`-defaulted IUSE — `L10N="en-US"` in make.conf must beat
     // chromium-2.eclass's `IUSE="+l10n_${lang}"` for every bundled locale.
     let defaults = UseLayer::parse(&resolved.defaults_use);
-    let conf = UseLayer::parse(&resolved.conf_use).with_group_clears(resolved.conf_expand_assigned);
+    let conf =
+        UseLayer::parse(&resolved.conf_use).with_expand_assignments(resolved.conf_expand_assigned);
     let env_use =
-        UseLayer::parse(&resolved.env_use).with_group_clears(resolved.env_expand_assigned);
+        UseLayer::parse(&resolved.env_use).with_expand_assignments(resolved.env_expand_assigned);
 
     // Profile `package.use` is inside Portage's `defaults` layer, after that
     // node's make.defaults and below make.conf. Per-node so a child

@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, DepEntry, Version};
 use portage_atom_pubgrub::{
-    CededFlag, IUseDefault, PortagePackage, UseConfig, UseFlagState, UseOverride,
+    CededFlag, IUseDefault, PortagePackage, UseConfig, UseFlagState, UseLayer, UseOverride,
 };
 use portage_metadata::{CacheEntry, EbuildMetadata, IUseDefault as MetaIUseDefault};
 
@@ -74,6 +74,9 @@ pub(crate) fn enabled_iuse_defaults_from_metadata(
 
 /// Enable the package's IUSE values of each `USE_EXPAND` group whose `<group>_*` wildcard is
 /// still on after every layer, as Portage does; force/mask apply after this
+///
+/// A wildcard token expands in place, so the fold already holds any value set after it; the
+/// literal a make.conf/env `L10N="*"` leaves enables every value.
 fn expand_use_expand_wildcards(
     cfg: &mut UseConfig,
     policy: &ResolvePolicy,
@@ -91,16 +94,19 @@ fn expand_use_expand_wildcards(
                 .flat_map(|node| enabled_for(&node.package_use, &cpv.cpn)),
         )
         .filter(|flag| flag.as_str().ends_with("_*"));
-    let wildcards = layers
-        .flat_map(|layer| layer.wildcards().iter().copied())
-        .chain(package_use);
+    let wildcards = layers.flat_map(UseLayer::wildcards).chain(package_use);
     for wildcard in wildcards {
         if cfg.get_opt(wildcard) != Some(UseFlagState::Enabled) {
             continue;
         }
+        let literal = policy.conf.is_literal_wildcard(wildcard)
+            || policy.env_use.is_literal_wildcard(wildcard);
         let prefix = wildcard.as_str().trim_end_matches('*');
         for &flag in iuse {
-            if flag != wildcard && flag.as_str().starts_with(prefix) {
+            if flag != wildcard
+                && flag.as_str().starts_with(prefix)
+                && (literal || cfg.get_opt(flag).is_none())
+            {
                 cfg.enable(flag);
             }
         }

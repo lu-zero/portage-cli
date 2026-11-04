@@ -898,6 +898,11 @@ pub(crate) fn merge_flag_lists_signed<'a>(iter: impl Iterator<Item = &'a str>) -
                 Some(n) => (n.to_string(), false),
                 None => (token.to_string(), true),
             };
+            // A `<group>_*` wildcard expands in place, so the group's earlier tokens are spent.
+            if let Some(prefix) = name.strip_suffix('*').filter(|p| p.ends_with('_')) {
+                order.retain(|n| !n.starts_with(prefix));
+                state.retain(|n, _| !n.starts_with(prefix));
+            }
             if !state.contains_key(&name) {
                 order.push(name.clone());
             }
@@ -1169,6 +1174,14 @@ mod tests {
         // (to suppress a `+`-defaulted IUSE flag the user cleared).
         let out = merge_flag_lists_signed(["foo -bar", "-* build"].into_iter());
         assert_eq!(out, vec!["-*".to_string(), "build".to_string()]);
+    }
+
+    #[test]
+    fn merge_flag_lists_signed_wildcard_spends_the_group_s_earlier_tokens() {
+        let out = merge_flag_lists_signed(["l10n_de -l10n_fr x", "l10n_* -l10n_de"].into_iter());
+        assert_eq!(out, ["x", "l10n_*", "-l10n_de"]);
+        let out = merge_flag_lists_signed(["-l10n_de", "l10n_*"].into_iter());
+        assert_eq!(out, ["l10n_*"]);
     }
 
     #[test]

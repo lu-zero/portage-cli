@@ -497,6 +497,16 @@ for every bundled locale) keeps every flag on — which is exactly what real
 `L10N="en-GB"` plus `/etc/portage/package.use` `l10n_fr` → `en-GB fr`; env
 `L10N=de` on top of both → `de` alone.
 
+A `<group>_*` wildcard behaves in two ways, depending on where it comes from. As a USE token
+(`USE="l10n_*"`, package.use `L10N: *`, a make.defaults `L10N="*"`) it expands in place into the
+package's IUSE values. So `l10n_* -l10n_de` keeps `de` off, in the same layer or across layers,
+and `-l10n_de l10n_*` turns it back on. A make.conf or env `L10N="*"` stays a literal that enables
+the whole group at the end, past any later `-value`. Both fold steps (`merge_flag_lists_signed`,
+`UseLayer::parse`) drop a group's tokens that come before its wildcard. `resolve_effective_use`
+rewrites the lower layers' entries for the group. `expand_use_expand_wildcards` then enables only
+the values nothing set, or every value for a literal wildcard (`UseLayer::is_literal_wildcard`).
+Checked with emerge on sys-apps/man-pages in 15 combinations.
+
 Layers 2 (`profile package.use`) and 4 (`/etc/portage/package.use`) are applied
 **per package** at solve/display time. Layer 6 force/mask is applied as a true
 post-fold step by `force_mask.rs`
