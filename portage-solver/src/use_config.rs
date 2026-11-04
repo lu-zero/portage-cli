@@ -394,8 +394,6 @@ pub struct ProfileUseNode {
     pub defaults: UseLayer,
     /// This node's `package.use` lines.
     pub package_use: Vec<(Dep, Vec<UseOverride>)>,
-    /// A matching line in [`Self::package_use`] contained `-*`.
-    pub puse_clear_all: bool,
 }
 
 /// Whether `flag` is a `<group>_*` wildcard token
@@ -469,32 +467,12 @@ pub fn resolve_effective_use(
     }
 
     let conf_wipes_below = conf.has_clear_all;
-    let replay = !conf_wipes_below
-        && profile_package_use
-            .iter()
-            .any(|n| n.puse_clear_all && node_matches(n, cpv, slot));
-
     let mut overlay: HashMap<Interned<DefaultInterner>, UseFlagState> = HashMap::new();
-    let below: Option<&HashMap<_, _>> = if conf_wipes_below {
-        Some(&conf.frozen)
-    } else if replay {
-        None
-    } else {
-        Some(&defaults.frozen)
-    };
+    // The shared layer every package's overlay sits on.
+    let base_layer = if conf_wipes_below { conf } else { defaults };
+    let below = &*base_layer.frozen;
 
-    if replay {
-        apply_iuse(&mut overlay, iuse_defaults, defaults);
-        for node in profile_package_use {
-            apply_layer_delta(&mut overlay, &node.defaults);
-            if node_matches(node, cpv, slot) {
-                if node.puse_clear_all {
-                    overlay.clear();
-                }
-                apply_overrides(&mut overlay, None, &node.package_use, cpv, slot, |_| false);
-            }
-        }
-    } else if !conf_wipes_below {
+    if !conf_wipes_below {
         apply_iuse(&mut overlay, iuse_defaults, defaults);
         apply_profile_package_use(&mut overlay, below, profile_package_use, cpv, slot);
     }
@@ -506,24 +484,10 @@ pub fn resolve_effective_use(
 
     apply_overrides(&mut overlay, below, package_use, cpv, slot, |_| false);
 
-    apply_group_clears(
-        &mut overlay,
-        env_use,
-        if conf_wipes_below { conf } else { defaults },
-    );
+    apply_group_clears(&mut overlay, env_use, base_layer);
     apply_layer_tokens(&mut overlay, below, env_use);
 
-    let base = if conf_wipes_below {
-        if conf.frozen.is_empty() {
-            None
-        } else {
-            Some(Arc::clone(&conf.frozen))
-        }
-    } else if replay || defaults.frozen.is_empty() {
-        None
-    } else {
-        Some(Arc::clone(&defaults.frozen))
-    };
+    let base = (!below.is_empty()).then(|| Arc::clone(&base_layer.frozen));
 
     UseConfig { base, overlay }
 }
@@ -558,7 +522,7 @@ fn apply_iuse(
 
 fn apply_profile_package_use(
     overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    below: Option<&HashMap<Interned<DefaultInterner>, bool>>,
+    below: &HashMap<Interned<DefaultInterner>, bool>,
     nodes: &[ProfileUseNode],
     cpv: &Cpv,
     slot: Option<Interned<DefaultInterner>>,
@@ -580,7 +544,7 @@ fn apply_profile_package_use(
 
 fn apply_overrides(
     overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    below: Option<&HashMap<Interned<DefaultInterner>, bool>>,
+    below: &HashMap<Interned<DefaultInterner>, bool>,
     entries: &[(Dep, Vec<UseOverride>)],
     cpv: &Cpv,
     slot: Option<Interned<DefaultInterner>>,
@@ -605,21 +569,11 @@ fn apply_overrides(
     }
 }
 
-fn apply_layer_delta(
-    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    layer: &UseLayer,
-) {
-    if layer.has_clear_all {
-        overlay.clear();
-    }
-    apply_layer_tokens(overlay, None, layer);
-}
-
 /// Apply `layer` over `below` and `overlay`; its wildcards expand first, since its frozen fold
 /// holds no token of their group from before them
 fn apply_layer_tokens(
     overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    below: Option<&HashMap<Interned<DefaultInterner>, bool>>,
+    below: &HashMap<Interned<DefaultInterner>, bool>,
     layer: &UseLayer,
 ) {
     for &(wildcard, enable) in &layer.wildcards {
@@ -635,15 +589,14 @@ fn apply_layer_tokens(
 /// Values nothing set yet are left to [`resolve_effective_use`]'s caller, which knows IUSE.
 fn expand_wildcard(
     overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
-    below: Option<&HashMap<Interned<DefaultInterner>, bool>>,
+    below: &HashMap<Interned<DefaultInterner>, bool>,
     wildcard: Interned<DefaultInterner>,
     enable: bool,
     skip: &impl Fn(Interned<DefaultInterner>) -> bool,
 ) {
     let prefix = wildcard_prefix(&wildcard);
     let group: Vec<_> = below
-        .into_iter()
-        .flat_map(HashMap::keys)
+        .keys()
         .chain(overlay.keys())
         .filter(|f| f.as_str().starts_with(prefix) && !skip(**f))
         .copied()
@@ -785,7 +738,6 @@ mod tests {
         vec![ProfileUseNode {
             defaults: UseLayer::empty(),
             package_use: pkg_use(atom, overrides),
-            puse_clear_all: false,
         }]
     }
 
@@ -1152,12 +1104,10 @@ mod tests {
             ProfileUseNode {
                 defaults: layer("ssl"),
                 package_use: pkg_use("dev-libs/openssl", &["-ssl"]),
-                puse_clear_all: false,
             },
             ProfileUseNode {
                 defaults: layer("ssl"),
                 package_use: vec![],
-                puse_clear_all: false,
             },
         ];
         let cfg = resolve_effective_use(

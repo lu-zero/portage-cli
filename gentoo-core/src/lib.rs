@@ -34,9 +34,11 @@ pub mod interner {
     //! String interning for efficient string storage
     pub use gentoo_interner::*;
 }
+pub mod use_token;
 pub mod variant;
 
 pub use error::Error;
+pub use use_token::{InvalidUseToken, UseToken};
 
 pub use arch::KnownArch;
 
