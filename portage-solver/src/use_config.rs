@@ -177,38 +177,6 @@ impl UseFlagLookup for UseConfig {
     }
 }
 
-/// A parsed `package.use` override: a USE flag and whether it is turned on
-///
-/// Parsing (`+flag`/`flag` → on, `-flag` → off) and interning happen once at
-/// config-read time (via [`UseOverride::parse`]) so the per-version
-/// [`resolve_effective_use`] call does no string work. Cheap to copy (an
-/// interned `u32` plus a bool).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UseOverride {
-    /// The interned flag name, with any `+`/`-` prefix stripped
-    pub flag: Interned<DefaultInterner>,
-    /// `true` enables the flag, `false` disables it
-    pub enable: bool,
-}
-
-impl UseOverride {
-    /// Parse a single `package.use` token: `flag`/`+flag` enables, `-flag`
-    /// disables.
-    pub fn parse(token: &str) -> Self {
-        let name = token.strip_prefix('+').unwrap_or(token);
-        match name.strip_prefix('-') {
-            Some(rest) => Self {
-                flag: Interned::intern(rest),
-                enable: false,
-            },
-            None => Self {
-                flag: Interned::intern(name),
-                enable: true,
-            },
-        }
-    }
-}
-
 /// A prefix glob still standing after a layer or a whole fold
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glob {
@@ -346,7 +314,7 @@ pub struct ProfileUseNode {
     /// This node's translated `make.defaults` USE (empty if the file is absent).
     pub defaults: UseLayer,
     /// This node's `package.use` lines.
-    pub package_use: Vec<(Dep, Vec<UseOverride>)>,
+    pub package_use: Vec<(Dep, Vec<UseToken>)>,
 }
 
 /// Resolve a single package's effective USE
@@ -377,7 +345,7 @@ pub fn resolve_effective_use(
     defaults: &UseLayer,
     cpv: &Cpv,
     slot: Option<Flag>,
-    package_use: &[(Dep, Vec<UseOverride>)],
+    package_use: &[(Dep, Vec<UseToken>)],
     env_use: &UseLayer,
     profile_package_use: &[ProfileUseNode],
     conf: &UseLayer,
@@ -455,31 +423,29 @@ impl Fold<'_> {
         }
     }
 
-    /// `package.use` lines in order; `<prefix>_*` and `-<prefix>_*` act on the prefix
+    /// `package.use` lines in order; `skip` holds back a flag a later profile node restates
     fn overrides(
         &mut self,
-        entries: &[(Dep, Vec<UseOverride>)],
+        entries: &[(Dep, Vec<UseToken>)],
         cpv: &Cpv,
         slot: Option<Flag>,
         skip: impl Fn(Flag) -> bool,
     ) {
-        for (dep, overrides) in entries {
+        for (dep, tokens) in entries {
             if dep.cpn != cpv.cpn || !atom_matches_cpv(dep, cpv, slot) {
                 continue;
             }
-            for ov in overrides {
-                if skip(ov.flag) {
-                    continue;
-                }
-                let name = ov.flag.as_str();
-                match name.strip_suffix('*').filter(|p| p.ends_with('_')) {
-                    Some(prefix) if ov.enable => {
-                        self.expand(Interned::intern(prefix), Glob::Expand, &skip)
+            for &tok in tokens {
+                match tok {
+                    UseToken::Flag { flag, enable } => {
+                        if !skip(flag) {
+                            self.overlay.insert(flag, flag_state(enable));
+                        }
                     }
-                    Some(prefix) => self.clear(Interned::intern(prefix)),
-                    None => {
-                        self.overlay.insert(ov.flag, flag_state(ov.enable));
-                    }
+                    UseToken::ClearAll => self.clear_all(),
+                    UseToken::ClearPrefix(prefix) => self.clear(prefix),
+                    UseToken::ExpandPrefix(prefix) => self.expand(prefix, Glob::Expand, &skip),
+                    UseToken::LiteralPrefix(prefix) => self.expand(prefix, Glob::Literal, &skip),
                 }
             }
         }
@@ -496,6 +462,12 @@ impl Fold<'_> {
         for (&flag, &enable) in layer.frozen.iter() {
             self.overlay.insert(flag, flag_state(enable));
         }
+    }
+
+    /// `-*` in a `package.use` line: everything set so far is dropped
+    fn clear_all(&mut self) {
+        self.set_prefixed("", UseFlagState::Disabled, &|_| false);
+        self.globs.clear();
     }
 
     /// Drop every flag and glob with `prefix` set so far
@@ -600,20 +572,6 @@ mod tests {
         assert_eq!(config.get(f), UseFlagState::SolverDecided { prefer: false });
     }
 
-    #[test]
-    fn use_override_parse() {
-        let on = UseOverride::parse("ssl");
-        assert!(on.enable);
-        assert_eq!(on.flag, flag("ssl"));
-        // `+flag` enables like `flag`
-        assert_eq!(UseOverride::parse("+ssl"), on);
-        let off = UseOverride::parse("-ssl");
-        assert!(!off.enable);
-        assert_eq!(off.flag, flag("ssl"));
-        // `-` wins over a leading `+`
-        assert!(!UseOverride::parse("+-ssl").enable);
-    }
-
     fn cpv() -> Cpv {
         Cpv::parse("dev-libs/openssl-3.0.0").unwrap()
     }
@@ -624,10 +582,10 @@ mod tests {
         pairs.iter().map(|(f, d)| (flag(f), *d)).collect()
     }
 
-    fn pkg_use(atom: &str, overrides: &[&str]) -> Vec<(Dep, Vec<UseOverride>)> {
+    fn pkg_use(atom: &str, overrides: &[&str]) -> Vec<(Dep, Vec<UseToken>)> {
         vec![(
             Dep::parse(atom).unwrap(),
-            overrides.iter().map(|o| UseOverride::parse(o)).collect(),
+            overrides.iter().filter_map(|o| UseToken::user(o)).collect(),
         )]
     }
 
@@ -1004,6 +962,25 @@ mod tests {
 
     // Parent package.use disables; child make.defaults restates the flag
     // (already in the folded defaults base) → child wins.
+    // emerge: a `-*` in /etc/portage/package.use drops make.conf's flags for that package too.
+    #[test]
+    fn a_package_use_clear_all_drops_every_layer_below() {
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[("idef", IUseDefault::Enabled)]),
+            &layer("prof"),
+            &cpv(),
+            None,
+            &pkg_use("dev-libs/openssl", &["-*", "ssl"]),
+            &layer(""),
+            &[],
+            &layer("conf"),
+        );
+        for off in ["prof", "conf", "idef"] {
+            assert_eq!(cfg.get(flag(off)), UseFlagState::Disabled, "{off}");
+        }
+        assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
+    }
+
     #[test]
     fn child_make_defaults_beats_parent_package_use() {
         let nodes = vec![

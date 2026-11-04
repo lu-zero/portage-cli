@@ -1,5 +1,6 @@
 //! The plan half of a round: from a solution to the filtered, trimmed and ordered merge list
 
+use gentoo_core::UseToken;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -7,7 +8,7 @@ use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
     CededFlag, DepEdge, GraphStats, InstallOrderResult, InstalledPolicy, MergeRoot,
-    PortageDependencyProvider, PortagePackage, PortageVersionSet, UseOverride,
+    PortageDependencyProvider, PortagePackage, PortageVersionSet,
 };
 use portage_resolve::{bdepend_trim, depend_trim, repo, root_closure, subslot};
 
@@ -294,10 +295,10 @@ impl RoundCtx<'_> {
 
 /// `package.use` plus the values the solver chose for ceded `REQUIRED_USE` flags
 fn fold_ceded_use(
-    package_use: Vec<(Dep, Vec<UseOverride>)>,
+    package_use: Vec<(Dep, Vec<UseToken>)>,
     ceded: &[CededFlag],
     solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
-) -> Vec<(Dep, Vec<UseOverride>)> {
+) -> Vec<(Dep, Vec<UseToken>)> {
     if ceded.is_empty() {
         return package_use;
     }
@@ -317,7 +318,7 @@ fn fold_ceded_use(
         let Ok(dep) = Dep::parse(&atom) else { continue };
         let overrides = flags
             .iter()
-            .map(|c| UseOverride {
+            .map(|c| UseToken::Flag {
                 flag: c.flag,
                 enable: c.value,
             })

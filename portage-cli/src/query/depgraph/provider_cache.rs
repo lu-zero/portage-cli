@@ -1,14 +1,15 @@
 //! Solver providers kept across the solve rounds of one resolve
 
+use gentoo_core::UseToken;
 use std::cell::RefCell;
 use std::collections::HashSet;
 
 use portage_atom::{Cpn, Dep};
-use portage_atom_pubgrub::{PortageDependencyProvider, PortagePackage, UseOverride};
+use portage_atom_pubgrub::{PortageDependencyProvider, PortagePackage};
 
 /// What a provider was built from; two equal keys build the same provider
 pub(super) struct ProviderKey {
-    pub(super) package_use: Vec<(Dep, Vec<UseOverride>)>,
+    pub(super) package_use: Vec<(Dep, Vec<UseToken>)>,
     pub(super) autosolve_use: bool,
     pub(super) widened: bool,
     pub(super) seeds: HashSet<Cpn>,

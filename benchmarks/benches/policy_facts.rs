@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use gentoo_core::UseToken;
 use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Cpv, Dep};
-use portage_atom_pubgrub::{PackageRepository, UseOverride};
+use portage_atom_pubgrub::PackageRepository;
 use portage_metadata::CacheEntry;
 use portage_repo::AcceptSet;
 use portage_resolve::force_mask::{ForceMask, ForceMaskLayer, fold_signed};
@@ -85,7 +86,7 @@ impl BenchRepo {
 
     fn consume(
         &self,
-        package_use: &[(Dep, Vec<UseOverride>)],
+        package_use: &[(Dep, Vec<UseToken>)],
         facts: Option<PolicyFactsRef<'_>>,
     ) -> usize {
         self.consume_with_passes(package_use, facts, 1)
@@ -93,7 +94,7 @@ impl BenchRepo {
 
     fn consume_with_passes(
         &self,
-        package_use: &[(Dep, Vec<UseOverride>)],
+        package_use: &[(Dep, Vec<UseToken>)],
         facts: Option<PolicyFactsRef<'_>>,
         passes: usize,
     ) -> usize {
@@ -135,10 +136,10 @@ impl BenchRepo {
     }
 }
 
-fn package_use(flag: &str) -> Vec<(Dep, Vec<UseOverride>)> {
+fn package_use(flag: &str) -> Vec<(Dep, Vec<UseToken>)> {
     vec![(
         Dep::parse("bench/pkg0").unwrap(),
-        vec![UseOverride {
+        vec![UseToken::Flag {
             flag: Interned::intern(flag),
             enable: true,
         }],

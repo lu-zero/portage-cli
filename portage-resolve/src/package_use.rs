@@ -2,14 +2,13 @@
 //! requirements into concrete `package.use` lines, and the co-solve fixpoint
 //! that auto-applies them (emerge's autounmask-preview behaviour)
 
+use gentoo_core::UseToken;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use camino::Utf8Path;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Version};
-use portage_atom_pubgrub::{
-    DepEdge, PortagePackage, UseDemand, UseFlagRequirement, UseFlagState, UseOverride,
-};
+use portage_atom_pubgrub::{DepEdge, PortagePackage, UseDemand, UseFlagRequirement, UseFlagState};
 
 /// Entries to write into `/etc/portage/package.use`
 pub struct PackageUseEntry {
@@ -305,7 +304,7 @@ pub struct UseConflict {
 /// Result of [`cosolve_use_deps`]
 pub struct CosolveOutcome<T> {
     /// The caller's `package.use` plus the forced flags
-    pub package_use: Vec<(Dep, Vec<UseOverride>)>,
+    pub package_use: Vec<(Dep, Vec<UseToken>)>,
     /// The requirements that drove at least one forced flag
     pub applied: Vec<UseFlagRequirement>,
     /// Flags demanded both ways and settled by flipping parents
@@ -334,14 +333,14 @@ pub struct CosolveOutcome<T> {
 /// returned `package_use` then needs a fresh solve). A flag forced once is never re-forced, so the bound
 /// is a backstop.
 pub fn cosolve_use_deps<T, S, R, F>(
-    mut package_use: Vec<(Dep, Vec<UseOverride>)>,
+    mut package_use: Vec<(Dep, Vec<UseToken>)>,
     data: &crate::repo::RepoData,
     solve: S,
     reqs_of: R,
     fixed: F,
 ) -> CosolveOutcome<T>
 where
-    S: Fn(&[(Dep, Vec<UseOverride>)]) -> Option<T>,
+    S: Fn(&[(Dep, Vec<UseToken>)]) -> Option<T>,
     R: Fn(&T) -> Vec<UseFlagRequirement>,
     F: Fn(&PortagePackage, &Version, Interned<DefaultInterner>) -> Option<FlagPin>,
 {
@@ -351,7 +350,12 @@ where
     // explicit config.
     let pinned: HashSet<Key> = package_use
         .iter()
-        .flat_map(|(dep, overrides)| overrides.iter().map(|o| (dep.cpn, o.flag)))
+        .flat_map(|(dep, tokens)| {
+            tokens
+                .iter()
+                .filter_map(|t| t.as_flag())
+                .map(|(flag, _)| (dep.cpn, flag))
+        })
         .collect();
     let configured = package_use.len();
 
@@ -447,7 +451,7 @@ where
             decisions.insert(*key, decision);
         }
 
-        let mut new_by_cpn: HashMap<Cpn, Vec<UseOverride>> = HashMap::new();
+        let mut new_by_cpn: HashMap<Cpn, Vec<UseToken>> = HashMap::new();
         for req in reqs {
             let mut contributed = false;
             for (cpn, flag, enable) in req_targets(&req, data) {
@@ -469,7 +473,7 @@ where
                 new_by_cpn
                     .entry(cpn)
                     .or_default()
-                    .push(UseOverride { flag, enable });
+                    .push(UseToken::Flag { flag, enable });
             }
             if contributed {
                 applied_reqs.push(req);
@@ -570,13 +574,13 @@ fn settle(
 
 /// Drop any flag the co-solve forced for `key`, leaving the caller's first `configured` entries alone
 fn clear_override(
-    package_use: &mut Vec<(Dep, Vec<UseOverride>)>,
+    package_use: &mut Vec<(Dep, Vec<UseToken>)>,
     configured: usize,
     (cpn, flag): (Cpn, Interned<DefaultInterner>),
 ) {
     for (dep, overrides) in &mut package_use[configured..] {
         if dep.cpn == cpn {
-            overrides.retain(|o| o.flag != flag);
+            overrides.retain(|o| o.as_flag().is_none_or(|(f, _)| f != flag));
         }
     }
     let mut i = 0;
@@ -588,7 +592,7 @@ fn clear_override(
 
 /// Force `key` to `enable`, replacing an earlier forced value
 fn set_override(
-    package_use: &mut Vec<(Dep, Vec<UseOverride>)>,
+    package_use: &mut Vec<(Dep, Vec<UseToken>)>,
     configured: usize,
     applied: &mut HashMap<(Cpn, Interned<DefaultInterner>), bool>,
     key: (Cpn, Interned<DefaultInterner>),
@@ -599,7 +603,7 @@ fn set_override(
     if let Ok(dep) = Dep::parse(&key.0.to_string()) {
         package_use.push((
             dep,
-            vec![UseOverride {
+            vec![UseToken::Flag {
                 flag: key.1,
                 enable,
             }],

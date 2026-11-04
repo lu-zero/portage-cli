@@ -58,9 +58,10 @@ use std::io::Write;
 
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
+use gentoo_core::UseToken;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Operator, Pf, Version};
-use portage_atom_pubgrub::{DepClass, UseOverride};
+use portage_atom_pubgrub::DepClass;
 use portage_repo::{MakeConf, ProfileStack, ReposConf, Repository};
 use portage_resolve::repo::AcceptToken;
 use portage_resolve::use_env::{PendingConfig, PendingProfile, ProfileLayer};
@@ -429,7 +430,7 @@ struct RunStagedOpts<'a> {
     done_steps: usize,
     /// In-memory `package.use` for this staged run only. Native toolchain
     /// fills it; every other caller leaves it empty.
-    extra_package_use: &'a [(portage_atom::Dep, Vec<portage_atom_pubgrub::UseOverride>)],
+    extra_package_use: &'a [(portage_atom::Dep, Vec<gentoo_core::UseToken>)],
 }
 
 /// Run each step of a staged [`stages::StagePlan`] through [`crate::emerge_atoms`],
@@ -631,10 +632,13 @@ async fn native_prefix_guest(globals: &Cli, roots: &portage_resolve::Roots) -> b
 /// `su? ( pam )` pulls pambase then openrc. Prefix-guest baselayout already
 /// owns a stub `/sbin/openrc-run`. `-pam -su` stops that chain; a prefix
 /// does not need its own `su`.
-fn native_toolchain_package_use() -> Vec<(Dep, Vec<UseOverride>)> {
+fn native_toolchain_package_use() -> Vec<(Dep, Vec<UseToken>)> {
     vec![(
         Dep::parse("sys-apps/util-linux").expect("static atom"),
-        vec![UseOverride::parse("-pam"), UseOverride::parse("-su")],
+        ["-pam", "-su"]
+            .into_iter()
+            .filter_map(UseToken::user)
+            .collect(),
     )]
 }
 
@@ -1674,14 +1678,14 @@ impl DerivedProfile {
     }
 
     /// Its `package-use` as staged-run USE overrides, which stage1's `-*` does not reset
-    fn use_overrides(&self) -> Vec<(Dep, Vec<UseOverride>)> {
+    fn use_overrides(&self) -> Vec<(Dep, Vec<UseToken>)> {
         self.layer
             .package_use
             .iter()
             .map(|(dep, flags)| {
                 (
                     dep.clone(),
-                    flags.iter().map(|f| UseOverride::parse(f)).collect(),
+                    flags.iter().filter_map(|f| UseToken::user(f)).collect(),
                 )
             })
             .collect()
@@ -2498,13 +2502,7 @@ mod tests {
             panic!("{uses:?}")
         };
         assert_eq!(dep.to_string(), "llvm-runtimes/libunwind");
-        assert_eq!(
-            flags
-                .iter()
-                .map(|u| (u.flag.as_str(), u.enable))
-                .collect::<Vec<_>>(),
-            [("static-libs", true)]
-        );
+        assert_eq!(flags.as_slice(), UseToken::user("static-libs").as_slice());
     }
 
     #[test]
@@ -2646,12 +2644,11 @@ mod tests {
         let entries = native_toolchain_package_use();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0.cpn.to_string(), "sys-apps/util-linux");
-        let flags: Vec<(&str, bool)> = entries[0]
-            .1
-            .iter()
-            .map(|u| (u.flag.as_str(), u.enable))
+        let want: Vec<UseToken> = ["-pam", "-su"]
+            .into_iter()
+            .filter_map(UseToken::user)
             .collect();
-        assert_eq!(flags, [("pam", false), ("su", false)]);
+        assert_eq!(entries[0].1, want);
     }
 
     #[test]

@@ -6,7 +6,8 @@
 
 - `KnownArch::ALL`, every known architecture in declaration order.
 - `UseToken`: one operation of a USE configuration layer, with the PMS profile grammar
-  (`UseToken::profile`) and Portage's user grammar (`UseToken::user`, `UseToken::assignment`).
+  (`UseToken::profile`) and Portage's user grammar (`UseToken::user`, `UseToken::assignment`);
+  `UseToken::as_flag` reads a plain flag back.
 
 ## 0.6.1
 

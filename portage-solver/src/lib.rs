@@ -44,7 +44,7 @@ pub use solution::{
 };
 pub use solver::Solver;
 pub use use_config::{
-    Glob, ProfileUseNode, UseConfig, UseFlagState, UseLayer, UseOverride, atom_matches_cpv,
+    Glob, ProfileUseNode, UseConfig, UseFlagState, UseLayer, atom_matches_cpv,
     resolve_effective_use,
 };
 

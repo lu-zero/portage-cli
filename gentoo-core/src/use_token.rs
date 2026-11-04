@@ -63,6 +63,14 @@ pub enum InvalidUseToken {
 }
 
 impl<I: Interner> UseToken<I> {
+    /// The flag and whether it is turned on, for a [`UseToken::Flag`]
+    pub fn as_flag(&self) -> Option<(Interned<I>, bool)> {
+        match self {
+            Self::Flag { flag, enable } => Some((flag.clone(), *enable)),
+            _ => None,
+        }
+    }
+
     /// Parse a token of a profile file (`make.defaults` USE, `package.use`) per PMS
     ///
     /// ```

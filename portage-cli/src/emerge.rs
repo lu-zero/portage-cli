@@ -189,7 +189,7 @@ pub(crate) struct EmergeOpts<'a> {
     pub autounmask_widen: bool,
     /// In-memory `package.use` for this merge only — see
     /// [`query::depgraph::DepgraphOpts::extra_package_use`]
-    pub extra_package_use: &'a [(portage_atom::Dep, Vec<portage_atom_pubgrub::UseOverride>)],
+    pub extra_package_use: &'a [(portage_atom::Dep, Vec<gentoo_core::UseToken>)],
     /// Config pending `--init-target`'s writes, read in place of the files: staged crossdev
     /// `-p` or an unconfirmed `-a` on a never-initialized target. `None` for every normal
     /// emerge, and for a target that already exists.
@@ -214,7 +214,7 @@ struct ResolvedEmergeOpts<'a> {
     extra_aliases: &'a [portage_repo::RepoEntry],
     extra_path: &'a [camino::Utf8PathBuf],
     autounmask_widen: bool,
-    extra_package_use: &'a [(portage_atom::Dep, Vec<portage_atom_pubgrub::UseOverride>)],
+    extra_package_use: &'a [(portage_atom::Dep, Vec<gentoo_core::UseToken>)],
     pending_config: Option<&'a portage_resolve::use_env::PendingConfig>,
     /// Set once the merge's own activity bus exists; until then a failure is reported as
     /// [`crate::activity::ActivityEvent::PlanFailed`]

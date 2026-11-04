@@ -5,6 +5,7 @@
 ### Breaking changes
 
 - Depends on `portage-atom` 0.12 and `portage-solver` 0.4.
+- `UseOverride` is no longer re-exported; `package.use` lines are `gentoo_core::UseToken`s.
 - `PortageVersionSet::ranges` is removed.
 - `PackageRepository::kept_installed_use` and `WithKeptInstalledUse` are replaced by
   `PackageRepository::installed_for`, `InstalledVersion` and `WithInstalled`, which also carry the

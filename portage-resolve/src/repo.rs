@@ -1,3 +1,4 @@
+use gentoo_core::UseToken;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -7,7 +8,6 @@ use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
     DroppedDep, PackageDeps, PackageRepository, PackageVersions, RequiredUse, UseConfig,
-    UseOverride,
 };
 use portage_metadata::{CacheEntry, Keyword, LicenseExpr, RequiredUseExpr, Stability};
 
@@ -938,7 +938,7 @@ pub struct PolicyFactsCache {
 
 #[derive(Debug, Default)]
 struct PolicyFactsState {
-    current_package_use: Option<Vec<(Dep, Vec<UseOverride>)>>,
+    current_package_use: Option<Vec<(Dep, Vec<UseToken>)>>,
     current_generation: u64,
     facts: HashMap<(u64, Cpv), PolicyVersionFacts>,
 }
@@ -957,7 +957,7 @@ impl PolicyFactsCache {
     }
 
     /// Return the generation for `package_use`, advancing it only on change.
-    pub fn generation_for(&self, package_use: &[(Dep, Vec<UseOverride>)]) -> PolicyFactsRef<'_> {
+    pub fn generation_for(&self, package_use: &[(Dep, Vec<UseToken>)]) -> PolicyFactsRef<'_> {
         let mut state = self.lock();
         let generation = match &state.current_package_use {
             Some(current) if current.as_slice() == package_use => state.current_generation,
@@ -1193,7 +1193,7 @@ pub struct ResolvePolicy<'a> {
     pub env_use: &'a portage_atom_pubgrub::UseLayer,
     /// Per-version `package.use`/`package.env`-style overrides from
     /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf)
-    pub package_use: &'a [(Dep, Vec<UseOverride>)],
+    pub package_use: &'a [(Dep, Vec<UseToken>)],
     /// Per-profile-node `package.use` (Portage `setcpv` interleave)
     pub profile_package_use: &'a [portage_atom_pubgrub::ProfileUseNode],
     /// Profile USE force/mask policy — see [`Adapter::force_mask`]
@@ -1213,7 +1213,7 @@ impl<'a> ResolvePolicy<'a> {
     pub fn with_package_use(
         self,
         cache: &'a PolicyFactsCache,
-        package_use: &'a [(Dep, Vec<UseOverride>)],
+        package_use: &'a [(Dep, Vec<UseToken>)],
     ) -> Self {
         Self {
             package_use,
@@ -1252,7 +1252,7 @@ pub struct ResolvedPolicy {
     /// Process-environment USE layer
     pub env_use: portage_atom_pubgrub::UseLayer,
     /// Per-version `package.use`/`package.env`-style overrides
-    pub package_use: Vec<(Dep, Vec<UseOverride>)>,
+    pub package_use: Vec<(Dep, Vec<UseToken>)>,
     /// Per-profile-node `package.use`
     pub profile_package_use: Vec<portage_atom_pubgrub::ProfileUseNode>,
     /// Profile USE force/mask policy
@@ -1369,7 +1369,7 @@ pub struct Adapter<'a> {
     pub env_use: &'a portage_atom_pubgrub::UseLayer,
     /// Per-version `package.use`/`package.env`-style overrides from
     /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf)
-    pub package_use: &'a [(Dep, Vec<UseOverride>)],
+    pub package_use: &'a [(Dep, Vec<UseToken>)],
     /// Per-profile-node `package.use` (see [`ResolvePolicy::profile_package_use`])
     pub profile_package_use: &'a [portage_atom_pubgrub::ProfileUseNode],
     /// Profile USE force/mask policy: applied to each version's effective USE and
@@ -2863,7 +2863,7 @@ mod tests {
     #[test]
     fn policy_facts_generation_changes_only_with_package_use() {
         let cache = PolicyFactsCache::new();
-        let empty: Vec<(Dep, Vec<UseOverride>)> = Vec::new();
+        let empty: Vec<(Dep, Vec<UseToken>)> = Vec::new();
         let first = cache.generation_for(&empty);
         assert_eq!(first.generation(), 1);
         assert_eq!(
@@ -2873,7 +2873,7 @@ mod tests {
 
         let changed = vec![(
             dep("cat/pkg"),
-            vec![UseOverride {
+            vec![UseToken::Flag {
                 flag: Interned::intern("flag"),
                 enable: true,
             }],
@@ -2898,10 +2898,10 @@ mod tests {
         let restrict = AcceptRestrict::new(accept_all_licenses(), Vec::new());
         let force_mask = ForceMask::default();
         let cache = PolicyFactsCache::new();
-        let off: Vec<(Dep, Vec<UseOverride>)> = Vec::new();
+        let off: Vec<(Dep, Vec<UseToken>)> = Vec::new();
         let on = vec![(
             dep("cat/pkg"),
-            vec![UseOverride {
+            vec![UseToken::Flag {
                 flag: Interned::intern("licensed"),
                 enable: true,
             }],
@@ -3015,7 +3015,7 @@ mod tests {
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
         let defaults = portage_atom_pubgrub::UseLayer::parse("a b");
         let force_mask = ForceMask::default();
-        let package_use: Vec<(Dep, Vec<UseOverride>)> = Vec::new();
+        let package_use: Vec<(Dep, Vec<UseToken>)> = Vec::new();
         let cache = PolicyFactsCache::new();
         let facts = cache.generation_for(&package_use);
         let licenses = AcceptLicenses::new(accept_all_licenses(), Vec::new());

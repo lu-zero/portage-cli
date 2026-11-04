@@ -1,5 +1,6 @@
 //! The solve half of a round: provider construction, the USE co-solve fixpoint, and the widened retry
 
+use gentoo_core::UseToken;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -8,7 +9,7 @@ use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
     InstalledPackage as SolverInstalledPackage, InstalledPolicy, InstalledVersion, PackageDeps,
     PackageVersions, PortageDependencyProvider, PortagePackage, PortageVersionSet, SlotMap,
-    UseFlagRequirement, UseOverride,
+    UseFlagRequirement,
 };
 use portage_resolve::{effective_use, installed, repo};
 
@@ -30,7 +31,7 @@ pub(super) struct Solved {
     pub(super) provider: PortageDependencyProvider,
     pub(super) solution: Solution,
     /// `package.use` plus the flags the co-solve fixpoint forced
-    pub(super) package_use: Vec<(Dep, Vec<UseOverride>)>,
+    pub(super) package_use: Vec<(Dep, Vec<UseToken>)>,
     pub(super) applied_reqs: Vec<UseFlagRequirement>,
     pub(super) matched_flags: Vec<MatchedFlag>,
     pub(super) use_conflicts: Vec<UseConflict>,
@@ -232,7 +233,7 @@ impl RoundCtx<'_> {
         repairs: &Targets,
         widened: bool,
         autosolve_use: bool,
-        package_use: &[(Dep, Vec<UseOverride>)],
+        package_use: &[(Dep, Vec<UseToken>)],
         use_rebuilds: &UseRebuilds,
     ) -> (
         ProviderKey,
@@ -273,7 +274,7 @@ impl RoundCtx<'_> {
     fn build_provider(
         &self,
         seeds: Vec<Cpn>,
-        package_use: &[(Dep, Vec<UseOverride>)],
+        package_use: &[(Dep, Vec<UseToken>)],
         autosolve_use: bool,
         widened: bool,
         use_rebuilds: &UseRebuilds,
@@ -489,7 +490,7 @@ impl RoundCtx<'_> {
 /// everything under `--emptytree`.
 fn installed_versions(
     target_installed: &[installed::VdbEntry],
-    forced_use: &[(Dep, Vec<UseOverride>)],
+    forced_use: &[(Dep, Vec<UseToken>)],
     rebuilding: &HashSet<Cpv>,
     emptytree: bool,
     use_rebuild: impl Fn(&installed::VdbEntry, &PortagePackage) -> bool,

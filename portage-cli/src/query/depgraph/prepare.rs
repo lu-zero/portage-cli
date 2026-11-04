@@ -1,14 +1,13 @@
 //! Load and classify everything [`super::depgraph`] needs before it solves.
 
+use gentoo_core::UseToken;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Version};
-use portage_atom_pubgrub::{
-    MergeRoot, PortagePackage, PortageVersionSet, SlotMap, UseOverride, build_slot_map,
-};
+use portage_atom_pubgrub::{MergeRoot, PortagePackage, PortageVersionSet, SlotMap, build_slot_map};
 
 use portage_resolve::{conflicts, installed, repo, root_aware, use_env};
 
@@ -79,7 +78,7 @@ pub(super) struct Prepared<'a> {
     pub(super) widened_slot_map: Option<SlotMap>,
     pub(super) base_installed_cpvs: std::collections::HashSet<Cpv>,
     pub(super) root_pkgs: Vec<PortagePackage>,
-    pub(super) pristine_package_use: Vec<(Dep, Vec<UseOverride>)>,
+    pub(super) pristine_package_use: Vec<(Dep, Vec<UseToken>)>,
     pub(super) rebuilding_installed_cpvs: std::collections::HashSet<Cpv>,
 }
 

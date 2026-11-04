@@ -8,6 +8,8 @@
 - `MergeRoot::Base` for the toolchain sysroot; `MergeRoot::Target`'s discriminant changed.
 - `resolve_effective_use` takes eight parameters instead of six.
 - `Solver::add_sysroot_installed` is removed: no solver consulted it.
+- `UseOverride` is removed: `package.use` lines are `gentoo_core::UseToken`s, so a user line's `-*` and
+  `<prefix>_*` act as in Portage.
 
 ### Features
 

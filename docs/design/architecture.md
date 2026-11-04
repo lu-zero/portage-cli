@@ -505,6 +505,8 @@ values, then `USE`, then each `USE_EXPAND` variable assigned.
 
 - A `<prefix>_*` token (USE=, user package.use, `L10N: *`) expands in place over IUSE, so a
   later `-l10n_de` in any layer keeps `de` off. Only a trailing `_*` is a glob: `l10n_pt*` is not.
+- In a user `package.use` line, `-*` drops every layer below for that package, and `KEY: -*`
+  drops the group (`ClearPrefix`).
 - A make.conf or env `USE_EXPAND` variable replaces its group (`ClearPrefix`), including the
   layer's own earlier USE tokens. `-value` and `+value` are ignored with a warning, and `*` stays a
   literal that enables every IUSE value at the end (`LiteralPrefix`).

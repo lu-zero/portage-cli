@@ -4,8 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use camino::{Utf8Path, Utf8PathBuf};
 use gentoo_core::UseToken;
 use portage_atom::Dep;
-use portage_atom::interner::Interned;
-use portage_atom_pubgrub::{ProfileUseNode, UseLayer, UseOverride};
+use portage_atom_pubgrub::{ProfileUseNode, UseLayer};
 use portage_repo::{
     AcceptSet, Environment, LicenseGroupRegistry, MakeConf, ProfileStack, Repository, Settings,
     SettingsSources,
@@ -36,7 +35,7 @@ pub struct UseEnv {
     pub expand_hidden: Vec<String>,
     /// Per-package USE overrides from `/etc/portage/package.use` and
     /// `package.env` — portage's `pkg` layer, above `conf`/make.conf
-    pub package_use: Vec<(Dep, Vec<UseOverride>)>,
+    pub package_use: Vec<(Dep, Vec<UseToken>)>,
     /// Per-profile-node `package.use` plus that node's make.defaults flags
     ///
     /// Parent first — Portage `setcpv` interleave inside `defaults`.
@@ -343,15 +342,9 @@ async fn compute_use_env(
     // node's make.defaults and below make.conf. Per-node so a child
     // make.defaults can restate a flag a parent package.use turned off.
     let expand_keys = &expand;
-    let expand_values = |key: &str| split_var(key);
     let expand_flags = |raw: Vec<(Dep, Vec<String>)>| {
         raw.into_iter()
-            .map(|(dep, flags)| {
-                (
-                    dep,
-                    expand_use_expand_colon(&flags, expand_keys, &expand_values),
-                )
-            })
+            .map(|(dep, tokens)| (dep, user_package_use_tokens(&tokens, expand_keys)))
             .collect::<Vec<_>>()
     };
     let mut defaults_by_path: HashMap<std::path::PathBuf, String> =
@@ -386,7 +379,7 @@ async fn compute_use_env(
     if let Some(overlay) = config_overlay {
         raw_package_use.extend(load_package_use(overlay.join("package.use").as_str()));
     }
-    let mut package_use: Vec<(Dep, Vec<UseOverride>)> = expand_flags(raw_package_use);
+    let mut package_use: Vec<(Dep, Vec<UseToken>)> = expand_flags(raw_package_use);
 
     // `/etc/portage/package.env`'s own USE contribution, folded in as more
     // package_use-style overrides (same `Dep`-keyed shape, matched the same
@@ -532,7 +525,7 @@ fn effective_accept_keywords(
 /// order).
 ///
 /// Tokens stay verbatim — USE_EXPAND `KEY:` groups are expanded later by
-/// [`expand_use_expand_colon`].
+/// [`user_package_use_tokens`].
 fn load_package_use(path: &str) -> Vec<(Dep, Vec<String>)> {
     let mut result = Vec::new();
     for line in portage_repo::read_config_lines(path).unwrap_or_default() {
@@ -556,7 +549,7 @@ fn load_package_use(path: &str) -> Vec<(Dep, Vec<String>)> {
 /// each on top of the last, seeded empty) via a real shell via
 /// [`MakeConf::apply_to`] — so `USE="${USE} -flag"` self-reference
 /// evaluates correctly — and take the resulting tokens as this atom's
-/// override list, [`UseOverride::parse`]d like a `package.use` line
+/// override list, parsed like a `package.use` line
 ///
 /// Seeded empty (not the profile's USE) because this collects *this atom's
 /// own* contribution, independent of any candidate's baseline — that folds
@@ -564,7 +557,7 @@ fn load_package_use(path: &str) -> Vec<(Dep, Vec<String>)> {
 /// variable unset here expands empty rather than the real build env's
 /// value — same approximation `binpkg::DesiredBuildEnv::key_for` makes,
 /// never worse than "resolver ignores package.env USE" today.
-async fn load_package_env_use(portage_dir: &Utf8Path) -> Vec<(Dep, Vec<UseOverride>)> {
+async fn load_package_env_use(portage_dir: &Utf8Path) -> Vec<(Dep, Vec<UseToken>)> {
     let entries =
         portage_repo::package_env::load_package_env(portage_dir.join("package.env").as_std_path());
     let env_dir = portage_dir.join("env");
@@ -577,9 +570,14 @@ async fn load_package_env_use(portage_dir: &Utf8Path) -> Vec<(Dep, Vec<UseOverri
                 let _ = mc.apply_to(&mut env).await;
             }
         }
-        let tokens: Vec<UseOverride> = env
+        let tokens: Vec<UseToken> = env
             .get("USE")
-            .map(|use_str| use_str.split_whitespace().map(UseOverride::parse).collect())
+            .map(|use_str| {
+                use_str
+                    .split_whitespace()
+                    .filter_map(UseToken::user)
+                    .collect()
+            })
             .unwrap_or_default();
         if !tokens.is_empty() {
             out.push((dep, tokens));
@@ -603,32 +601,20 @@ fn profile_layer(use_str: &str, file: &str) -> UseLayer {
     )
 }
 
-/// A profile `package.use`'s lines as overrides
+/// A profile `package.use`'s lines as tokens
 ///
 /// PMS allows only flag names and `-flag` there: a wildcard or `-*` is dropped with a warning,
 /// as Portage does. `KEY:` groups expand as in the user file.
 fn profile_package_use_lines(
     raw: Vec<(Dep, Vec<String>)>,
     use_expand: &[String],
-) -> Vec<(Dep, Vec<UseOverride>)> {
+) -> Vec<(Dep, Vec<UseToken>)> {
     raw.into_iter()
         .map(|(dep, tokens)| {
-            let mut prefix: Option<String> = None;
             let mut flags = Vec::with_capacity(tokens.len());
-            for tok in &tokens {
-                if let Some(key) = tok.strip_suffix(':')
-                    && use_expand.iter().any(|k| k == key)
-                {
-                    prefix = Some(format!("{}_", key.to_lowercase()));
-                    continue;
-                }
-                let full = match (&prefix, tok.strip_prefix('-')) {
-                    (Some(p), Some(value)) => Cow::Owned(format!("-{p}{value}")),
-                    (Some(p), None) => Cow::Owned(format!("{p}{tok}")),
-                    (None, _) => Cow::Borrowed(tok.as_str()),
-                };
-                match UseToken::profile(&full) {
-                    Ok(UseToken::Flag { flag, enable }) => flags.push(UseOverride { flag, enable }),
+            for tok in group_prefixed(&tokens, use_expand) {
+                match UseToken::profile(&tok) {
+                    Ok(tok @ UseToken::Flag { .. }) => flags.push(tok),
                     Ok(_) => {
                         tracing::warn!("profile package.use: `-*` for {dep} is not valid there")
                     }
@@ -640,56 +626,37 @@ fn profile_package_use_lines(
         .collect()
 }
 
-/// Expand the `USE_EXPAND:` colon form in `package.use` tokens to interned overrides
+/// A user `package.use` line's tokens, after the atom
 ///
-/// A USE_EXPAND name followed by `:` makes every subsequent value a member
-/// of that group, e.g. `cat/pkg L10N: de en` ⇒ `l10n_de l10n_en`. A bare
-/// `-*` inside a group clears its live values before the trailing values
-/// rebuild it (`PYTHON_TARGETS: -* python2_7` ⇒ only
-/// `python_targets_python2_7`).
+/// Portage's user grammar: `-*` drops everything below, `<prefix>_*` globs, and `KEY: -*` drops
+/// the group (`PYTHON_TARGETS: -* python3_14` pins one implementation).
+fn user_package_use_tokens(tokens: &[String], use_expand: &[String]) -> Vec<UseToken> {
+    group_prefixed(tokens, use_expand)
+        .filter_map(|tok| UseToken::user(&tok))
+        .collect()
+}
+
+/// `package.use` tokens with each `KEY:` group's prefix applied (`L10N: -de` ⇒ `-l10n_de`)
 ///
-/// Only keys present in `use_expand` start a group; any other token — including
-/// one that merely ends in `:` — is parsed as an ordinary flag, so plain flags
-/// and a bare `-*` keep working.
-fn expand_use_expand_colon(
-    tokens: &[String],
-    use_expand: &[String],
-    expand_values: &dyn Fn(&str) -> Vec<String>,
-) -> Vec<UseOverride> {
-    let mut out: Vec<UseOverride> = Vec::with_capacity(tokens.len());
-    let mut group: Option<&str> = None;
-    for tok in tokens {
+/// Only keys in `use_expand` start a group; any other token, even one ending in `:`, stays as is.
+fn group_prefixed<'t>(
+    tokens: &'t [String],
+    use_expand: &'t [String],
+) -> impl Iterator<Item = Cow<'t, str>> + 't {
+    let mut prefix: Option<String> = None;
+    tokens.iter().filter_map(move |tok| {
         if let Some(key) = tok.strip_suffix(':')
             && use_expand.iter().any(|k| k == key)
         {
-            group = Some(key);
-            continue;
+            prefix = Some(format!("{}_", key.to_lowercase()));
+            return None;
         }
-        let Some(key) = group else {
-            out.push(UseOverride::parse(tok));
-            continue;
-        };
-        let prefix = key.to_lowercase();
-        if tok == "-*" {
-            // Clear the group's live values; the tokens after rebuild it.
-            for v in expand_values(key) {
-                out.push(UseOverride {
-                    flag: Interned::intern(&format!("{prefix}_{v}")),
-                    enable: false,
-                });
-            }
-        } else {
-            let (enable, val) = match tok.strip_prefix('-') {
-                Some(v) => (false, v),
-                None => (true, tok.as_str()),
-            };
-            out.push(UseOverride {
-                flag: Interned::intern(&format!("{prefix}_{val}")),
-                enable,
-            });
-        }
-    }
-    out
+        Some(match (&prefix, tok.strip_prefix('-')) {
+            (Some(p), Some(value)) => Cow::Owned(format!("-{p}{value}")),
+            (Some(p), None) => Cow::Owned(format!("{p}{tok}")),
+            (None, _) => Cow::Borrowed(tok.as_str()),
+        })
+    })
 }
 
 /// Load `package.accept_keywords` / `package.keywords`
@@ -756,11 +723,11 @@ fn load_dep_list(path: &str) -> Vec<Dep> {
 mod tests {
     use super::{
         AcceptToken, PendingConfig, PendingProfile, ProfileLayer, build_use_env,
-        expand_use_expand_colon, load_package_env_use, load_package_keywords, load_package_use,
-        profile_package_use_lines,
+        load_package_env_use, load_package_keywords, load_package_use, profile_package_use_lines,
+        user_package_use_tokens,
     };
+    use gentoo_core::UseToken;
     use portage_atom::Dep;
-    use portage_atom_pubgrub::UseOverride;
 
     fn make_test_repo(dir: &std::path::Path) -> portage_repo::Repository {
         std::fs::create_dir_all(dir.join("metadata")).unwrap();
@@ -919,8 +886,8 @@ mod tests {
     }
 
     // Expected override shorthand
-    fn ov(s: &str) -> UseOverride {
-        UseOverride::parse(s)
+    fn ov(s: &str) -> UseToken {
+        UseToken::user(s).unwrap()
     }
 
     // emerge rejects `*` and `-*` in a profile package.use ("Invalid USE flag") and keeps the rest.
@@ -993,87 +960,41 @@ mod tests {
         assert!(out.is_empty());
     }
 
+    fn user_line(tokens: &[&str], keys: &[&str]) -> Vec<UseToken> {
+        let tokens: Vec<String> = tokens.iter().map(|t| t.to_string()).collect();
+        let keys: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+        user_package_use_tokens(&tokens, &keys)
+    }
+
     #[test]
-    fn colon_form_expands_values() {
-        // `cat/pkg L10N: de en` ⇒ l10n_de l10n_en; a plain flag is untouched.
-        let keys = ["L10N".to_string()];
-        let none = |_: &str| Vec::new();
-        let out = expand_use_expand_colon(
-            &["foo".into(), "L10N:".into(), "de".into(), "en".into()],
-            &keys,
-            &none,
+    fn colon_form_prefixes_each_value_of_its_group() {
+        assert_eq!(
+            user_line(&["foo", "L10N:", "de", "-en"], &["L10N"]),
+            [ov("foo"), ov("l10n_de"), ov("-l10n_en")]
         );
-        assert_eq!(out, vec![ov("foo"), ov("l10n_de"), ov("l10n_en")]);
-    }
-
-    #[test]
-    fn colon_form_negates_value() {
-        let keys = ["L10N".to_string()];
-        let none = |_: &str| Vec::new();
-        let out = expand_use_expand_colon(&["L10N:".into(), "-de".into()], &keys, &none);
-        assert_eq!(out, vec![ov("-l10n_de")]);
-    }
-
-    #[test]
-    fn colon_form_dash_star_clears_group_defaults() {
-        // `PYTHON_TARGETS: -* python2_7` clears the live defaults (python3_13)
-        // then adds python2_7 — the documented "pin a single impl" pattern.
-        let keys = ["PYTHON_TARGETS".to_string()];
-        let defaults = |k: &str| {
-            if k == "PYTHON_TARGETS" {
-                vec!["python3_13".to_string()]
-            } else {
-                Default::default()
-            }
-        };
-        let out = expand_use_expand_colon(
-            &["PYTHON_TARGETS:".into(), "-*".into(), "python2_7".into()],
-            &keys,
-            &defaults,
+        // A new `KEY:` switches the group; an unknown one is a plain token.
+        assert_eq!(
+            user_line(
+                &["L10N:", "de", "PYTHON_TARGETS:", "python3_13"],
+                &["L10N", "PYTHON_TARGETS"]
+            ),
+            [ov("l10n_de"), ov("python_targets_python3_13")]
         );
         assert_eq!(
-            out,
-            vec![
-                ov("-python_targets_python3_13"),
-                ov("python_targets_python2_7")
-            ]
+            user_line(&["WEIRD:", "x"], &["L10N"]),
+            [ov("WEIRD:"), ov("x")]
         );
     }
 
+    // emerge: `L10N: -*` and `L10N: *` act on the group, a bare `-*` on everything below.
     #[test]
-    fn colon_form_switches_group_mid_line() {
-        // A new `KEY:` switches the active group; both groups expand.
-        let keys = ["L10N".to_string(), "PYTHON_TARGETS".to_string()];
-        let none = |_: &str| Vec::new();
-        let out = expand_use_expand_colon(
-            &[
-                "L10N:".into(),
-                "de".into(),
-                "PYTHON_TARGETS:".into(),
-                "python3_13".into(),
-            ],
-            &keys,
-            &none,
+    fn colon_form_stars_act_on_the_group() {
+        assert_eq!(
+            user_line(&["PYTHON_TARGETS:", "-*", "python2_7"], &["PYTHON_TARGETS"]),
+            [ov("-python_targets_*"), ov("python_targets_python2_7")]
         );
-        assert_eq!(out, vec![ov("l10n_de"), ov("python_targets_python3_13")]);
-    }
-
-    #[test]
-    fn colon_form_ignores_unknown_key() {
-        // A `:` suffix on something that isn't a USE_EXPAND key is parsed as a
-        // plain flag (left intact, interned verbatim).
-        let keys = ["L10N".to_string()];
-        let none = |_: &str| Vec::new();
-        let out = expand_use_expand_colon(&["WEIRD:".into(), "x".into()], &keys, &none);
-        assert_eq!(out, vec![ov("WEIRD:"), ov("x")]);
-    }
-
-    #[test]
-    fn colon_form_passes_through_plain_flags() {
-        let keys = ["L10N".to_string()];
-        let none = |_: &str| Vec::new();
-        let out = expand_use_expand_colon(&["nls".into(), "-debug".into()], &keys, &none);
-        assert_eq!(out, vec![ov("nls"), ov("-debug")]);
+        assert_eq!(user_line(&["L10N:", "*"], &["L10N"]), [ov("l10n_*")]);
+        assert_eq!(user_line(&["-*", "nls"], &["L10N"]), [ov("-*"), ov("nls")]);
     }
 
     // PMS 5.2.4 dir-form: a `/etc/portage/package.use` *directory*'s regular files are concatenated in filename order — and, matching real portage's `_recursive_basename_filter`, dotfiles and `~` editor backups are skipped

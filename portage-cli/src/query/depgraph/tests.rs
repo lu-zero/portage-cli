@@ -186,7 +186,7 @@ fn solve(fix: &Fix, opts: Solve<'_>) -> super::DepgraphOutcome {
 fn try_solve(fix: &Fix, opts: Solve<'_>) -> anyhow::Result<super::DepgraphOutcome> {
     let arch = Arch::intern("amd64");
     let world: &[Dep] = &[];
-    let extra: &[(Dep, Vec<portage_atom_pubgrub::UseOverride>)] = &[];
+    let extra: &[(Dep, Vec<gentoo_core::UseToken>)] = &[];
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -579,7 +579,8 @@ fn a_use_expand_wildcard_enables_every_value_in_iuse() {
 // `L10N="*"` stays a literal that wins. Each row checked with emerge on sys-apps/man-pages.
 #[test]
 fn a_wildcard_token_expands_where_it_stands() {
-    let cases: [(&str, &str, &[&str]); 8] = [
+    let cases: [(&str, &str, &[&str]); 9] = [
+        ("L10N=\"fr\"\n", "app-misc/foo -* l10n_de\n", &["l10n_de"]),
         ("", "app-misc/foo L10N: * -de\n", &["l10n_fr"]),
         ("", "app-misc/foo L10N: -de *\n", &["l10n_de", "l10n_fr"]),
         (
@@ -923,7 +924,7 @@ fn a_missing_explicit_atom_is_fatal() {
     let atoms = [TargetAtom::explicit("app-misc/missing")];
     let arch = Arch::intern("amd64");
     let world: &[Dep] = &[];
-    let extra: &[(Dep, Vec<portage_atom_pubgrub::UseOverride>)] = &[];
+    let extra: &[(Dep, Vec<gentoo_core::UseToken>)] = &[];
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

@@ -18,10 +18,9 @@
 #![cfg(test)]
 
 use gentoo_core::Arch;
+use gentoo_core::UseToken;
 use portage_atom::{Cpv, Dep};
-use portage_atom_pubgrub::{
-    PortageDependencyProvider, PortageVersionSet, UseFlagRequirement, UseOverride,
-};
+use portage_atom_pubgrub::{PortageDependencyProvider, PortageVersionSet, UseFlagRequirement};
 use portage_metadata::CacheEntry;
 use std::collections::HashMap;
 
@@ -89,11 +88,7 @@ impl Outcome {
 /// Solve `targets` against `data` with the given `package_use`
 ///
 /// Returns `None` for an unsatisfiable problem.
-fn solve_with(
-    data: &RepoData,
-    targets: &[&str],
-    pu: &[(Dep, Vec<UseOverride>)],
-) -> Option<Outcome> {
+fn solve_with(data: &RepoData, targets: &[&str], pu: &[(Dep, Vec<UseToken>)]) -> Option<Outcome> {
     let arch = Arch::intern("amd64");
     let accept = AcceptKeywords::from_global(&arch, &["amd64"]);
     let lic = AcceptOverlay::new(
@@ -158,7 +153,7 @@ fn solve_with(
 }
 
 /// A policy accepting every `amd64` package, configured by `pu` alone
-fn plain_policy(pu: &'static [(Dep, Vec<UseOverride>)]) -> ResolvePolicy<'static> {
+fn plain_policy(pu: &'static [(Dep, Vec<UseToken>)]) -> ResolvePolicy<'static> {
     let arch = Arch::intern("amd64");
     let lic: &'static AcceptOverlay = Box::leak(Box::new(AcceptOverlay::new(
         AcceptSet::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),
@@ -188,7 +183,7 @@ fn solve(data: &RepoData, targets: &[&str]) -> Outcome {
 
 /// Run the C7 co-solve fixpoint (as `depgraph` does under `--autosolve-use`):
 /// returns the augmented `package_use` and the final outcome
-fn cosolve(data: &RepoData, targets: &[&str]) -> (Vec<(Dep, Vec<UseOverride>)>, Outcome) {
+fn cosolve(data: &RepoData, targets: &[&str]) -> (Vec<(Dep, Vec<UseToken>)>, Outcome) {
     let crate::package_use::CosolveOutcome {
         package_use: pu,
         solved,
@@ -206,10 +201,10 @@ fn cosolve(data: &RepoData, targets: &[&str]) -> (Vec<(Dep, Vec<UseOverride>)>, 
 }
 
 /// Whether `pu` forces `token` (e.g. `bar` / `-bar`) on `cpn`
-fn pu_forces(pu: &[(Dep, Vec<UseOverride>)], cpn: &str, token: &str) -> bool {
-    let want = UseOverride::parse(token);
+fn pu_forces(pu: &[(Dep, Vec<UseToken>)], cpn: &str, token: &str) -> bool {
+    let want = UseToken::user(token);
     pu.iter()
-        .any(|(d, flags)| d.to_string() == cpn && flags.contains(&want))
+        .any(|(d, flags)| d.to_string() == cpn && flags.iter().any(|f| Some(*f) == want))
 }
 
 // md5-cache helpers ---------------------------------------------------------
@@ -398,7 +393,7 @@ fn cc7_flag_absent_from_target_iuse() {
 fn cosolve_from(
     data: &RepoData,
     targets: &[&str],
-    package_use: Vec<(Dep, Vec<UseOverride>)>,
+    package_use: Vec<(Dep, Vec<UseToken>)>,
 ) -> (
     crate::package_use::CosolveOutcome<Outcome>,
     Vec<UseFlagRequirement>,
@@ -481,7 +476,7 @@ fn a_mirror_parent_held_by_package_use_is_a_conflict() {
     let data = plain_against_mirror();
     let held = vec![(
         Dep::parse("app/mirror").unwrap(),
-        vec![UseOverride::parse("-bar")],
+        UseToken::user("-bar").into_iter().collect(),
     )];
     let (out, _) = cosolve_from(&data, &["app/plain", "app/mirror"], held);
     assert!(out.matched.is_empty());

@@ -3,13 +3,14 @@
 mod plan;
 mod solve;
 
+use gentoo_core::UseToken;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
     CededFlag, DepEdge, MergeRoot, PortageDependencyProvider, PortagePackage, PortageVersionSet,
-    SlotMap, UseFlagRequirement, UseOverride,
+    SlotMap, UseFlagRequirement,
 };
 use portage_resolve::{conflicts, installed, repo, root_aware};
 
@@ -40,7 +41,7 @@ pub(super) struct RoundCtx<'a> {
     pub(super) slot_map: &'a SlotMap,
     pub(super) widened_slot_map: &'a Option<SlotMap>,
     pub(super) target_policy: &'a repo::ResolvePolicy<'a>,
-    pub(super) package_use: &'a Vec<(Dep, Vec<UseOverride>)>,
+    pub(super) package_use: &'a Vec<(Dep, Vec<UseToken>)>,
     pub(super) target_installed: &'a [installed::VdbEntry],
     pub(super) installed_blockers: &'a [Vec<Dep>],
     pub(super) host_installed: &'a [installed::HostInstalledEntry],
@@ -90,7 +91,7 @@ pub(super) struct RoundOutcome {
     // `--tree`/`--json` display) since these aren't real PMS dependency
     // relationships, only scheduler ordering.
     pub(super) closure_blockers: Vec<(PortagePackage, PortagePackage)>,
-    pub(super) package_use: Vec<(Dep, Vec<UseOverride>)>,
+    pub(super) package_use: Vec<(Dep, Vec<UseToken>)>,
     pub(super) applied_reqs: Vec<UseFlagRequirement>,
     pub(super) matched_flags: Vec<super::package_use::MatchedFlag>,
     pub(super) use_conflicts: Vec<super::package_use::UseConflict>,
@@ -115,7 +116,7 @@ impl RoundCtx<'_> {
     /// A repository view under this round's policy and `package_use`
     fn adapter<'b>(
         &'b self,
-        package_use: &'b [(Dep, Vec<UseOverride>)],
+        package_use: &'b [(Dep, Vec<UseToken>)],
         autosolve_use: bool,
         widened: bool,
     ) -> repo::Adapter<'b> {

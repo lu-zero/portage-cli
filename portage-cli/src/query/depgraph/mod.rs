@@ -14,6 +14,7 @@ mod targets;
 
 pub use targets::{TargetAtom, TargetOrigin};
 
+use gentoo_core::UseToken;
 use portage_resolve::{
     conflicts, effective_use, installed, repo, required_use, root_aware, subslot, use_env,
 };
@@ -33,7 +34,7 @@ use gentoo_core::Arch;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Operator, Version};
 use portage_atom_pubgrub::{
-    PortageDependencyProvider, PortagePackage, PortageVersionSet, UseFlagRequirement, UseOverride,
+    PortageDependencyProvider, PortagePackage, PortageVersionSet, UseFlagRequirement,
 };
 
 use crate::cli::DepgraphFormat;
@@ -321,7 +322,7 @@ pub struct DepgraphOpts<'a> {
     /// Appended after the on-disk host/overlay files so they win. Empty for
     /// every ordinary emerge; `em toolchain --setup` uses this for
     /// `util-linux -pam -su`.
-    pub extra_package_use: &'a [(Dep, Vec<UseOverride>)],
+    pub extra_package_use: &'a [(Dep, Vec<UseToken>)],
     /// Config pending `--init-target`'s writes, read in place of the files — see
     /// [`portage_resolve::use_env::PendingConfig`]. `None` for every ordinary resolve.
     pub pending_config: Option<&'a use_env::PendingConfig>,
