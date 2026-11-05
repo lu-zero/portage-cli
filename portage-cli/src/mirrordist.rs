@@ -36,9 +36,7 @@ use portage_distfiles::{
     RestrictGate, is_atomic_temp_name,
 };
 use portage_metadata::{RawCacheEntry, RestrictExpr, SrcUriEntry};
-use portage_repo::{
-    CacheReadOpts, Manifest, ManifestEntry, ReposConf, Repository, cache_entries_parallel,
-};
+use portage_repo::{CacheReadOpts, ManifestEntry, ReposConf, Repository, cache_entries_parallel};
 
 use crate::cli;
 
@@ -469,11 +467,9 @@ async fn build_plan(
 
         let cpn = cpv.cpn;
         if let std::collections::hash_map::Entry::Vacant(e) = manifest_ok.entry(cpn) {
-            let loaded = ebuild
-                .path()
-                .parent()
-                .and_then(|dir| std::fs::read_to_string(dir.join("Manifest").as_std_path()).ok())
-                .and_then(|text| Manifest::parse(&text).ok());
+            let loaded = repo
+                .package(&cpn)
+                .and_then(|pkg| pkg.manifest().ok().flatten());
             if let Some(m) = &loaded {
                 plan.digests.extend_from_manifest(m);
             }

@@ -4,7 +4,7 @@ use camino::Utf8Path;
 use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Cpv, Version};
 use portage_atom_pubgrub::{CededFlag, PortagePackage, UseFlagState};
-use portage_repo::{Manifest, ManifestEntry};
+use portage_repo::{ManifestEntry, Repository};
 
 use crate::effective_use::effective_use;
 use crate::repo::{RepoData, ResolvePolicy, find_cache};
@@ -18,7 +18,7 @@ use crate::repo::{RepoData, ResolvePolicy, find_cache};
 /// sized from the package's `Manifest`. A file present in `DISTDIR` at its
 /// recorded size counts as zero (already fetched).
 pub fn compute(
-    repo_path: &Utf8Path,
+    repo: &Repository,
     distdir: &str,
     data: &RepoData,
     order: &[(PortagePackage, Version)],
@@ -62,7 +62,7 @@ pub fn compute(
 
         let manifest = manifests
             .entry(*pkg.cpn())
-            .or_insert_with(|| load_manifest_sizes(repo_path, pkg.cpn()));
+            .or_insert_with(|| load_manifest_sizes(repo, pkg.cpn()));
 
         let mut total = 0u64;
         for filename in &wanted {
@@ -84,16 +84,9 @@ pub fn compute(
     sizes
 }
 
-/// Parse `<repo>/<cat>/<pkg>/Manifest` into a `filename -> size` map
-fn load_manifest_sizes(repo_path: &Utf8Path, cpn: &Cpn) -> HashMap<String, u64> {
-    let path = repo_path
-        .join(cpn.category.as_str())
-        .join(cpn.package.as_str())
-        .join("Manifest");
-    let Ok(content) = std::fs::read_to_string(path.as_std_path()) else {
-        return HashMap::new();
-    };
-    let Ok(manifest) = Manifest::parse(&content) else {
+/// The package's `Manifest` as a `filename -> size` map
+fn load_manifest_sizes(repo: &Repository, cpn: &Cpn) -> HashMap<String, u64> {
+    let Some(Ok(Some(manifest))) = repo.package(cpn).map(|pkg| pkg.manifest()) else {
         return HashMap::new();
     };
     manifest

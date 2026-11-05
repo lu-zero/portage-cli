@@ -161,11 +161,7 @@ fn open_repos(
     for p in repo_paths {
         match crate::repo_open::open(p) {
             Ok(r) => {
-                let name = r
-                    .path()
-                    .file_name()
-                    .unwrap_or(r.path().as_str())
-                    .to_string();
+                let name = r.name().to_string();
                 repos.push((r, name));
             }
             Err(e) => crate::style::warn_line!("skipping {}: {e}", p.display()),

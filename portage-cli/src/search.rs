@@ -327,14 +327,10 @@ fn entry_for(
             continue;
         };
         let category = rel.components().next()?.as_str();
-        let cache_file = other
-            .path()
-            .join("metadata/md5-cache")
-            .join(category)
-            .join(rel.file_stem()?);
-        if let Ok(text) = std::fs::read_to_string(&cache_file)
-            && let Ok(entry) = portage_metadata::CacheEntry::parse(&text)
-        {
+        let Ok(target) = Cpv::parse(&format!("{category}/{}", rel.file_stem()?)) else {
+            continue;
+        };
+        if let Ok(Some(entry)) = other.cache_entry(&target) {
             return Some(entry);
         }
     }
@@ -418,15 +414,7 @@ fn print_search_block(
 /// version's `SRC_URI` can reference (all USE conditionals taken, as emerge's
 /// search does).
 fn distfiles_size(repo: &Repository, cpn: &Cpn, meta: &portage_metadata::EbuildMetadata) -> u64 {
-    let manifest_path = repo
-        .path()
-        .join(cpn.category.as_str())
-        .join(cpn.package.as_str())
-        .join("Manifest");
-    let Ok(content) = std::fs::read_to_string(&manifest_path) else {
-        return 0;
-    };
-    let Ok(manifest) = portage_repo::Manifest::parse(&content) else {
+    let Some(Ok(Some(manifest))) = repo.package(cpn).map(|pkg| pkg.manifest()) else {
         return 0;
     };
     let sizes: BTreeMap<String, u64> = manifest

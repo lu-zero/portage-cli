@@ -206,6 +206,7 @@ pub enum ProfileUpdate {
 
 use super::category::Category;
 use super::layout::LayoutConf;
+use super::package::Package;
 use super::profile::{Profile, ProfileDesc, ProfileStack};
 use super::use_expand::UseExpand;
 use super::util;
@@ -637,13 +638,16 @@ impl Repository {
     /// to *discover* cpvs in the first place, not to re-locate one you
     /// already have.
     pub fn ebuild_for_cpv(&self, cpv: &Cpv) -> Result<Option<Ebuild>> {
-        let Some(cat) = self.category(cpv.cpn.category.as_ref()) else {
-            return Ok(None);
-        };
-        let Some(pkg) = cat.package(cpv.cpn.package.as_ref()) else {
+        let Some(pkg) = self.package(&cpv.cpn) else {
             return Ok(None);
         };
         pkg.ebuild(&cpv.version.to_string())
+    }
+
+    /// Look up a single package by `Cpn`; `None` when this repo has no such package
+    pub fn package(&self, cpn: &Cpn) -> Option<Package> {
+        self.category(cpn.category.as_ref())?
+            .package(cpn.package.as_ref())
     }
 
     /// Resolve a package pattern to one or more [`Cpn`] values
