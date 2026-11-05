@@ -2,9 +2,9 @@ use gentoo_core::UseToken;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 
 use gentoo_core::Arch;
 use portage_atom::interner::{DefaultInterner, Interned};
@@ -13,8 +13,8 @@ use portage_metadata::Eapi;
 
 use super::layout::LayoutConf;
 use super::repos_conf::ReposConf;
-use super::util;
 use crate::error::{Error, Result};
+use crate::tree::{FsTree, TreeSource, content_lines, read_text, tree_lines};
 
 /// Stability status of a profile
 ///
@@ -109,9 +109,12 @@ impl ProfileDesc {
 /// USE flags, package masking, keywords, and more.
 ///
 /// See [PMS 5 — Profiles](https://projects.gentoo.org/pms/9/pms.html#profiles).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Profile {
     path: PathBuf,
+    /// Where the profile's files are read from, and its directory in that tree
+    tree: Arc<dyn TreeSource>,
+    rel: Utf8PathBuf,
     eapi: Eapi,
     /// Effective `profile-formats` for the repo this profile belongs to (from
     /// the enclosing repo's `metadata/layout.conf`), used to gate `@profile`-
@@ -136,6 +139,15 @@ pub struct Profile {
     use_mask: OnceLock<Vec<String>>,
 }
 
+impl std::fmt::Debug for Profile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Profile")
+            .field("path", &self.path)
+            .field("eapi", &self.eapi)
+            .finish_non_exhaustive()
+    }
+}
+
 /// One entry from a profile `packages` file (PMS 5.2.6)
 ///
 /// `*cat/pkg` is a system-package add; `cat/pkg` an advisory (`@profile`) add;
@@ -151,16 +163,28 @@ enum PackageEntry {
 impl Profile {
     /// Open a profile at the given directory path
     pub fn open(path: PathBuf) -> Result<Self> {
-        let eapi_str = util::read_single_line(path.join("eapi"))?;
-        let eapi = match eapi_str {
+        let (repo, profile_formats) = enclosing_repo(&path);
+        let utf8 = |p: &Path| {
+            Utf8PathBuf::from_path_buf(p.to_path_buf())
+                .map_err(|p| Error::InvalidProfile(format!("not UTF-8: {}", p.display())))
+        };
+        // Inside a repository the profile reads through that repository's tree.
+        let (root, rel) = match &repo {
+            Some(root) => (utf8(root)?, utf8(path.strip_prefix(root).unwrap_or(&path))?),
+            None => (utf8(&path)?, Utf8PathBuf::new()),
+        };
+        let tree: Arc<dyn TreeSource> = Arc::new(FsTree::new(root));
+        let eapi_text = read_text(&*tree, rel.join("eapi").as_str())?;
+        let eapi = match eapi_text.as_deref().and_then(|t| content_lines(t).next()) {
             Some(s) => s
                 .parse::<Eapi>()
                 .map_err(|e| Error::InvalidProfile(format!("bad EAPI: {e}")))?,
             None => Eapi::Zero,
         };
-        let (repo, profile_formats) = enclosing_repo(&path);
         Ok(Profile {
             path,
+            tree,
+            rel,
             eapi,
             profile_formats,
             repo,
@@ -172,6 +196,38 @@ impl Profile {
     /// Absolute path to the profile directory
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Lines of the profile file `name`, or of the files in the directory `name`
+    fn lines(&self, name: &str) -> Result<Vec<String>> {
+        tree_lines(&*self.tree, self.rel.join(name).as_str())
+    }
+
+    /// How the profile file `name` is named in messages
+    fn shown(&self, name: &str) -> String {
+        self.tree.display(&self.rel.join(name))
+    }
+
+    /// Flags in `name`, with invalid tokens warned about and dropped
+    fn flags(&self, name: &str) -> Result<Vec<String>> {
+        Ok(checked_flags(self.lines(name)?, &self.shown(name)))
+    }
+
+    fn cached_flags(&self, cell: &OnceLock<Vec<String>>, name: &str) -> Result<Vec<String>> {
+        if let Some(flags) = cell.get() {
+            return Ok(flags.clone());
+        }
+        let flags = self.flags(name)?;
+        Ok(cell.get_or_init(|| flags).clone())
+    }
+
+    /// `atom flag...` lines of `name`, with invalid flags warned about and dropped
+    fn atom_flags(&self, name: &str) -> Result<Vec<(Dep, Vec<String>)>> {
+        let shown = self.shown(name);
+        Ok(parse_atom_flags(self.lines(name)?)?
+            .into_iter()
+            .map(|(dep, flags)| (dep, checked_flags(flags, &shown)))
+            .collect())
     }
 
     /// The EAPI declared by this profile (from the `eapi` file)
@@ -205,7 +261,7 @@ impl Profile {
     /// (this profile's own for `:path`); `repos` resolves the name.
     pub fn parents(&self, repos: Option<&ReposConf>) -> Result<Vec<PathBuf>> {
         let colon = self.repo.is_none() || self.profile_formats.iter().any(|f| f == "portage-2");
-        util::read_lines(self.path.join("parent"))?
+        self.lines("parent")?
             .iter()
             .map(|line| {
                 let Some((name, rel)) = line.split_once(':').filter(|_| colon) else {
@@ -221,7 +277,7 @@ impl Profile {
                 root.map(|r| r.join("profiles").join(rel)).ok_or_else(|| {
                     Error::InvalidProfile(format!(
                         "parent '{line}' not found: {}",
-                        self.path.join("parent").display()
+                        self.shown("parent")
                     ))
                 })
             })
@@ -231,7 +287,7 @@ impl Profile {
     /// Parse the `packages` file into raw [`PackageEntry`]s (no cross-profile
     /// removal applied; that happens in [`ProfileStack::packages`]).
     fn packages_raw(&self) -> Result<Vec<PackageEntry>> {
-        let lines = util::read_lines(self.path.join("packages"))?;
+        let lines = self.lines("packages")?;
         let mut result = Vec::new();
         for line in lines {
             let entry = if line == "-*" {
@@ -266,7 +322,7 @@ impl Profile {
     /// file still uses the same incremental `-atom`/`-*` removal as other
     /// profile files (`portage.util.stack_lists(..., incremental=1)`).
     fn packages_build_raw(&self) -> Result<Vec<PackageEntry>> {
-        let lines = util::read_lines(self.path.join("packages.build"))?;
+        let lines = self.lines("packages.build")?;
         let mut result = Vec::new();
         for line in lines {
             let entry = if line == "-*" {
@@ -289,7 +345,7 @@ impl Profile {
     ///
     /// See [PMS 5.2.8](https://projects.gentoo.org/pms/9/pms.html#packagemask).
     pub fn package_mask(&self) -> Result<Vec<Dep>> {
-        let lines = util::read_lines(self.path.join("package.mask"))?;
+        let lines = self.lines("package.mask")?;
         let mut result = Vec::new();
         for line in lines {
             if let Some(stripped) = line.strip_prefix('-') {
@@ -306,7 +362,7 @@ impl Profile {
     ///
     /// Returns `(dep, [flags...])` pairs.
     pub fn package_use(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        parse_atom_flags_list(&self.path.join("package.use"))
+        parse_atom_flags(self.lines("package.use")?)
     }
 
     /// Parse `package.accept_keywords` (and legacy `package.keywords`)
@@ -315,8 +371,8 @@ impl Profile {
     /// kept with an empty token list, meaning "accept this package's testing
     /// keyword for the configured arch".
     pub fn package_accept_keywords(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        let mut out = parse_atom_flags_list(&self.path.join("package.accept_keywords"))?;
-        out.extend(parse_atom_flags_list(&self.path.join("package.keywords"))?);
+        let mut out = parse_atom_flags(self.lines("package.accept_keywords")?)?;
+        out.extend(parse_atom_flags(self.lines("package.keywords")?)?);
         Ok(out)
     }
 
@@ -325,47 +381,47 @@ impl Profile {
     /// Returns `(dep, [license tokens...])` pairs — the tokens extend
     /// `ACCEPT_LICENSE` for matching packages (`@GROUP`, `-deny`, `*`).
     pub fn package_license(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        parse_atom_flags_list(&self.path.join("package.license"))
+        parse_atom_flags(self.lines("package.license")?)
     }
 
     /// Parse `use.force`
     pub fn use_force(&self) -> Result<Vec<String>> {
-        cached_flag_file(&self.use_force, &self.path.join("use.force"))
+        self.cached_flags(&self.use_force, "use.force")
     }
 
     /// Parse `use.mask`
     pub fn use_mask(&self) -> Result<Vec<String>> {
-        cached_flag_file(&self.use_mask, &self.path.join("use.mask"))
+        self.cached_flags(&self.use_mask, "use.mask")
     }
 
     /// Parse `use.stable.force`
     pub fn use_stable_force(&self) -> Result<Vec<String>> {
-        flag_file(&self.path.join("use.stable.force"))
+        self.flags("use.stable.force")
     }
 
     /// Parse `use.stable.mask`
     pub fn use_stable_mask(&self) -> Result<Vec<String>> {
-        flag_file(&self.path.join("use.stable.mask"))
+        self.flags("use.stable.mask")
     }
 
     /// Parse `package.use.force`
     pub fn package_use_force(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        atom_flag_file(&self.path.join("package.use.force"))
+        self.atom_flags("package.use.force")
     }
 
     /// Parse `package.use.mask`
     pub fn package_use_mask(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        atom_flag_file(&self.path.join("package.use.mask"))
+        self.atom_flags("package.use.mask")
     }
 
     /// Parse `package.use.stable.force`
     pub fn package_use_stable_force(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        atom_flag_file(&self.path.join("package.use.stable.force"))
+        self.atom_flags("package.use.stable.force")
     }
 
     /// Parse `package.use.stable.mask`
     pub fn package_use_stable_mask(&self) -> Result<Vec<(Dep, Vec<String>)>> {
-        atom_flag_file(&self.path.join("package.use.stable.mask"))
+        self.atom_flags("package.use.stable.mask")
     }
 }
 
@@ -476,7 +532,10 @@ impl ProfileStack {
     ///
     /// See [PMS 5.2.3](https://projects.gentoo.org/pms/9/pms.html#deprecated).
     pub fn is_deprecated(&self) -> bool {
-        self.leaf().path().join("deprecated").exists()
+        let leaf = self.leaf();
+        leaf.tree
+            .kind(&leaf.rel.join("deprecated"))
+            .is_ok_and(|k| k.is_some())
     }
 
     /// Merged `use.force` across the full stack (incremental, `-` removes)
@@ -505,11 +564,7 @@ impl ProfileStack {
     ///
     /// See [PMS 5.2.8](https://projects.gentoo.org/pms/9/pms.html#package-mask).
     pub fn package_mask(&self) -> Result<Vec<Dep>> {
-        merge_atom_list(
-            self.profiles
-                .iter()
-                .map(|p| read_profile_file(&p.path().join("package.mask"))),
-        )
+        merge_atom_list(self.profiles.iter().map(|p| p.lines("package.mask")))
     }
 
     /// Accumulated `package.unmask` from the profiles that may carry one
@@ -521,7 +576,7 @@ impl ProfileStack {
             self.profiles
                 .iter()
                 .filter(|p| p.allows_directories())
-                .map(|p| read_profile_file(&p.path().join("package.unmask"))),
+                .map(|p| p.lines("package.unmask")),
         )
     }
 
@@ -537,7 +592,7 @@ impl ProfileStack {
     pub fn package_provided(&self) -> Result<Vec<Cpv>> {
         let mut acc: Vec<Cpv> = Vec::new();
         for p in &self.profiles {
-            for line in read_profile_file(&p.path().join("package.provided"))? {
+            for line in p.lines("package.provided")? {
                 let line = line.trim();
                 if let Some(rest) = line.strip_prefix('-') {
                     let cpv = parse_provided_cpv(rest.trim())?;
@@ -990,14 +1045,6 @@ fn enclosing_repo(profile_path: &Path) -> (Option<PathBuf>, Vec<String>) {
     (None, Vec::new())
 }
 
-/// Read non-blank, non-comment lines from a profile file or directory
-///
-/// Directory form is PMS 5.2.4 / [`util::read_lines`] (flat, sorted, skip
-/// `.…` / `…~`). Returns an empty `Vec` if `path` does not exist.
-fn read_profile_file(path: &Path) -> Result<Vec<String>> {
-    util::read_lines(path)
-}
-
 /// Merge incremental USE-flag lists from a sequence of profile-file results
 ///
 /// A flag prefixed with `-` removes any previously accumulated occurrence.
@@ -1068,50 +1115,27 @@ where
 // Existing per-profile helpers
 // ---------------------------------------------------------------------------
 
-/// Parse a file containing one dependency atom per line
-/// Parse a file containing `atom flag1 flag2 ...` per line.
-/// A profile flag file (`use.force`, `use.mask`, …): `flag` or `-flag` per PMS, anything else is
-/// dropped with a warning, as Portage does
-fn flag_file(path: &Path) -> Result<Vec<String>> {
-    Ok(checked_flags(util::read_lines(path)?, path))
-}
-
-/// [`flag_file`], kept in `cell` once read
-fn cached_flag_file(cell: &OnceLock<Vec<String>>, path: &Path) -> Result<Vec<String>> {
-    if let Some(flags) = cell.get() {
-        return Ok(flags.clone());
-    }
-    let flags = flag_file(path)?;
-    Ok(cell.get_or_init(|| flags).clone())
-}
-
-/// [`flag_file`] for an atom-keyed one (`package.use.force`, `package.use.mask`, …)
-fn atom_flag_file(path: &Path) -> Result<Vec<(Dep, Vec<String>)>> {
-    Ok(parse_atom_flags_list(path)?
-        .into_iter()
-        .map(|(dep, flags)| (dep, checked_flags(flags, path)))
-        .collect())
-}
-
-fn checked_flags(tokens: Vec<String>, path: &Path) -> Vec<String> {
+/// Profile flag tokens: `flag` or `-flag` per PMS, anything else dropped with a warning naming
+/// `shown`, as Portage does
+fn checked_flags(tokens: Vec<String>, shown: &str) -> Vec<String> {
     tokens
         .into_iter()
         .filter(|tok| match UseToken::profile(tok) {
             Ok(UseToken::Flag { .. }) => true,
             Ok(_) => {
-                tracing::warn!("{}: `{tok}` is not valid there", path.display());
+                tracing::warn!("{shown}: `{tok}` is not valid there");
                 false
             }
             Err(e) => {
-                tracing::warn!("{}: {e}", path.display());
+                tracing::warn!("{shown}: {e}");
                 false
             }
         })
         .collect()
 }
 
-fn parse_atom_flags_list(path: &Path) -> Result<Vec<(Dep, Vec<String>)>> {
-    let lines = util::read_lines(path)?;
+/// `atom flag1 flag2 ...` lines
+fn parse_atom_flags(lines: Vec<String>) -> Result<Vec<(Dep, Vec<String>)>> {
     let mut result = Vec::new();
     for line in lines {
         let mut parts = line.split_whitespace();
