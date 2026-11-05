@@ -821,14 +821,14 @@ pub struct PolicyFactsRef<'a> {
 pub struct PolicyMaskList {
     by_cpn: Option<HashMap<Cpn, Vec<Dep>>>,
     /// The files the atoms are written in, the one that wins first
-    files: Option<Vec<camino::Utf8PathBuf>>,
+    files: Option<Vec<portage_repo::tree::TreeFile>>,
 }
 
 /// Where a mask is written, with the comment block above it
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaskReason {
-    /// The `package.mask` file holding the entry
-    pub file: camino::Utf8PathBuf,
+    /// The `package.mask` file holding the entry, as shown to the user
+    pub file: String,
     /// The comment lines that apply to the entry, `#` included; empty when none does
     pub comment: Vec<String>,
 }
@@ -841,7 +841,7 @@ impl PolicyMaskList {
     };
 
     /// The files the atoms come from, the one that wins first, for [`reason`](Self::reason)
-    pub fn with_files(mut self, files: Vec<camino::Utf8PathBuf>) -> Self {
+    pub fn with_files(mut self, files: Vec<portage_repo::tree::TreeFile>) -> Self {
         self.files = Some(files);
         self
     }
@@ -870,14 +870,7 @@ impl PolicyMaskList {
         if in_force.is_empty() {
             return None;
         }
-        let files = self.files.iter().flatten().flat_map(|path| {
-            portage_repo::list_config_files(path, portage_repo::ConfigFilesMode::Flat)
-                .unwrap_or_default()
-        });
-        for file in files {
-            let Ok(text) = std::fs::read_to_string(&file) else {
-                continue;
-            };
+        for (file, text) in self.files.iter().flatten().flat_map(|f| f.texts()) {
             let mut comment: Vec<String> = Vec::new();
             for line in text.lines().map(str::trim) {
                 if line.is_empty() {
@@ -885,7 +878,6 @@ impl PolicyMaskList {
                 } else if line.starts_with('#') {
                     comment.push(line.to_owned());
                 } else if Dep::parse(line).is_ok_and(|dep| in_force.contains(&&dep)) {
-                    let file = camino::Utf8PathBuf::from_path_buf(file).ok()?;
                     return Some(MaskReason { file, comment });
                 }
             }
@@ -4755,7 +4747,10 @@ mod tests {
             "app-misc/baz",
         ];
         let mask = PolicyMaskList::new(atoms.iter().map(|a| Dep::parse(a).unwrap()).collect())
-            .with_files(vec![user.clone(), repo_file.clone()]);
+            .with_files(vec![
+                portage_repo::tree::TreeFile::on_disk(&user),
+                portage_repo::tree::TreeFile::on_disk(&repo_file),
+            ]);
         let reason = |cpv: &str| {
             let cpv = Cpv::parse(cpv).unwrap();
             mask.reason(
@@ -4771,35 +4766,35 @@ mod tests {
         assert_eq!(
             reason("app-misc/foo-1"),
             Some(MaskReason {
-                file: user.join("local"),
+                file: user.join("local").to_string(),
                 comment: vec!["# my reason".to_owned()]
             })
         );
         assert_eq!(
             reason("app-misc/foo-2"),
             Some(MaskReason {
-                file: repo_file.clone(),
+                file: repo_file.to_string(),
                 comment: repo_block.clone()
             })
         );
         assert_eq!(
             reason("app-misc/bar-1"),
             Some(MaskReason {
-                file: repo_file.clone(),
+                file: repo_file.to_string(),
                 comment: repo_block
             })
         );
         assert_eq!(
             reason("app-misc/baz-1"),
             Some(MaskReason {
-                file: repo_file.clone(),
+                file: repo_file.to_string(),
                 comment: Vec::new()
             })
         );
         assert_eq!(reason("app-misc/other-1"), None);
 
         let lifted = PolicyMaskList::new(vec![Dep::parse("app-misc/foo").unwrap()])
-            .with_files(vec![repo_file]);
+            .with_files(vec![portage_repo::tree::TreeFile::on_disk(&repo_file)]);
         let bar = Cpv::parse("app-misc/bar-1").unwrap();
         let slot = portage_atom::Slot::from_name(Interned::intern("0"));
         assert_eq!(lifted.reason(&bar, &slot, Interned::intern("gentoo")), None);

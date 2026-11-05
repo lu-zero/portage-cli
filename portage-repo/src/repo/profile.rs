@@ -218,6 +218,11 @@ impl Profile {
         read_text(&*self.tree, self.rel.join(name).as_str())
     }
 
+    /// The profile file (or directory of files) `name`
+    pub fn file(&self, name: &str) -> crate::tree::TreeFile {
+        crate::tree::TreeFile::new(self.tree.clone(), self.rel.join(name))
+    }
+
     /// How the profile file `name` is named in messages
     pub(crate) fn shown(&self, name: &str) -> String {
         self.tree.display(&self.rel.join(name))

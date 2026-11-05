@@ -118,6 +118,53 @@ pub(crate) fn is_repository(location: &Utf8Path) -> bool {
     location.join("metadata/layout.conf").is_file() || location.join("profiles/repo_name").is_file()
 }
 
+/// One configuration file, or a directory of them, in some tree
+#[derive(Clone)]
+pub struct TreeFile {
+    tree: Arc<dyn TreeSource>,
+    rel: Utf8PathBuf,
+}
+
+impl std::fmt::Debug for TreeFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.tree.display(&self.rel))
+    }
+}
+
+impl TreeFile {
+    pub(crate) fn new(tree: Arc<dyn TreeSource>, rel: Utf8PathBuf) -> Self {
+        TreeFile { tree, rel }
+    }
+
+    /// A file, or directory of files, on disk
+    pub fn on_disk(path: &Utf8Path) -> Self {
+        let dir = path.parent().unwrap_or(Utf8Path::new("/"));
+        let rel = Utf8PathBuf::from(path.file_name().unwrap_or_default());
+        TreeFile::new(Arc::new(FsTree::new(dir)), rel)
+    }
+
+    /// The texts it holds, each with the name to show for it: the file's, or those of the files
+    /// in the directory form in name order (dotfiles and `~` backups skipped); missing or
+    /// unreadable files are left out
+    pub fn texts(&self) -> Vec<(String, String)> {
+        let show = |rel: &Utf8Path| self.tree.display(rel);
+        if let Ok(Some(text)) = read_text(&*self.tree, self.rel.as_str()) {
+            return vec![(show(&self.rel), text)];
+        }
+        let Ok(Some(names)) = config_files(&*self.tree, &self.rel) else {
+            return Vec::new();
+        };
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let rel = self.rel.join(name);
+                let text = read_text(&*self.tree, rel.as_str()).ok().flatten()?;
+                Some((show(&rel), text))
+            })
+            .collect()
+    }
+}
+
 /// A checkout on disk
 #[derive(Clone, Debug)]
 pub struct FsTree {
@@ -231,11 +278,25 @@ pub(crate) fn tree_lines(tree: &dyn TreeSource, rel: &str) -> Result<Vec<String>
         return Ok(content_lines(&text).map(String::from).collect());
     }
     let path = Utf8Path::new(rel);
-    let Some(children) = tree
-        .list(path)
-        .map_err(|e| crate::repo::util::io_err(tree.display(path), e))?
+    let Some(names) =
+        config_files(tree, path).map_err(|e| crate::repo::util::io_err(tree.display(path), e))?
     else {
         return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for name in names {
+        if let Some(text) = read_text(tree, path.join(name).as_str())? {
+            out.extend(content_lines(&text).map(String::from));
+        }
+    }
+    Ok(out)
+}
+
+/// The files of the configuration directory `rel` in name order, dotfiles and `~` backups
+/// skipped; `None` when it is not a directory
+fn config_files(tree: &dyn TreeSource, rel: &Utf8Path) -> io::Result<Option<Vec<String>>> {
+    let Some(children) = tree.list(rel)? else {
+        return Ok(None);
     };
     let mut names: Vec<String> = children
         .into_iter()
@@ -245,13 +306,7 @@ pub(crate) fn tree_lines(tree: &dyn TreeSource, rel: &str) -> Result<Vec<String>
         .map(|(name, _)| name)
         .collect();
     names.sort();
-    let mut out = Vec::new();
-    for name in names {
-        if let Some(text) = read_text(tree, path.join(name).as_str())? {
-            out.extend(content_lines(&text).map(String::from));
-        }
-    }
-    Ok(out)
+    Ok(Some(names))
 }
 
 /// Names under `rel`, skipping dotfiles; empty when `rel` is missing

@@ -1052,6 +1052,11 @@ impl Repository {
             .collect())
     }
 
+    /// The file (or directory of files) at `rel` in this repository
+    pub fn file(&self, rel: &str) -> crate::tree::TreeFile {
+        crate::tree::TreeFile::new(self.tree.clone(), rel.into())
+    }
+
     /// The text of `eclass/<name>.eclass` in this repository (not its masters)
     pub fn eclass_text(&self, name: &str) -> Result<Option<String>> {
         read_text(&*self.tree, &format!("eclass/{name}.eclass"))

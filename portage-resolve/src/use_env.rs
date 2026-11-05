@@ -44,7 +44,7 @@ pub struct UseEnv {
     /// stack, and `/etc/portage/package.mask`
     pub package_mask: Vec<Dep>,
     /// The `package.mask` files behind `package_mask`, the one that wins first
-    pub package_mask_files: Vec<Utf8PathBuf>,
+    pub package_mask_files: Vec<portage_repo::tree::TreeFile>,
     /// Unmasks from the profiles and `/etc/portage/package.unmask` — a matching
     /// entry cancels any mask for that package
     pub package_unmask: Vec<Dep>,
@@ -413,17 +413,19 @@ async fn compute_use_env(
         package_mask.extend(load_dep_list(overlay.join("package.mask").as_str()));
         package_unmask.extend(load_dep_list(overlay.join("package.unmask").as_str()));
     }
-    let profile_masks = stack
-        .profiles()
-        .iter()
-        .rev()
-        .filter_map(|p| Utf8PathBuf::from_path_buf(p.path().join("package.mask")).ok());
-    let package_mask_files: Vec<Utf8PathBuf> = config_overlay
-        .map(|overlay| overlay.join("package.mask"))
+    let on_disk = |path: Utf8PathBuf| portage_repo::tree::TreeFile::on_disk(&path);
+    let package_mask_files: Vec<portage_repo::tree::TreeFile> = config_overlay
+        .map(|overlay| on_disk(overlay.join("package.mask")))
         .into_iter()
-        .chain([portage_dir.join("package.mask")])
-        .chain(profile_masks)
-        .chain([repo.path().join("profiles/package.mask")])
+        .chain([on_disk(portage_dir.join("package.mask"))])
+        .chain(
+            stack
+                .profiles()
+                .iter()
+                .rev()
+                .map(|p| p.file("package.mask")),
+        )
+        .chain([repo.file("profiles/package.mask")])
         .collect();
 
     // `package.provided` — CPVs the system supplies externally (profile stack,
