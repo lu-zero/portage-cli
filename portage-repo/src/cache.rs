@@ -569,38 +569,39 @@ fn cache_cpvs_in_dirs(
     let mut items: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)> =
         Vec::with_capacity(32_768);
     for cache_dir in dirs {
-        let walker = jwalk::WalkDir::new(cache_dir.as_std_path())
-            .skip_hidden(true)
-            .min_depth(2)
-            .max_depth(2);
-        for entry in walker {
-            let Ok(entry) = entry else { continue };
-            if !entry.file_type().is_file() {
-                continue;
+        // Name parsing and the stat run in the per-directory callback, on jwalk's worker threads.
+        let walker = jwalk::WalkDirGeneric::<((), Option<(Cpv, Option<SystemTime>)>)>::new(
+            cache_dir.as_std_path(),
+        )
+        .skip_hidden(true)
+        .min_depth(2)
+        .max_depth(2)
+        .process_read_dir(move |_, dir, _, children| {
+            let Some(cat) = dir.file_name().and_then(|s| s.to_str()) else {
+                return;
+            };
+            for entry in children.iter_mut().flatten() {
+                if entry.depth != 2 || !entry.file_type().is_file() {
+                    continue;
+                }
+                let Some(stem) = entry.file_name().to_str() else {
+                    continue;
+                };
+                let Ok(cpv) = Cpv::parse(&format!("{cat}/{stem}")) else {
+                    continue;
+                };
+                let mtime = with_mtime
+                    .then(|| entry.metadata().ok())
+                    .flatten()
+                    .and_then(|m| m.modified().ok());
+                entry.client_state = Some((cpv, mtime));
             }
-            let path = entry.path();
-            let Some(stem) = path.file_name().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            let Some(cat) = path
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-            else {
-                continue;
-            };
-            let mut cpv_str = String::with_capacity(cat.len() + 1 + stem.len());
-            cpv_str.push_str(cat);
-            cpv_str.push('/');
-            cpv_str.push_str(stem);
-            let Ok(cpv) = portage_atom::Cpv::parse(&cpv_str) else {
-                continue;
-            };
-            let mtime = with_mtime
-                .then(|| entry.metadata().ok())
-                .flatten()
-                .and_then(|m| m.modified().ok());
-            items.push((cpv, path, mtime));
+        });
+        for entry in walker {
+            let Ok(mut entry) = entry else { continue };
+            if let Some((cpv, mtime)) = entry.client_state.take() {
+                items.push((cpv, entry.path(), mtime));
+            }
         }
     }
 

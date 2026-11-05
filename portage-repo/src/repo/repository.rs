@@ -788,13 +788,17 @@ impl Repository {
         if entry.eclasses.is_empty() {
             return true;
         }
-        // Own `eclass/`, then masters last-listed first, matching `shell_with_masters`.
-        let eclass_dirs: Vec<Utf8PathBuf> = std::iter::once(self.path.join("eclass"))
-            .chain(self.masters.iter().rev().map(|m| m.path.join("eclass")))
-            .collect();
+        // Built on the first memo miss only: the memo serves nearly every lookup.
+        let mut eclass_dirs: Option<Vec<Utf8PathBuf>> = None;
         for (name, recorded) in &entry.eclasses {
             let actual = digests.entry(*name).or_insert_with(|| {
-                let path = find_eclass_in(&eclass_dirs, name)?;
+                // Own `eclass/`, then masters last-listed first, matching `shell_with_masters`.
+                let dirs = eclass_dirs.get_or_insert_with(|| {
+                    std::iter::once(self.path.join("eclass"))
+                        .chain(self.masters.iter().rev().map(|m| m.path.join("eclass")))
+                        .collect()
+                });
+                let path = find_eclass_in(dirs, name)?;
                 let bytes = std::fs::read(&path).ok()?;
                 Some(md5::compute(&bytes))
             });
