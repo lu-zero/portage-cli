@@ -179,6 +179,25 @@ impl TreeSource for RedbTree {
         ))
     }
 
+    fn kind(&self, rel: &Utf8Path) -> io::Result<Option<EntryKind>> {
+        // The parent tree's entry mode answers without decoding the object itself.
+        let (Some(parent), Some(name)) = (rel.parent(), rel.file_name()) else {
+            return Ok(Some(EntryKind::Dir));
+        };
+        let Some((KIND_TREE, data)) = self.lookup(parent)? else {
+            return Ok(None);
+        };
+        Ok(tree_entries(&data)
+            .find(|e| e.name == name.as_bytes())
+            .map(|e| {
+                if e.mode == b"40000" {
+                    EntryKind::Dir
+                } else {
+                    EntryKind::File
+                }
+            }))
+    }
+
     fn display(&self, rel: &Utf8Path) -> String {
         format!("redb://{}?{rel}", self.file)
     }

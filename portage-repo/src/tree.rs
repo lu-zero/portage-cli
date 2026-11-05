@@ -10,6 +10,7 @@ use futures_util::future::BoxFuture;
 use portage_atom::Cpv;
 use portage_metadata::CacheEntry;
 
+use crate::error::Result;
 use crate::repo::Repository;
 
 #[cfg(feature = "redb")]
@@ -30,6 +31,8 @@ pub trait TreeSource: Send + Sync {
     fn read(&self, rel: &Utf8Path) -> io::Result<Option<Vec<u8>>>;
     /// The immediate children of `rel`; `Ok(None)` when it does not exist or is not a directory
     fn list(&self, rel: &Utf8Path) -> io::Result<Option<Vec<(String, EntryKind)>>>;
+    /// What `rel` is, following symlinks; `Ok(None)` when it does not exist
+    fn kind(&self, rel: &Utf8Path) -> io::Result<Option<EntryKind>>;
     /// How a file is named to the user: a path, or a URI into a database
     fn display(&self, rel: &Utf8Path) -> String;
 }
@@ -99,6 +102,15 @@ impl TreeSource for FsTree {
         Ok(Some(out))
     }
 
+    fn kind(&self, rel: &Utf8Path) -> io::Result<Option<EntryKind>> {
+        match std::fs::metadata(self.root.join(rel)) {
+            Ok(m) if m.is_dir() => Ok(Some(EntryKind::Dir)),
+            Ok(_) => Ok(Some(EntryKind::File)),
+            Err(e) if missing(&e) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     fn display(&self, rel: &Utf8Path) -> String {
         self.root.join(rel).into_string()
     }
@@ -112,4 +124,71 @@ impl EntrySource for FsEntries {
     fn entries<'a>(&'a self, repo: &'a Repository) -> BoxFuture<'a, Vec<(Cpv, CacheEntry)>> {
         Box::pin(crate::entries::repo_entries(repo))
     }
+}
+
+/// A file's text; `None` when it does not exist
+pub(crate) fn read_text(tree: &dyn TreeSource, rel: &str) -> Result<Option<String>> {
+    let rel = Utf8Path::new(rel);
+    let Some(bytes) = tree
+        .read(rel)
+        .map_err(|e| crate::repo::util::io_err(tree.display(rel), e))?
+    else {
+        return Ok(None);
+    };
+    String::from_utf8(bytes).map(Some).map_err(|e| {
+        crate::repo::util::io_err(
+            tree.display(rel),
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+        )
+    })
+}
+
+/// Trimmed lines that are neither blank nor comments
+pub(crate) fn content_lines(text: &str) -> impl Iterator<Item = &str> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+}
+
+/// [`util::read_lines`] over a tree: a file, or a directory of files read in name order
+pub(crate) fn tree_lines(tree: &dyn TreeSource, rel: &str) -> Result<Vec<String>> {
+    if let Some(text) = read_text(tree, rel)? {
+        return Ok(content_lines(&text).map(String::from).collect());
+    }
+    let path = Utf8Path::new(rel);
+    let Some(children) = tree
+        .list(path)
+        .map_err(|e| crate::repo::util::io_err(tree.display(path), e))?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut names: Vec<String> = children
+        .into_iter()
+        .filter(|(name, kind)| {
+            *kind == EntryKind::File && crate::repo::util::config_basename_included(name)
+        })
+        .map(|(name, _)| name)
+        .collect();
+    names.sort();
+    let mut out = Vec::new();
+    for name in names {
+        if let Some(text) = read_text(tree, path.join(name).as_str())? {
+            out.extend(content_lines(&text).map(String::from));
+        }
+    }
+    Ok(out)
+}
+
+/// Names under `rel`, skipping dotfiles; empty when `rel` is missing
+pub(crate) fn tree_names(tree: &dyn TreeSource, rel: &str) -> Result<Vec<(String, EntryKind)>> {
+    let path = Utf8Path::new(rel);
+    let mut names: Vec<(String, EntryKind)> = tree
+        .list(path)
+        .map_err(|e| crate::repo::util::io_err(tree.display(path), e))?
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(name, _)| !name.starts_with('.'))
+        .collect();
+    names.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    Ok(names)
 }

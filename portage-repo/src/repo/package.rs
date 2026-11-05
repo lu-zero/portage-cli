@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use camino::{Utf8Path, Utf8PathBuf};
 
 use portage_atom::{Cpn, Cpv};
@@ -5,26 +7,52 @@ use portage_atom::{Cpn, Cpv};
 use super::ebuild::Ebuild;
 use super::manifest::Manifest;
 use super::pkgmetadata::PkgMetadata;
-use super::util;
 use crate::error::Result;
+use crate::tree::{EntryKind, TreeSource, read_text};
 
 /// A package directory within a category
 ///
 /// For example, `dev-lang/rust/` contains ebuild files like `rust-1.75.0.ebuild`.
 ///
 /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Package {
     cpn: Cpn,
     path: Utf8PathBuf,
+    tree: Arc<dyn TreeSource>,
+}
+
+impl std::fmt::Debug for Package {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Package")
+            .field("cpn", &self.cpn)
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Package {
-    pub(crate) fn new(category: &str, name: &str, path: Utf8PathBuf) -> Self {
+    /// `path` is the checkout's directory for the package; reads go through `tree`
+    pub(crate) fn new(
+        category: &str,
+        name: &str,
+        path: Utf8PathBuf,
+        tree: Arc<dyn TreeSource>,
+    ) -> Self {
         Self {
             cpn: Cpn::new(category, name),
             path,
+            tree,
         }
+    }
+
+    /// `cat/pkg/<file>`, repo-relative
+    fn rel(&self, file: &str) -> Utf8PathBuf {
+        Utf8PathBuf::from(format!("{}/{}/{file}", self.cpn.category, self.cpn.package))
+    }
+
+    fn is_file(&self, file: &str) -> bool {
+        matches!(self.tree.kind(&self.rel(file)), Ok(Some(EntryKind::File)))
     }
 
     /// The category/package name atom
@@ -52,28 +80,24 @@ impl Package {
     /// Parses each `*.ebuild` filename into a [`Cpv`] by stripping the `.ebuild`
     /// extension and parsing `category/stem` as a versioned package atom.
     pub fn ebuilds(&self) -> Result<Vec<Ebuild>> {
-        let entries = match std::fs::read_dir(&self.path) {
-            Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(util::io_err(self.path.as_std_path(), e)),
-        };
-
+        let dir = self.rel("");
+        let children = self
+            .tree
+            .list(&dir)
+            .map_err(|e| crate::repo::util::io_err(self.tree.display(&dir), e))?
+            .unwrap_or_default();
         let mut ebuilds = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| util::io_err(self.path.as_std_path(), e))?;
-            let path: Utf8PathBuf = match entry.path().try_into() {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            if let Some(name) = path.file_name()
-                && let Some(stem) = name.strip_suffix(".ebuild")
-            {
+        for (name, kind) in children {
+            if kind != EntryKind::File {
+                continue;
+            }
+            if let Some(stem) = name.strip_suffix(".ebuild") {
                 let mut cpv_str = String::with_capacity(self.cpn.category.len() + 1 + stem.len());
                 cpv_str.push_str(&self.cpn.category);
                 cpv_str.push('/');
                 cpv_str.push_str(stem);
                 if let Ok(cpv) = Cpv::parse(&cpv_str) {
-                    ebuilds.push(Ebuild::new(cpv, path));
+                    ebuilds.push(Ebuild::new(cpv, self.path.join(&name)));
                 }
             }
         }
@@ -89,34 +113,28 @@ impl Package {
         let cpv_str = format!("{}/{}-{version}", self.cpn.category, self.cpn.package);
         let cpv = Cpv::parse(&cpv_str)?;
         let filename = format!("{}-{version}.ebuild", self.cpn.package);
-        let path = self.path.join(&filename);
-        if path.is_file() {
-            Ok(Some(Ebuild::new(cpv, path)))
-        } else {
-            Ok(None)
-        }
+        Ok(self
+            .is_file(&filename)
+            .then(|| Ebuild::new(cpv, self.path.join(&filename))))
     }
 
     /// Whether a `Manifest` file exists (cheap existence check)
     pub fn has_manifest(&self) -> bool {
-        self.path.join("Manifest").is_file()
+        self.is_file("Manifest")
     }
 
     /// Parse the `Manifest` file for this package
     ///
     /// Returns `Ok(None)` if no `Manifest` file exists.
     pub fn manifest(&self) -> Result<Option<Manifest>> {
-        let path = self.path.join("Manifest");
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => Manifest::parse(&contents).map(Some),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(util::io_err(path.as_std_path(), e)),
-        }
+        read_text(&*self.tree, self.rel("Manifest").as_str())?
+            .map(|text| Manifest::parse(&text))
+            .transpose()
     }
 
     /// Whether a `metadata.xml` file exists (cheap existence check)
     pub fn has_metadata_xml(&self) -> bool {
-        self.path.join("metadata.xml").is_file()
+        self.is_file("metadata.xml")
     }
 
     /// Parse the `metadata.xml` file for this package
@@ -125,12 +143,9 @@ impl Package {
     ///
     /// See [PMS Appendix A](https://projects.gentoo.org/pms/9/pms.html#metadata-xml).
     pub fn metadata_xml(&self) -> Result<Option<PkgMetadata>> {
-        let path = self.path.join("metadata.xml");
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => PkgMetadata::parse(&contents).map(Some),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(util::io_err(path.as_std_path(), e)),
-        }
+        read_text(&*self.tree, self.rel("metadata.xml").as_str())?
+            .map(|text| PkgMetadata::parse(&text))
+            .transpose()
     }
 }
 
@@ -142,7 +157,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let pkg_dir = tmp.path().join(category).join(name);
         std::fs::create_dir_all(&pkg_dir).unwrap();
-        let pkg = Package::new(category, name, pkg_dir.try_into().unwrap());
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let tree = Arc::new(crate::tree::FsTree::new(root));
+        let pkg = Package::new(category, name, pkg_dir.try_into().unwrap(), tree);
         (tmp, pkg)
     }
 

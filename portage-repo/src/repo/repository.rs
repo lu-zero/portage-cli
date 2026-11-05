@@ -13,7 +13,9 @@ use portage_metadata::{CacheEntry, Eapi};
 use super::category::Categories;
 use super::ebuild::Ebuild;
 use crate::metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
-use crate::tree::{EntryKind, EntrySource, FsEntries, FsTree, TreeSource};
+use crate::tree::{
+    EntrySource, FsEntries, FsTree, TreeSource, content_lines, read_text, tree_lines, tree_names,
+};
 
 type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
 
@@ -485,6 +487,11 @@ impl Repository {
         self.entry_source.entries(self).await
     }
 
+    /// Where the repository's files are read from
+    pub(crate) fn tree(&self) -> &dyn TreeSource {
+        &*self.tree
+    }
+
     /// Absolute path to the repository root
     pub fn path(&self) -> &Utf8Path {
         &self.path
@@ -601,10 +608,7 @@ impl Repository {
     ///
     /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn categories(&self) -> Categories {
-        Categories::new(
-            self.path.join("profiles").join("categories"),
-            self.path.clone(),
-        )
+        Categories::new(self.path.clone(), self.tree.clone())
     }
 
     /// List all ebuilds in the repository using parallel directory walking
@@ -660,12 +664,8 @@ impl Repository {
 
     /// Look up a single category by name
     pub fn category(&self, name: &str) -> Option<Category> {
-        let cat_path: Utf8PathBuf = self.path.join(name);
-        if cat_path.is_dir() {
-            Some(Category::new(name.to_string(), cat_path))
-        } else {
-            None
-        }
+        let cat = Category::new(name.to_string(), self.path.join(name), self.tree.clone());
+        cat.exists().then_some(cat)
     }
 
     /// Look up the ebuild for an exact, already-known `Cpv` — three stats
@@ -1036,7 +1036,12 @@ impl Repository {
     /// Combines global (`use.desc`) and package-local (`use.local.desc`)
     /// USE flag descriptions into an indexed structure with O(log n) lookup.
     pub fn use_db(&self) -> Result<crate::UseDb> {
-        crate::UseDb::load(&self.path)
+        let use_desc = read_text(&*self.tree, "profiles/use.desc")?;
+        let use_local_desc = read_text(&*self.tree, "profiles/use.local.desc")?;
+        Ok(crate::UseDb::parse(
+            use_desc.as_deref().unwrap_or_default(),
+            use_local_desc.as_deref().unwrap_or_default(),
+        ))
     }
 
     /// Parse per-package USE flag descriptions from `profiles/use.local.desc`
@@ -1095,71 +1100,6 @@ fn parse_desc_lines(lines: Vec<String>) -> Vec<(String, String)> {
             Some((flag.to_string(), desc.to_string()))
         })
         .collect()
-}
-
-/// A file's text; `None` when it does not exist
-fn read_text(tree: &dyn TreeSource, rel: &str) -> Result<Option<String>> {
-    let rel = Utf8Path::new(rel);
-    let Some(bytes) = tree
-        .read(rel)
-        .map_err(|e| util::io_err(tree.display(rel), e))?
-    else {
-        return Ok(None);
-    };
-    String::from_utf8(bytes).map(Some).map_err(|e| {
-        util::io_err(
-            tree.display(rel),
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e),
-        )
-    })
-}
-
-/// Trimmed lines that are neither blank nor comments
-fn content_lines(text: &str) -> impl Iterator<Item = &str> {
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-}
-
-/// [`util::read_lines`] over a tree: a file, or a directory of files read in name order
-fn tree_lines(tree: &dyn TreeSource, rel: &str) -> Result<Vec<String>> {
-    if let Some(text) = read_text(tree, rel)? {
-        return Ok(content_lines(&text).map(String::from).collect());
-    }
-    let path = Utf8Path::new(rel);
-    let Some(children) = tree
-        .list(path)
-        .map_err(|e| util::io_err(tree.display(path), e))?
-    else {
-        return Ok(Vec::new());
-    };
-    let mut names: Vec<String> = children
-        .into_iter()
-        .filter(|(name, kind)| *kind == EntryKind::File && util::config_basename_included(name))
-        .map(|(name, _)| name)
-        .collect();
-    names.sort();
-    let mut out = Vec::new();
-    for name in names {
-        if let Some(text) = read_text(tree, path.join(name).as_str())? {
-            out.extend(content_lines(&text).map(String::from));
-        }
-    }
-    Ok(out)
-}
-
-/// Names under `rel`, skipping dotfiles; empty when `rel` is missing
-fn tree_names(tree: &dyn TreeSource, rel: &str) -> Result<Vec<(String, EntryKind)>> {
-    let path = Utf8Path::new(rel);
-    let mut names: Vec<(String, EntryKind)> = tree
-        .list(path)
-        .map_err(|e| util::io_err(tree.display(path), e))?
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|(name, _)| !name.starts_with('.'))
-        .collect();
-    names.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-    Ok(names)
 }
 
 #[cfg(test)]
