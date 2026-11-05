@@ -568,7 +568,7 @@ async fn toolchain_versions(
         .chain(ALWAYS_SHOW_COMPILERS)
         .map(|s| s.to_string())
         .collect();
-    if let Ok(content) = std::fs::read_to_string(repo.path().join("profiles/info_pkgs")) {
+    for (_, content) in repo.file("profiles/info_pkgs").texts() {
         for line in content.lines() {
             let line = line.trim();
             if !line.is_empty() && !line.starts_with('#') {

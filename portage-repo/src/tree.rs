@@ -143,6 +143,11 @@ impl TreeFile {
         TreeFile::new(Arc::new(FsTree::new(dir)), rel)
     }
 
+    /// Whether it is a directory
+    pub fn is_dir(&self) -> bool {
+        matches!(self.tree.kind(&self.rel), Ok(Some(EntryKind::Dir)))
+    }
+
     /// The texts it holds, each with the name to show for it: the file's, or those of the files
     /// in the directory form in name order (dotfiles and `~` backups skipped); missing or
     /// unreadable files are left out
