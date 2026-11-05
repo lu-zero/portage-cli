@@ -7,13 +7,45 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use portage_repo::{RepoSet, Repository, Result};
+use portage_repo::{RepoSet, Repository, RepositoryBuilder, Result};
+
+/// The builder every em repository starts from
+fn builder(path: &Path) -> RepositoryBuilder {
+    let builder = Repository::builder().user_cache_root(crate::xdg::md5_cache_root());
+    #[cfg(feature = "redb")]
+    let builder = with_tree_db(builder, path);
+    #[cfg(not(feature = "redb"))]
+    let _ = path;
+    builder
+}
+
+/// Read the tree from `<location>.redb` when it exists (experimental)
+#[cfg(feature = "redb")]
+fn with_tree_db(builder: RepositoryBuilder, path: &Path) -> RepositoryBuilder {
+    let db = PathBuf::from(format!("{}.redb", path.display()));
+    if !db.is_file() {
+        return builder;
+    }
+    let Ok(db) = camino::Utf8PathBuf::from_path_buf(db) else {
+        return builder;
+    };
+    match portage_repo::tree::redb::RedbTree::open(db.clone()) {
+        Ok(tree) => {
+            tracing::debug!("reading {} from {db}", path.display());
+            let tree = Arc::new(tree);
+            builder.storage(tree.clone(), tree)
+        }
+        Err(e) => {
+            crate::style::warn_line!("ignoring {db}: {e}");
+            builder
+        }
+    }
+}
 
 /// Open a tree with secondary at `$XDG_CACHE_HOME/em/md5-cache/<repo-name>`
 pub fn open(path: impl Into<PathBuf>) -> Result<Repository> {
-    Repository::builder()
-        .user_cache_root(crate::xdg::md5_cache_root())
-        .open(path)
+    let path = path.into();
+    builder(&path).open(path)
 }
 
 /// Open a tree and its masters (owned by the returned `Repository`, see
@@ -24,9 +56,8 @@ pub fn open_with_masters(
     masters_override: Option<&[String]>,
     default_master: Option<&str>,
 ) -> Result<Repository> {
-    Repository::builder()
-        .user_cache_root(crate::xdg::md5_cache_root())
-        .open_with_masters(path, repos_dir, masters_override, default_master)
+    let path = path.into();
+    builder(&path).open_with_masters(path, repos_dir, masters_override, default_master)
 }
 
 /// The full priority-ordered [`RepoSet`] for this invocation: `main` plus
