@@ -31,7 +31,7 @@ fn bench_repo_load(c: &mut Criterion) {
     group.sample_size(10);
     // No sidecar store, so no gap index: every call walks and stats every ebuild.
     group.bench_function("repo_entries", |b| {
-        b.iter(|| {
+        b.iter_with_large_drop(|| {
             let entries = runtime.block_on(repo_entries(&repo));
             assert_eq!(entries.len(), entry_count);
             std::hint::black_box(entries)
@@ -48,12 +48,47 @@ fn bench_repo_load(c: &mut Criterion) {
         .expect("failed to open repository");
     assert_eq!(runtime.block_on(repo_entries(&indexed)).len(), entry_count);
     group.bench_function("repo_entries_indexed", |b| {
-        b.iter(|| {
+        b.iter_with_large_drop(|| {
             let entries = runtime.block_on(repo_entries(&indexed));
             assert_eq!(entries.len(), entry_count);
             std::hint::black_box(entries)
         })
     });
+
+    // Many small reads through the tree: one per profiles/updates file.
+    group.bench_function("profile_updates", |b| {
+        b.iter(|| std::hint::black_box(repo.profile_updates().expect("updates")))
+    });
+
+    #[cfg(feature = "redb")]
+    if let Ok(db) = std::env::var("GENTOO_REDB") {
+        let open_redb = || {
+            let tree = std::sync::Arc::new(
+                portage_repo::tree::redb::RedbTree::open(db.as_str()).expect("redb"),
+            );
+            Repository::builder()
+                .in_memory_cache()
+                .storage(tree.clone(), tree)
+                .open(&repo_path)
+                .expect("failed to open repository")
+        };
+        let redb = open_redb();
+        // The database holds the checkout's own commit, so both answer the same entries.
+        assert_eq!(runtime.block_on(redb.entries()).len(), entry_count);
+        group.bench_function("redb_entries", |b| {
+            b.iter_with_large_drop(|| {
+                let entries = runtime.block_on(redb.entries());
+                assert_eq!(entries.len(), entry_count);
+                std::hint::black_box(entries)
+            })
+        });
+        group.bench_function("redb_profile_updates", |b| {
+            b.iter(|| std::hint::black_box(redb.profile_updates().expect("updates")))
+        });
+        group.bench_function("redb_open", |b| {
+            b.iter(|| std::hint::black_box(open_redb()))
+        });
+    }
     group.finish();
 }
 

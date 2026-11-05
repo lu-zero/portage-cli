@@ -12,6 +12,9 @@ use portage_metadata::CacheEntry;
 
 use crate::repo::Repository;
 
+#[cfg(feature = "redb")]
+pub mod redb;
+
 /// What a directory child is
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
