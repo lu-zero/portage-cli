@@ -1787,7 +1787,7 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RawRepoData {
 
     for source_repo in set.iter() {
         let repo_name = source_repo.name();
-        for (cpv, entry) in portage_repo::repo_entries(source_repo).await {
+        for (cpv, entry) in source_repo.entries().await {
             if !seen.insert((cpv.clone(), repo_name)) {
                 continue;
             }
