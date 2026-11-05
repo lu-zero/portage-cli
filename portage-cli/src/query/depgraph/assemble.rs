@@ -205,7 +205,7 @@ pub(super) fn assemble(
     // Tree — Tree renders the same per-package row, so it needs the same
     // sizes and the same `PrettyCtx`.
     let sizes = if verbose >= 1 {
-        download_size::compute(set.main(), &distdir, &data, &order, &final_policy, &ceded)
+        download_size::compute(&set, &distdir, &data, &order, &final_policy, &ceded)
     } else {
         HashMap::new()
     };
