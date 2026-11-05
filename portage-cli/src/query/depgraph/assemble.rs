@@ -563,7 +563,7 @@ pub(super) fn assemble(
 
     metrics.log(resolve_secs);
 
-    Ok(DepgraphOutcome {
+    let outcome = DepgraphOutcome {
         // Non-zero when the displayed plan is not directly installable: USE
         // changes, unmask/keyword/license, a PMS 8.3.2 hard blocker conflict,
         // or a PMS 7.3.4 unsatisfied REQUIRED_USE.
@@ -586,5 +586,9 @@ pub(super) fn assemble(
         unmerges,
         #[cfg(test)]
         masked_installed,
-    })
+    };
+    // Freeing the loaded tree and the solver's package table takes ~0.1 s on ::gentoo, and em
+    // usually exits right after: free them off the caller's path.
+    std::thread::spawn(move || drop((data, provider)));
+    Ok(outcome)
 }
