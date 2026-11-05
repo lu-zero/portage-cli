@@ -201,6 +201,31 @@ impl TreeSource for RedbTree {
     fn display(&self, rel: &Utf8Path) -> String {
         format!("redb://{}?{rel}", self.file)
     }
+
+    fn ebuild_index(&self) -> Option<io::Result<Vec<Utf8PathBuf>>> {
+        Some(self.ebuild_paths())
+    }
+}
+
+impl RedbTree {
+    /// `cat/pkg/pkg-ver.ebuild` for every key of the `ebuilds` table (`cat/pkg-ver`)
+    fn ebuild_paths(&self) -> io::Result<Vec<Utf8PathBuf>> {
+        let txn = self.db.begin_read().map_err(db_err)?;
+        let table = txn.open_table(EBUILDS).map_err(db_err)?;
+        let mut out = Vec::new();
+        for row in table.iter().map_err(db_err)? {
+            let (key, _) = row.map_err(db_err)?;
+            let Ok(cpv) = Cpv::parse(key.value()) else {
+                continue;
+            };
+            let (cat, pf) = key.value().split_once('/').unwrap_or_default();
+            out.push(Utf8PathBuf::from(format!(
+                "{cat}/{}/{pf}.ebuild",
+                cpv.cpn.package
+            )));
+        }
+        Ok(out)
+    }
 }
 
 /// `<location>.redb`
@@ -230,24 +255,26 @@ pub(crate) fn tree_at(location: &Utf8Path) -> Option<Arc<dyn TreeSource>> {
 
 /// The tree in `<location>.redb` and, when present, the entries in `<location>.md5-cache.redb`
 /// (the checkout's otherwise); `None` when there is no tree database or it cannot be opened
-pub(crate) fn storage_at(
-    location: &Utf8Path,
-) -> Option<(Arc<dyn TreeSource>, Arc<dyn EntrySource>)> {
+pub(crate) fn storage_at(location: &Utf8Path) -> Option<super::Storage> {
     let tree = open_tree(location)?;
     let cache_db = tree_file(location).with_extension("md5-cache.redb");
-    let entries: Arc<dyn EntrySource> = if cache_db.is_file() {
+    let mut storage = super::Storage::checkout(location);
+    if cache_db.is_file() {
         match RedbCache::open(cache_db.clone(), Arc::clone(&tree)) {
-            Ok(cache) => Arc::new(cache),
+            Ok(cache) => {
+                let cache = Arc::new(cache);
+                storage.entries = cache.clone();
+                storage.primary = cache;
+            }
             Err(e) => {
                 tracing::warn!("ignoring {cache_db}: {e}");
                 return None;
             }
         }
-    } else {
-        Arc::new(super::FsEntries)
-    };
+    }
     tracing::debug!("reading {location} from {}", tree.file);
-    Some((tree, entries))
+    storage.tree = tree;
+    Some(storage)
 }
 
 /// The md5-cache database of a [`RedbTree`]
@@ -277,6 +304,33 @@ impl EntrySource for RedbCache {
                 }
             }
         })
+    }
+}
+
+impl crate::metadata_cache::MetadataCache for RedbCache {
+    fn get(&self, cpv: &Cpv) -> crate::Result<Option<CacheEntry>> {
+        let key = format!("{}/{}-{}", cpv.cpn.category, cpv.cpn.package, cpv.version);
+        let shown = || format!("{}?{key}", self.file);
+        let io = |e: io::Error| crate::repo::util::io_err(shown(), e);
+        let txn = self.db.begin_read().map_err(db_err).map_err(io)?;
+        let table = txn.open_table(CACHE_ENTRIES).map_err(db_err).map_err(io)?;
+        let Some(stored) = table.get(key.as_str()).map_err(db_err).map_err(io)? else {
+            return Ok(None);
+        };
+        let (_, data) = decode(stored.value()).map_err(io)?;
+        let text = String::from_utf8(data).map_err(|e| io(db_err(e)))?;
+        Ok(Some(CacheEntry::parse(&text)?))
+    }
+
+    fn put(&self, _cpv: &Cpv, _entry: &CacheEntry) -> crate::Result<()> {
+        Err(crate::repo::util::io_err(
+            self.file.as_str(),
+            io::Error::new(io::ErrorKind::ReadOnlyFilesystem, "written only by sync"),
+        ))
+    }
+
+    fn is_populated(&self) -> bool {
+        true
     }
 }
 

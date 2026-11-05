@@ -12,6 +12,7 @@ use portage_atom::Cpv;
 use portage_metadata::CacheEntry;
 
 use crate::error::Result;
+use crate::metadata_cache::{DirMetadataCache, MetadataCache};
 use crate::repo::Repository;
 
 #[cfg(feature = "redb")]
@@ -36,6 +37,11 @@ pub trait TreeSource: Send + Sync {
     fn kind(&self, rel: &Utf8Path) -> io::Result<Option<EntryKind>>;
     /// How a file is named to the user: a path, or a URI into a database
     fn display(&self, rel: &Utf8Path) -> String;
+    /// Every `cat/pkg/*.ebuild` path, when the backend keeps an index of them; `None` means
+    /// walk the tree instead
+    fn ebuild_index(&self) -> Option<io::Result<Vec<Utf8PathBuf>>> {
+        None
+    }
 }
 
 /// How a backend produces the valid metadata entries of a repository
@@ -48,12 +54,34 @@ pub trait EntrySource: Send + Sync {
 ///
 /// With the `redb` feature, `<location>.redb` holds the tree and `<location>.md5-cache.redb` the
 /// entries, when they exist; otherwise the checkout at `location` serves both.
-pub(crate) fn storage_at(location: &Utf8Path) -> (Arc<dyn TreeSource>, Arc<dyn EntrySource>) {
+pub(crate) fn storage_at(location: &Utf8Path) -> Storage {
     #[cfg(feature = "redb")]
     if let Some(found) = redb::storage_at(location) {
         return found;
     }
-    (Arc::new(FsTree::new(location)), Arc::new(FsEntries))
+    Storage::checkout(location)
+}
+
+/// Where a repository's files, entries and primary metadata cache come from
+#[derive(Clone)]
+pub struct Storage {
+    /// Files by repo-relative path
+    pub tree: Arc<dyn TreeSource>,
+    /// The valid metadata entries
+    pub entries: Arc<dyn EntrySource>,
+    /// The repository's own metadata cache, read by [`Repository::cache_entry`]
+    pub primary: Arc<dyn MetadataCache>,
+}
+
+impl Storage {
+    /// A checkout at `location`, with its md5-cache directory
+    pub fn checkout(location: &Utf8Path) -> Self {
+        Storage {
+            tree: Arc::new(FsTree::new(location)),
+            entries: Arc::new(FsEntries),
+            primary: Arc::new(DirMetadataCache::new(location.join("metadata/md5-cache"))),
+        }
+    }
 }
 
 /// The tree of the repository at `location`, as [`storage_at`] finds it

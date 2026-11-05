@@ -67,9 +67,14 @@ fn bench_repo_load(c: &mut Criterion) {
         let open_redb = || {
             let tree = std::sync::Arc::new(RedbTree::open(db.as_str()).expect("redb"));
             let cache = RedbCache::open(cache_db.as_str(), tree.clone()).expect("cache redb");
+            let cache = std::sync::Arc::new(cache);
+            let mut storage = portage_repo::tree::Storage::checkout(repo_path.as_str().into());
+            storage.tree = tree;
+            storage.entries = cache.clone();
+            storage.primary = cache;
             Repository::builder()
                 .in_memory_cache()
-                .storage(tree, std::sync::Arc::new(cache))
+                .storage(storage)
                 .open(&repo_path)
                 .expect("failed to open repository")
         };

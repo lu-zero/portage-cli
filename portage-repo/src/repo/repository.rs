@@ -13,7 +13,9 @@ use portage_metadata::{CacheEntry, Eapi};
 use super::category::Categories;
 use super::ebuild::Ebuild;
 use crate::metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
-use crate::tree::{EntrySource, TreeSource, content_lines, read_text, tree_lines, tree_names};
+use crate::tree::{
+    EntrySource, Storage, TreeSource, content_lines, read_text, tree_lines, tree_names,
+};
 
 type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
 
@@ -39,9 +41,15 @@ type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
 /// # }
 /// ```
 pub struct Ebuilds {
-    walker: WalkDir,
+    found: Found,
     source: EbuildSource,
     filter: Option<Arc<EbuildFilter>>,
+}
+
+/// How the ebuilds are found: walking the checkout, or from the backend's index
+enum Found {
+    Walk(WalkDir),
+    Listed(Vec<Ebuild>),
 }
 
 /// The repository the walked ebuilds belong to: its checkout root and its tree
@@ -56,15 +64,20 @@ struct EbuildSource {
 /// Holds the jwalk `DirEntryIter` and converts each entry
 /// to an [`Ebuild`] on the fly, applying the optional filter.
 pub struct EbuildsIter {
-    inner: jwalk::DirEntryIter<((), ())>,
+    inner: FoundIter,
     source: EbuildSource,
     filter: Option<Arc<EbuildFilter>>,
 }
 
+enum FoundIter {
+    Walk(jwalk::DirEntryIter<((), ())>),
+    Listed(std::vec::IntoIter<Ebuild>),
+}
+
 impl Ebuilds {
-    fn new(walker: WalkDir, source: EbuildSource) -> Self {
+    fn new(found: Found, source: EbuildSource) -> Self {
         Self {
-            walker,
+            found,
             source,
             filter: None,
         }
@@ -112,8 +125,12 @@ impl IntoIterator for Ebuilds {
     type IntoIter = EbuildsIter;
 
     fn into_iter(self) -> EbuildsIter {
+        let inner = match self.found {
+            Found::Walk(walker) => FoundIter::Walk(walker.into_iter()),
+            Found::Listed(ebuilds) => FoundIter::Listed(ebuilds.into_iter()),
+        };
         EbuildsIter {
-            inner: self.walker.into_iter(),
+            inner,
             source: self.source,
             filter: self.filter,
         }
@@ -125,7 +142,10 @@ impl Iterator for EbuildsIter {
 
     fn next(&mut self) -> Option<Ebuild> {
         loop {
-            let ebuild = dir_entry_to_ebuild(self.inner.next()?, &self.source)?;
+            let ebuild = match &mut self.inner {
+                FoundIter::Walk(walk) => dir_entry_to_ebuild(walk.next()?, &self.source)?,
+                FoundIter::Listed(listed) => listed.next()?,
+            };
             match &self.filter {
                 Some(f) if !f(&ebuild) => continue,
                 _ => return Some(ebuild),
@@ -299,9 +319,6 @@ pub struct RepositoryBuilder {
     storage: Option<Storage>,
 }
 
-/// Where a repository's files and entries come from, when not its checkout
-type Storage = (Arc<dyn TreeSource>, Arc<dyn EntrySource>);
-
 impl RepositoryBuilder {
     /// In-memory secondary (tests / ephemeral). Always writable, not durable
     pub fn in_memory_cache(mut self) -> Self {
@@ -325,11 +342,11 @@ impl RepositoryBuilder {
         self
     }
 
-    /// Read the tree and its entries from `tree` and `entries` instead of the checkout
+    /// Read the tree, entries and primary cache from `storage` instead of the checkout
     ///
     /// Profiles, `em regen` and builds still use the checkout at the path given to `open`.
-    pub fn storage(mut self, tree: Arc<dyn TreeSource>, entries: Arc<dyn EntrySource>) -> Self {
-        self.storage = Some((tree, entries));
+    pub fn storage(mut self, storage: Storage) -> Self {
+        self.storage = Some(storage);
         self
     }
 
@@ -400,7 +417,11 @@ impl Repository {
         if storage.is_none() && !crate::tree::is_repository(&path) && !path.is_dir() {
             return Err(Error::InvalidRepository(path.into_std_path_buf()));
         }
-        let (tree, entry_source) = storage.unwrap_or_else(|| crate::tree::storage_at(&path));
+        let Storage {
+            tree,
+            entries: entry_source,
+            primary,
+        } = storage.unwrap_or_else(|| crate::tree::storage_at(&path));
         let layout = match read_text(&*tree, "metadata/layout.conf")? {
             Some(text) => LayoutConf::parse(&text)?,
             None => {
@@ -425,9 +446,6 @@ impl Repository {
             .map(|s| Arch::intern(&s))
             .collect();
 
-        let primary: Arc<dyn MetadataCache> = Arc::new(DirMetadataCache::new(
-            path.join("metadata").join("md5-cache"),
-        ));
         let secondary_dir = match &secondary_spec {
             SecondarySpec::UserRoot(root) => Some(root.join(&name)),
             SecondarySpec::Memory | SecondarySpec::Custom(_) => None,
@@ -652,6 +670,31 @@ impl Repository {
         // Follow symlinks: overlays like crossdev's symlink whole package
         // directories to the host repo's ebuilds (the category comes from the
         // logical path, so cross-*/gcc stays cross-*/gcc).
+        let source = EbuildSource {
+            root: self.path.clone(),
+            tree: self.tree.clone(),
+        };
+        if let Some(index) = self.tree.ebuild_index() {
+            let paths = index.map_err(|e| util::io_err(self.tree.display(Utf8Path::new("")), e))?;
+            let listed = paths
+                .into_iter()
+                .filter_map(|rel| {
+                    let cat = rel.components().next()?.as_str();
+                    if !categories.contains(cat) {
+                        return None;
+                    }
+                    let stem = rel.file_stem()?;
+                    let cpv = Cpv::parse(&format!("{cat}/{stem}")).ok()?;
+                    Some(Ebuild::in_tree(
+                        cpv,
+                        self.path.join(&rel),
+                        self.tree.clone(),
+                        rel,
+                    ))
+                })
+                .collect();
+            return Ok(Ebuilds::new(Found::Listed(listed), source));
+        }
         let walker = WalkDir::new(&self.path)
             .follow_links(true)
             .min_depth(3)
@@ -671,13 +714,7 @@ impl Repository {
                 });
             });
 
-        Ok(Ebuilds::new(
-            walker,
-            EbuildSource {
-                root: self.path.clone(),
-                tree: self.tree.clone(),
-            },
-        ))
+        Ok(Ebuilds::new(Found::Walk(walker), source))
     }
 
     /// Look up a single category by name
