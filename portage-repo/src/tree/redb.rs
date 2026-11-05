@@ -199,7 +199,11 @@ impl TreeSource for RedbTree {
     }
 
     fn display(&self, rel: &Utf8Path) -> String {
-        format!("redb://{}?{rel}", self.file)
+        format!(
+            "redb://{}?{}",
+            uri_part(self.file.as_str()),
+            uri_part(rel.as_str())
+        )
     }
 
     fn ebuild_index(&self) -> Option<io::Result<Vec<Utf8PathBuf>>> {
@@ -226,6 +230,27 @@ impl RedbTree {
         }
         Ok(out)
     }
+}
+
+/// `text` for a URI: `%`, `#`, spaces and control characters
+/// percent-encoded, everything else (`+` included) as-is
+fn uri_part(text: &str) -> std::borrow::Cow<'_, str> {
+    let encode = |c: char| matches!(c, '%' | '#' | ' ') || c.is_control();
+    if !text.chars().any(encode) {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        if encode(c) {
+            let mut buf = [0u8; 4];
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.into()
 }
 
 /// `<location>.redb`
@@ -545,5 +570,16 @@ impl RedbCache {
             .into_iter()
             .filter(|(_, entry)| repo.is_fresh_cached(entry, &mut digests))
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uri_parts_encode_only_what_would_break_the_uri() {
+        assert_eq!(uri_part("sys-apps/gtk+-3.ebuild"), "sys-apps/gtk+-3.ebuild");
+        assert_eq!(uri_part("files/a b#1%.patch"), "files/a%20b%231%25.patch");
     }
 }
