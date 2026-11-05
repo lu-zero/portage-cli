@@ -1861,4 +1861,6 @@ tracing subscriber's default rendering.
   see `gix-vs-git-scale-crossover-2026-07-29.md`'s "Remaining gaps" for
   what would actually settle it (gix-side reset/checkout cost via `em`'s
   own code, warm resync over real network).
+  **2026-11-05:** gaps and status per gix release now tracked in
+  `docs/design/sync-backends.md`.
 

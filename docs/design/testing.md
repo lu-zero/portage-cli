@@ -239,8 +239,8 @@ from *some* source gix's ref/reflog-write machinery hard-errors
 quietly falls back to `$(whoami)@$(hostname)`. Reproduces 100% of the time
 with no git identity resolvable from any source — this project's CI runner,
 never a dev machine with `~/.gitconfig`. `em`'s optional `--features
-sync-gix` backend would hit this identically on a host that never ran `git
-config --global user.name`, tracked separately from this test-only fix.
+sync-gix` backend sets gix's generic fallback before its own ref edits, so
+production is unaffected (see [sync-backends.md](./sync-backends.md)).
 
 ## Bumping brush (routine maintenance)
 

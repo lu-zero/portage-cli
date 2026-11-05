@@ -23,7 +23,7 @@
 //! ## Two `git_cmd` steps with no gix counterpart
 //!
 //! **`git gc --auto` after a shallow fetch (bug #599008).** Deliberately not
-//! ported: gitoxide 0.83 ships no repacking, pruning or maintenance API at all
+//! ported: gitoxide (as of 0.90) ships no repacking, pruning or maintenance API at all
 //! (`gix::Repository` has no `gc`/`maintenance`/`prune` entry point), so there
 //! is nothing to call. Shelling out to `git gc` here would defeat the point of
 //! a pure-gix backend, and gix's own fetch already avoids the specific hazard
