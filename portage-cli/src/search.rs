@@ -153,11 +153,10 @@ async fn run_desc(
         .filter_map(|(cpv, r)| r.ok().flatten().map(|info| (cpv, info)))
         .collect();
 
+    // By name: interned values order by interning sequence, which the parallel read makes vary.
     entries.sort_by(|(a, _), (b, _)| {
-        a.cpn
-            .category
-            .cmp(&b.cpn.category)
-            .then_with(|| a.cpn.package.cmp(&b.cpn.package))
+        (a.cpn.category.as_str(), a.cpn.package.as_str())
+            .cmp(&(b.cpn.category.as_str(), b.cpn.package.as_str()))
     });
 
     let mut out = anstream::stdout();
