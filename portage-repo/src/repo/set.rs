@@ -505,6 +505,8 @@ mod tests {
             auto_sync: false,
             volatile: None,
             priority: None,
+            sync_git_verify_commit_signature: false,
+            sync_openpgp_key_path: None,
         };
 
         let mut set = RepoSet::single(main);
@@ -555,6 +557,8 @@ mod tests {
             auto_sync: false,
             volatile: None,
             priority: None,
+            sync_git_verify_commit_signature: false,
+            sync_openpgp_key_path: None,
         };
 
         let mut set = RepoSet::single(main);

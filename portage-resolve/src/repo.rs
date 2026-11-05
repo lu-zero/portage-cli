@@ -3420,6 +3420,8 @@ mod tests {
             auto_sync: false,
             volatile: None,
             priority: None,
+            sync_git_verify_commit_signature: false,
+            sync_openpgp_key_path: None,
         };
         let mut set = portage_repo::RepoSet::single(repo);
         set.set_aliases(vec![alias_entry]);
@@ -3506,6 +3508,8 @@ mod tests {
             auto_sync: false,
             volatile: None,
             priority: None,
+            sync_git_verify_commit_signature: false,
+            sync_openpgp_key_path: None,
         };
 
         let mut set = portage_repo::RepoSet::single(repo);

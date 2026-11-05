@@ -32,6 +32,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 use camino::Utf8Path;
 
+use super::verify::CommitVerifier;
 use super::{GitBackend, info_line, warn_line};
 
 pub(super) struct GitCmdBackend;
@@ -49,17 +50,30 @@ impl GitBackend for GitCmdBackend {
         }
     }
 
-    fn sync(&self, path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
+    fn sync(
+        &self,
+        path: &Utf8Path,
+        uri: &str,
+        volatile: bool,
+        quiet: bool,
+        verify: Option<&CommitVerifier>,
+    ) -> Result<bool> {
         if path.join(".git").is_dir() {
-            git_update(path.as_std_path(), uri, volatile, quiet)
+            git_update(path.as_std_path(), uri, volatile, quiet, verify)
         } else {
-            git_clone(path, uri, quiet)?;
+            git_clone(path, uri, quiet, verify)?;
             Ok(true)
         }
     }
 }
 
-fn git_clone(path: &Utf8Path, uri: &str, quiet: bool) -> Result<()> {
+/// Clone without a checkout, so nothing lands in the tree before `verify` accepts `HEAD`
+fn git_clone(
+    path: &Utf8Path,
+    uri: &str,
+    quiet: bool,
+    verify: Option<&CommitVerifier>,
+) -> Result<()> {
     let parent = path.parent().map(Utf8Path::as_std_path);
     if let Some(parent) = parent {
         std::fs::create_dir_all(parent).with_context(|| format!("creating parent of {path}"))?;
@@ -72,16 +86,48 @@ fn git_clone(path: &Utf8Path, uri: &str, quiet: bool) -> Result<()> {
     // directory, which `-C`/`git`'s own args do not cover.
     let cwd = parent.unwrap_or_else(|| Path::new("/"));
     let status = git_stdio(quiet, cwd)
-        .args(["clone", "--depth", "1", uri, path.as_str()])
+        .args(["clone", "--depth", "1", "--no-checkout", uri, path.as_str()])
         .status()
         .context("spawning git clone")?;
     if !status.success() {
         bail!("git clone failed with {status}");
     }
+    if let Some(verify) = verify {
+        let head = rev_parse(path.as_std_path(), "HEAD").context("resolving HEAD after clone")?;
+        verify.check(&commit_object(path.as_std_path(), &head)?, &head, quiet)?;
+    }
+    let st = git_stdio(quiet, path.as_std_path())
+        .args(["-C", path.as_str(), "reset", "--hard", "HEAD"])
+        .status()
+        .context("spawning git reset --hard")?;
+    if !st.success() {
+        bail!("git reset --hard after clone failed with {st}");
+    }
     Ok(())
 }
 
-fn git_update(path: &Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
+/// The raw object of commit `rev`
+fn commit_object(path: &Path, rev: &str) -> Result<Vec<u8>> {
+    let out = Command::new("git")
+        .current_dir(path)
+        .env("GIT_CEILING_DIRECTORIES", ceiling_string(path))
+        .args(["cat-file", "commit", rev])
+        .stderr(Stdio::inherit())
+        .output()
+        .with_context(|| format!("git cat-file commit {rev}"))?;
+    if !out.status.success() {
+        bail!("git cat-file commit {rev} failed with {}", out.status);
+    }
+    Ok(out.stdout)
+}
+
+fn git_update(
+    path: &Path,
+    uri: &str,
+    volatile: bool,
+    quiet: bool,
+    verify: Option<&CommitVerifier>,
+) -> Result<bool> {
     let path_s = path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("repo path is not valid UTF-8"))?;
@@ -157,6 +203,9 @@ fn git_update(path: &Path, uri: &str, volatile: bool, quiet: bool) -> Result<boo
         .or_else(|_| rev_parse(path, "FETCH_HEAD"))
         .context("resolving upstream tip after fetch")?;
     let head = rev_parse(path, "HEAD").context("resolving HEAD after fetch")?;
+    if let Some(verify) = verify {
+        verify.check(&commit_object(path, &tip)?, &tip, quiet)?;
+    }
 
     if head == tip {
         if !quiet {
@@ -377,7 +426,7 @@ mod tests {
         let _path = crate::test_support::path_lock();
         let f = fixture();
         let changed = GitCmdBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         assert!(changed);
         assert_eq!(
@@ -396,12 +445,12 @@ mod tests {
         let _path = crate::test_support::path_lock();
         let f = fixture();
         GitCmdBackend
-            .sync(&f.overlay, &f.remote_uri, true, true)
+            .sync(&f.overlay, &f.remote_uri, true, true, None)
             .unwrap();
         advance_remote(&f, "two\n");
 
         let changed = GitCmdBackend
-            .sync(&f.overlay, &f.remote_uri, true, true)
+            .sync(&f.overlay, &f.remote_uri, true, true, None)
             .expect("volatile re-sync over a shallow history must not fail");
         assert!(changed);
         assert_eq!(
@@ -415,7 +464,7 @@ mod tests {
         let _path = crate::test_support::path_lock();
         let f = fixture();
         GitCmdBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         advance_remote(&f, "two\n");
         // A file a prior shallow sync could plausibly have left behind,
@@ -424,7 +473,7 @@ mod tests {
         std::fs::write(f.overlay.join("orphan.txt"), "stale\n").unwrap();
 
         let changed = GitCmdBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         assert!(changed);
         assert_eq!(
@@ -439,10 +488,10 @@ mod tests {
         let _path = crate::test_support::path_lock();
         let f = fixture();
         GitCmdBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         let changed = GitCmdBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         assert!(!changed, "no upstream change: sync must report unchanged");
     }
@@ -464,7 +513,7 @@ mod tests {
 
         advance_remote(&f, "two\n");
         GitCmdBackend
-            .sync(&f.overlay, &f.remote_uri, true, true)
+            .sync(&f.overlay, &f.remote_uri, true, true, None)
             .unwrap();
 
         assert!(
@@ -482,7 +531,7 @@ mod tests {
         let _path = crate::test_support::path_lock();
         let f = fixture();
         GitCmdBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         assert_eq!(
             remote_url(f.overlay.as_std_path(), "origin").unwrap(),
@@ -505,12 +554,44 @@ mod tests {
         let mirror_uri = format!("file://{}", mirror.display());
 
         GitCmdBackend
-            .sync(&f.overlay, &mirror_uri, false, true)
+            .sync(&f.overlay, &mirror_uri, false, true, None)
             .unwrap();
         assert_eq!(
             remote_url(f.overlay.as_std_path(), "origin").unwrap(),
             mirror_uri,
             "origin must be realigned to the new sync-uri"
         );
+    }
+    // An unsigned tip is rejected before anything moves: the update keeps the old checkout.
+    #[test]
+    fn an_unverified_tip_leaves_the_checkout_alone() {
+        let _path = crate::test_support::path_lock();
+        let f = fixture();
+        let verifier = CommitVerifier::gentoo_for_tests();
+        GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
+            .unwrap();
+        advance_remote(&f, "two\n");
+        let err = GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, Some(&verifier))
+            .unwrap_err();
+        assert!(err.to_string().contains("no signature"), "{err:#}");
+        assert_eq!(
+            std::fs::read_to_string(f.overlay.join("a.txt")).unwrap(),
+            "one\n"
+        );
+    }
+
+    // A clone of an unsigned remote writes no worktree files.
+    #[test]
+    fn an_unverified_clone_is_not_checked_out() {
+        let _path = crate::test_support::path_lock();
+        let f = fixture();
+        let verifier = CommitVerifier::gentoo_for_tests();
+        let err = GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, Some(&verifier))
+            .unwrap_err();
+        assert!(err.to_string().contains("no signature"), "{err:#}");
+        assert!(!f.overlay.join("a.txt").exists());
     }
 }

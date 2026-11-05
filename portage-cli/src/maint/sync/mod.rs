@@ -22,6 +22,7 @@ mod git_cmd;
 #[cfg(feature = "sync-gix")]
 mod git_gix;
 mod rsync_cmd;
+mod verify;
 
 use std::io::Write;
 use std::path::Path;
@@ -184,8 +185,12 @@ async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
     let quiet = globals.quiet();
     let path_c = path.clone();
     let uri = sync_uri.to_string();
+    let verifier = match kind {
+        SyncKind::Git => verify::CommitVerifier::for_repo(entry)?,
+        SyncKind::Rsync => None,
+    };
     let changed = tokio::task::spawn_blocking(move || match kind {
-        SyncKind::Git => git_sync(&path_c, &uri, volatile, quiet),
+        SyncKind::Git => git_sync(&path_c, &uri, volatile, quiet, verifier.as_ref()),
         SyncKind::Rsync => rsync_cmd::sync(&path_c, &uri, quiet),
     })
     .await
@@ -221,14 +226,20 @@ fn git_pretend(path: &Utf8Path, uri: &str, volatile: bool) -> String {
     }
 }
 
-fn git_sync(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
+fn git_sync(
+    path: &Utf8Path,
+    uri: &str,
+    volatile: bool,
+    quiet: bool,
+    verify: Option<&verify::CommitVerifier>,
+) -> Result<bool> {
     #[cfg(feature = "sync-gix")]
     {
-        git_gix::GixBackend.sync(path, uri, volatile, quiet)
+        git_gix::GixBackend.sync(path, uri, volatile, quiet, verify)
     }
     #[cfg(not(feature = "sync-gix"))]
     {
-        git_cmd::GitCmdBackend.sync(path, uri, volatile, quiet)
+        git_cmd::GitCmdBackend.sync(path, uri, volatile, quiet, verify)
     }
 }
 
@@ -308,7 +319,15 @@ fn error_repo(name: &str, msg: &str) {
 /// Shared trait for git backends (command vs gix)
 pub(super) trait GitBackend {
     fn pretend(&self, path: &Utf8Path, uri: &str, volatile: bool) -> String;
-    fn sync(&self, path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool>;
+    /// Fetch and move the checkout to the new tip; `verify` checks that tip's signature first
+    fn sync(
+        &self,
+        path: &Utf8Path,
+        uri: &str,
+        volatile: bool,
+        quiet: bool,
+        verify: Option<&verify::CommitVerifier>,
+    ) -> Result<bool>;
 }
 
 #[cfg(test)]

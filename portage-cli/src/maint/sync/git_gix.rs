@@ -52,6 +52,7 @@ use camino::Utf8Path;
 use crate::gix_ext;
 use crate::gix_ext::{ProgressSession, ResetGuard};
 
+use super::verify::CommitVerifier;
 use super::{GitBackend, info_line, warn_line};
 
 pub(super) struct GixBackend;
@@ -69,8 +70,15 @@ impl GitBackend for GixBackend {
         }
     }
 
-    fn sync(&self, path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
-        git_sync(path, uri, volatile, quiet)
+    fn sync(
+        &self,
+        path: &Utf8Path,
+        uri: &str,
+        volatile: bool,
+        quiet: bool,
+        verify: Option<&CommitVerifier>,
+    ) -> Result<bool> {
+        git_sync(path, uri, volatile, quiet, verify)
     }
 }
 
@@ -78,18 +86,30 @@ fn sync_shallow() -> gix::remote::fetch::Shallow {
     gix::remote::fetch::Shallow::DepthAtRemote(NonZeroU32::new(1).expect("1"))
 }
 
-fn git_sync(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
+fn git_sync(
+    path: &Utf8Path,
+    uri: &str,
+    volatile: bool,
+    quiet: bool,
+    verify: Option<&CommitVerifier>,
+) -> Result<bool> {
     let url = gix::url::parse(uri).map_err(|e| anyhow::anyhow!("invalid sync-uri {uri}: {e}"))?;
 
     if path.join(".git").is_dir() || gix::open(path.as_std_path()).is_ok() {
-        git_update(path, uri, volatile, quiet)
+        git_update(path, uri, volatile, quiet, verify)
     } else {
-        git_clone(path, url, quiet)?;
+        git_clone(path, url, quiet, verify)?;
         Ok(true)
     }
 }
 
-fn git_clone(path: &Utf8Path, url: gix::Url, quiet: bool) -> Result<()> {
+/// Verify `HEAD` before the worktree is written; a rejected clone is dropped, and gix removes it
+fn git_clone(
+    path: &Utf8Path,
+    url: gix::Url,
+    quiet: bool,
+    verify: Option<&CommitVerifier>,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("creating parent of {path}"))?;
     }
@@ -103,13 +123,27 @@ fn git_clone(path: &Utf8Path, url: gix::Url, quiet: bool) -> Result<()> {
     let (mut checkout, _outcome) = prepare
         .fetch_then_checkout(progress.child("clone"), &gix::interrupt::IS_INTERRUPTED)
         .map_err(|e| anyhow::anyhow!("gix clone fetch: {e}"))?;
+    if let Some(verify) = verify {
+        let repo = checkout.repo();
+        let head = repo
+            .head_id()
+            .map_err(|e| anyhow::anyhow!("resolving HEAD after clone: {e}"))?
+            .detach();
+        verify.check(&commit_object(repo, head)?, &head.to_string(), quiet)?;
+    }
     let (_repo, _) = checkout
         .main_worktree(progress.child("checkout"), &gix::interrupt::IS_INTERRUPTED)
         .map_err(|e| anyhow::anyhow!("gix clone checkout: {e}"))?;
     Ok(())
 }
 
-fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
+fn git_update(
+    path: &Utf8Path,
+    uri: &str,
+    volatile: bool,
+    quiet: bool,
+    verify: Option<&CommitVerifier>,
+) -> Result<bool> {
     let mut repo = gix::open(path.as_std_path())
         .map_err(|e| anyhow::anyhow!("opening git repo {path}: {e}"))?;
     // The fetch below updates remote-tracking refs, which (like
@@ -169,6 +203,9 @@ fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result
         gix::open(path.as_std_path()).map_err(|e| anyhow::anyhow!("re-open after fetch: {e}"))?;
     let tip = gix_ext::resolve_upstream_tip(&repo).map_err(|e| anyhow::anyhow!("{e}"))?;
     let head = head_id(&repo);
+    if let Some(verify) = verify {
+        verify.check(&commit_object(&repo, tip)?, &tip.to_string(), quiet)?;
+    }
 
     if head == Some(tip) {
         if !quiet {
@@ -216,6 +253,14 @@ fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result
 
     let after = head_id(&repo);
     Ok(before != after)
+}
+
+/// The raw object of commit `id`
+fn commit_object(repo: &gix::Repository, id: gix::ObjectId) -> Result<Vec<u8>> {
+    let object = repo
+        .find_object(id)
+        .map_err(|e| anyhow::anyhow!("reading commit {id}: {e}"))?;
+    Ok(object.data.clone())
 }
 
 fn plural(n: usize) -> &'static str {
@@ -346,7 +391,7 @@ mod tests {
         crate::test_support::set_test_git_identity();
         let f = fixture();
         let changed = GixBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         assert!(changed);
         assert_eq!(
@@ -373,12 +418,12 @@ mod tests {
         crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
-            .sync(&f.overlay, &f.remote_uri, true, true)
+            .sync(&f.overlay, &f.remote_uri, true, true, None)
             .unwrap();
         advance_remote(&f, "two\n");
 
         let changed = GixBackend
-            .sync(&f.overlay, &f.remote_uri, true, true)
+            .sync(&f.overlay, &f.remote_uri, true, true, None)
             .expect("volatile re-sync over a shallow history must not fail");
         assert!(changed);
         assert_eq!(
@@ -401,13 +446,13 @@ mod tests {
         crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
-            .sync(&f.overlay, &f.remote_uri, true, true)
+            .sync(&f.overlay, &f.remote_uri, true, true, None)
             .unwrap();
         advance_remote(&f, "two\n");
         std::fs::write(f.overlay.join("a.txt"), "local edit\n").unwrap();
 
         let err = GixBackend
-            .sync(&f.overlay, &f.remote_uri, true, true)
+            .sync(&f.overlay, &f.remote_uri, true, true, None)
             .unwrap_err();
         assert!(
             err.to_string().contains("uncommitted changes"),
@@ -434,7 +479,7 @@ mod tests {
         crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         advance_remote(&f, "two\n");
 
@@ -444,7 +489,7 @@ mod tests {
         std::fs::write(f.overlay.join("stale-dir/nested/x"), "x\n").unwrap();
 
         let changed = GixBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         assert!(changed);
         assert_eq!(
@@ -468,10 +513,10 @@ mod tests {
         crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         let changed = GixBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
         assert!(!changed, "no upstream change: sync must report unchanged");
     }
@@ -496,7 +541,7 @@ mod tests {
 
         advance_remote(&f, "two\n");
         GixBackend
-            .sync(&f.overlay, &f.remote_uri, true, true)
+            .sync(&f.overlay, &f.remote_uri, true, true, None)
             .unwrap();
 
         assert!(
@@ -521,7 +566,7 @@ mod tests {
         crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
 
         let mirror = f._tmp.path().join("mirror.git");
@@ -538,7 +583,7 @@ mod tests {
         let mirror_uri = format!("file://{}", mirror.display());
 
         GixBackend
-            .sync(&f.overlay, &mirror_uri, false, true)
+            .sync(&f.overlay, &mirror_uri, false, true, None)
             .unwrap();
 
         let repo = gix::open(f.overlay.as_std_path()).unwrap();
@@ -570,7 +615,7 @@ mod tests {
         crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
-            .sync(&f.overlay, &f.remote_uri, false, true)
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
             .unwrap();
 
         let config = f.overlay.join(".git/config");
@@ -582,5 +627,37 @@ mod tests {
             before,
             "an unchanged sync-uri must not rewrite .git/config"
         );
+    }
+    // An unsigned tip is rejected before anything moves: the update keeps the old checkout.
+    #[test]
+    fn an_unverified_tip_leaves_the_checkout_alone() {
+        let _path = crate::test_support::path_lock();
+        let f = fixture();
+        let verifier = CommitVerifier::gentoo_for_tests();
+        GixBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
+            .unwrap();
+        advance_remote(&f, "two\n");
+        let err = GixBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, Some(&verifier))
+            .unwrap_err();
+        assert!(err.to_string().contains("no signature"), "{err:#}");
+        assert_eq!(
+            std::fs::read_to_string(f.overlay.join("a.txt")).unwrap(),
+            "one\n"
+        );
+    }
+
+    // A clone of an unsigned remote writes no worktree files.
+    #[test]
+    fn an_unverified_clone_is_not_checked_out() {
+        let _path = crate::test_support::path_lock();
+        let f = fixture();
+        let verifier = CommitVerifier::gentoo_for_tests();
+        let err = GixBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, Some(&verifier))
+            .unwrap_err();
+        assert!(err.to_string().contains("no signature"), "{err:#}");
+        assert!(!f.overlay.join("a.txt").exists());
     }
 }

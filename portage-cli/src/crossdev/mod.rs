@@ -1374,6 +1374,8 @@ fn alias_repo_entry(target: &CrossTarget, spec: &spec::SysrootSpec) -> portage_r
         auto_sync: false,
         volatile: None,
         priority: None,
+        sync_git_verify_commit_signature: false,
+        sync_openpgp_key_path: None,
     }
 }
 

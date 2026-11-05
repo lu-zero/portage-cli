@@ -257,6 +257,126 @@ pub fn verify_detached(data: &[u8], armored_sig: &str, keyring: &Keyring) -> Res
     ))
 }
 
+/// Load an armored file holding one or more certificates (`gentoo-release.asc` bundles several)
+pub fn load_keyring_file(path: &Path) -> Result<Keyring> {
+    let bytes = std::fs::read(path)?;
+    let (certs, _headers) = SignedPublicKey::from_armor_many(&bytes[..])
+        .map_err(|e| sig_err(&format!("parsing keyring {}", path.display()), e))?;
+    let mut out = Vec::new();
+    for cert in certs {
+        let mut cert =
+            cert.map_err(|e| sig_err(&format!("parsing keyring {}", path.display()), e))?;
+        // Other keys' certifications on a user ID play no part in trusting a keyring entry, and
+        // cannot be checked against this one.
+        let (fp, id) = (
+            cert.primary_key.fingerprint(),
+            cert.primary_key.legacy_key_id(),
+        );
+        let by_self = |sig: &pgp::packet::Signature| {
+            sig.issuer_fingerprint().iter().any(|f| **f == fp)
+                || sig.issuer_key_id().iter().any(|k| **k == id)
+        };
+        for user in &mut cert.details.users {
+            user.signatures.retain(by_self);
+        }
+        for attr in &mut cert.details.user_attributes {
+            attr.signatures.retain(by_self);
+        }
+        cert.verify_bindings()
+            .map_err(|e| sig_err("validating key self-signatures", e))?;
+        out.push(cert);
+    }
+    Ok(Keyring::new(out))
+}
+
+/// [`verify_detached`], also rejecting what gpg would not call good: a revoked or expired signing
+/// key, or an expired signature
+pub fn verify_detached_valid(data: &[u8], armored_sig: &str, keyring: &Keyring) -> Result<String> {
+    verify_detached_valid_at(data, armored_sig, keyring, std::time::SystemTime::now())
+}
+
+/// [`verify_detached_valid`], judging expiry at `now`
+pub fn verify_detached_valid_at(
+    data: &[u8],
+    armored_sig: &str,
+    keyring: &Keyring,
+    now: std::time::SystemTime,
+) -> Result<String> {
+    use pgp::packet::SignatureType;
+    use std::time::SystemTime;
+
+    let (sig, _headers) = DetachedSignature::from_string(armored_sig)
+        .map_err(|e| sig_err("parsing detached signature", e))?;
+    let sig = sig.signature;
+    let expired = |created: Option<pgp::types::Timestamp>, d: Option<pgp::types::Duration>| {
+        let d = d.map(std::time::Duration::from).filter(|d| !d.is_zero());
+        matches!((created, d), (Some(c), Some(d)) if SystemTime::from(c) + d <= now)
+    };
+    // The newest of `sigs` by creation time
+    let newest = |sigs: &mut dyn Iterator<Item = &pgp::packet::Signature>| {
+        sigs.max_by_key(|s| s.created().map(SystemTime::from))
+            .cloned()
+    };
+    if expired(sig.created(), sig.signature_expiration_time()) {
+        return Err(Error::Signature("expired signature".into()));
+    }
+    for cert in &keyring.certs {
+        let primary = cert.primary_key.fingerprint();
+        let self_sig = newest(
+            &mut cert
+                .details
+                .users
+                .iter()
+                .flat_map(|u| u.signatures.iter())
+                .chain(cert.details.direct_signatures.iter())
+                .filter(|s| s.issuer_fingerprint().iter().any(|f| **f == primary)),
+        );
+        let primary_dead = || -> Option<&'static str> {
+            if !cert.details.revocation_signatures.is_empty() {
+                return Some("revoked key");
+            }
+            let exp = self_sig.as_ref().and_then(|s| s.key_expiration_time());
+            expired(Some(cert.primary_key.created_at()), exp).then_some("expired key")
+        };
+        let found = if sig.verify(&cert.primary_key, data).is_ok() {
+            Some((primary_dead(), cert.primary_key.fingerprint()))
+        } else {
+            cert.public_subkeys
+                .iter()
+                .find(|sk| sig.verify(&sk.key, data).is_ok())
+                .map(|sk| {
+                    let revoked = sk
+                        .signatures
+                        .iter()
+                        .any(|s| s.typ() == Some(SignatureType::SubkeyRevocation));
+                    let binding = newest(
+                        &mut sk
+                            .signatures
+                            .iter()
+                            .filter(|s| s.typ() == Some(SignatureType::SubkeyBinding)),
+                    );
+                    let exp = binding.as_ref().and_then(|s| s.key_expiration_time());
+                    let dead = primary_dead().or(if revoked {
+                        Some("revoked key")
+                    } else {
+                        expired(Some(sk.key.created_at()), exp).then_some("expired key")
+                    });
+                    (dead, sk.key.fingerprint())
+                })
+        };
+        if let Some((dead, fp)) = found {
+            let fp = hex::encode_upper(fp.as_bytes());
+            return match dead {
+                Some(why) => Err(Error::Signature(format!("{why} {fp}"))),
+                None => Ok(fp),
+            };
+        }
+    }
+    Err(Error::Signature(
+        "unable to verify signature (no key in the keyring made it)".into(),
+    ))
+}
+
 /// Whether `manifest_text` carries an OpenPGP cleartext-signature wrapper
 /// (real portage's own detection rule in `gpkg.py`'s `_verify_binpkg`).
 pub fn looks_signed(manifest_text: &str) -> bool {

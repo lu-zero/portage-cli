@@ -75,6 +75,11 @@ pub struct RepoEntry {
     /// field stays `None` until then, distinguishing "explicitly `0`" from
     /// "unset".
     pub priority: Option<i64>,
+    /// `sync-git-verify-commit-signature`: check the fetched tip's OpenPGP signature before
+    /// updating the checkout. Portage's own repos.conf turns it on for `gentoo`.
+    pub sync_git_verify_commit_signature: bool,
+    /// `sync-openpgp-key-path`: the armored keyring the signature must come from
+    pub sync_openpgp_key_path: Option<PathBuf>,
 }
 
 impl RepoEntry {
@@ -179,6 +184,8 @@ impl ReposConf {
                         auto_sync: false,
                         volatile: None,
                         priority: s.get("priority").and_then(|v| v.trim().parse().ok()),
+                        sync_git_verify_commit_signature: false,
+                        sync_openpgp_key_path: None,
                     });
                 }
                 let location = s.get("location")?;
@@ -200,6 +207,16 @@ impl ReposConf {
                     // unset, matching real portage's own `try: priority =
                     // int(priority) except ValueError: priority = None`.
                     priority: s.get("priority").and_then(|v| v.trim().parse().ok()),
+                    sync_git_verify_commit_signature: s
+                        .get("sync-git-verify-commit-signature")
+                        .is_some_and(|v| {
+                            matches!(v.trim().to_ascii_lowercase().as_str(), "yes" | "true")
+                        }),
+                    sync_openpgp_key_path: s
+                        .get("sync-openpgp-key-path")
+                        .map(|v| v.trim())
+                        .filter(|v| !v.is_empty())
+                        .map(PathBuf::from),
                 })
             })
             .collect();
@@ -296,6 +313,8 @@ impl ReposConf {
                 auto_sync: false,
                 volatile: None,
                 priority: Some(i as i64),
+                sync_git_verify_commit_signature: false,
+                sync_openpgp_key_path: None,
             });
         }
         self.repos.sort_by(|a, b| {
@@ -444,6 +463,37 @@ auto-sync = no
             rc.find("gentoo").unwrap().location.as_path().unwrap(),
             std::path::Path::new("/new")
         );
+    }
+
+    // Portage's own repos.conf turns verification on for `gentoo`; a user file that only moves it to
+    // git keeps that.
+    #[test]
+    fn commit_signature_keys_survive_a_user_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.conf");
+        let b = dir.path().join("b.conf");
+        write(
+            &a,
+            "[gentoo]\nlocation = /var/db/repos/gentoo\nsync-type = rsync\n\
+             sync-git-verify-commit-signature = true\n\
+             sync-openpgp-key-path = /usr/share/openpgp-keys/gentoo-release.asc\n",
+        );
+        write(
+            &b,
+            "[gentoo]\nsync-type = git\n[guru]\nlocation = /var/db/repos/guru\nsync-type = git\n",
+        );
+        let rc = ReposConf::load_from(&[&a, &b]).unwrap();
+        let gentoo = rc.find("gentoo").unwrap();
+        assert!(gentoo.sync_git_verify_commit_signature);
+        assert_eq!(
+            gentoo.sync_openpgp_key_path.as_deref(),
+            Some(std::path::Path::new(
+                "/usr/share/openpgp-keys/gentoo-release.asc"
+            ))
+        );
+        let guru = rc.find("guru").unwrap();
+        assert!(!guru.sync_git_verify_commit_signature);
+        assert_eq!(guru.sync_openpgp_key_path, None);
     }
 
     #[test]
