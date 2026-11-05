@@ -99,6 +99,27 @@ impl Ebuild {
         &self.path
     }
 
+    /// This ebuild under another identity, as an alias repository presents it
+    /// (`cross-riscv64-unknown-linux-gnu/gcc` for `sys-devel/gcc`); it still reads the same file
+    pub fn aliased(mut self, cpv: Cpv) -> Self {
+        self.cpv = cpv;
+        self
+    }
+
+    /// The ebuild file's bytes
+    pub(crate) fn read_bytes(&self) -> Result<Vec<u8>> {
+        self.tree
+            .read(&self.rel)
+            .map_err(|e| Error::Io {
+                path: self.display().into(),
+                source: e,
+            })?
+            .ok_or_else(|| Error::Io {
+                path: self.display().into(),
+                source: std::io::ErrorKind::NotFound.into(),
+            })
+    }
+
     /// The ebuild's path inside its repository (`cat/pkg/pkg-1.ebuild`)
     pub fn path_in_repo(&self) -> &Utf8Path {
         &self.rel

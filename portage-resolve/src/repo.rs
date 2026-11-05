@@ -1833,12 +1833,10 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RawRepoData {
                     if !queued.insert(cross_cpv.clone()) {
                         continue;
                     }
-                    let path = from_repo
-                        .path()
-                        .join(source_cpn.category.as_str())
-                        .join(source_cpn.package.as_str())
-                        .join(format!("{}-{}.ebuild", source_cpn.package, cpv.version));
-                    let ebuild = portage_repo::Ebuild::with_cpv(cross_cpv, &path);
+                    let Ok(Some(ebuild)) = from_repo.ebuild_for_cpv(cpv) else {
+                        continue;
+                    };
+                    let ebuild = ebuild.aliased(cross_cpv);
                     match batches.iter_mut().find(|(f, _)| f == from) {
                         Some((_, ebuilds)) => ebuilds.push(ebuild),
                         None => batches.push((*from, vec![ebuild])),

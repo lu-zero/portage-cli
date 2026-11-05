@@ -514,7 +514,7 @@ async fn resolve_ebuilds(
 
     for ebuild in ebuilds {
         let cpv = ebuild.cpv().clone();
-        let Ok(bytes) = std::fs::read(ebuild.path()) else {
+        let Ok(bytes) = ebuild.read_bytes() else {
             continue;
         };
         let digest = format!("{:x}", md5::compute(&bytes));
