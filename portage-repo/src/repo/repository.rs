@@ -13,9 +13,7 @@ use portage_metadata::{CacheEntry, Eapi};
 use super::category::Categories;
 use super::ebuild::Ebuild;
 use crate::metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
-use crate::tree::{
-    EntrySource, FsEntries, FsTree, TreeSource, content_lines, read_text, tree_lines, tree_names,
-};
+use crate::tree::{EntrySource, TreeSource, content_lines, read_text, tree_lines, tree_names};
 
 type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
 
@@ -383,12 +381,11 @@ impl Repository {
     ) -> Result<Self> {
         let std_path = path.into();
         let path = Utf8PathBuf::from_path_buf(std_path).map_err(Error::InvalidRepository)?;
-        if !path.is_dir() {
+        // A repository stored elsewhere needs no checkout at its location.
+        if storage.is_none() && !crate::tree::is_repository(&path) && !path.is_dir() {
             return Err(Error::InvalidRepository(path.into_std_path_buf()));
         }
-
-        let (tree, entry_source) =
-            storage.unwrap_or_else(|| (Arc::new(FsTree::new(path.clone())), Arc::new(FsEntries)));
+        let (tree, entry_source) = storage.unwrap_or_else(|| crate::tree::storage_at(&path));
         let layout = match read_text(&*tree, "metadata/layout.conf")? {
             Some(text) => LayoutConf::parse(&text)?,
             None => {

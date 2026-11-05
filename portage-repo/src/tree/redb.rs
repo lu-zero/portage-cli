@@ -203,6 +203,53 @@ impl TreeSource for RedbTree {
     }
 }
 
+/// `<location>.redb`
+pub(crate) fn tree_file(location: &Utf8Path) -> Utf8PathBuf {
+    Utf8PathBuf::from(format!("{location}.redb"))
+}
+
+/// The tree in `<location>.redb`; `None` when there is none or it cannot be opened
+fn open_tree(location: &Utf8Path) -> Option<Arc<RedbTree>> {
+    let db = tree_file(location);
+    if !db.is_file() {
+        return None;
+    }
+    match RedbTree::open(db.clone()) {
+        Ok(tree) => Some(Arc::new(tree)),
+        Err(e) => {
+            tracing::warn!("ignoring {db}: {e}");
+            None
+        }
+    }
+}
+
+/// [`open_tree`], as a [`TreeSource`]
+pub(crate) fn tree_at(location: &Utf8Path) -> Option<Arc<dyn TreeSource>> {
+    Some(open_tree(location)?)
+}
+
+/// The tree in `<location>.redb` and, when present, the entries in `<location>.md5-cache.redb`
+/// (the checkout's otherwise); `None` when there is no tree database or it cannot be opened
+pub(crate) fn storage_at(
+    location: &Utf8Path,
+) -> Option<(Arc<dyn TreeSource>, Arc<dyn EntrySource>)> {
+    let tree = open_tree(location)?;
+    let cache_db = tree_file(location).with_extension("md5-cache.redb");
+    let entries: Arc<dyn EntrySource> = if cache_db.is_file() {
+        match RedbCache::open(cache_db.clone(), Arc::clone(&tree)) {
+            Ok(cache) => Arc::new(cache),
+            Err(e) => {
+                tracing::warn!("ignoring {cache_db}: {e}");
+                return None;
+            }
+        }
+    } else {
+        Arc::new(super::FsEntries)
+    };
+    tracing::debug!("reading {location} from {}", tree.file);
+    Some((tree, entries))
+}
+
 /// The md5-cache database of a [`RedbTree`]
 pub struct RedbCache {
     db: ReadOnlyDatabase,

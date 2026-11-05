@@ -97,7 +97,7 @@ pub(crate) fn expand_sets(raw: &[String], roots: &portage_resolve::Roots) -> Vec
             let config_root = config_root.unwrap_or(Utf8Path::new("/"));
             let portage_dir = config_root.join("etc/portage");
             let profile_link = portage_dir.join("make.profile");
-            match std::fs::canonicalize(profile_link.as_std_path())
+            match portage_repo::resolve_profile_path(profile_link.as_std_path())
                 .map_err(|e| anyhow::anyhow!("cannot resolve make.profile for @set expansion: {e}"))
                 .and_then(|p| {
                     portage_repo::ProfileStack::build_in(p, config_root)

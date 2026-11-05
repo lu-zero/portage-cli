@@ -24,6 +24,7 @@ pub use package::Package;
 pub use pkgmetadata::{Maintainer, MaintainerKind, PkgMetadata};
 pub use profile::{
     Profile, ProfileDesc, ProfileEnv, ProfileEnvLayer, ProfileStack, ProfileStatus, UseFlags,
+    resolve_profile_path,
 };
 pub use repos_conf::{Location, RepoEntry, ReposConf};
 pub use repository::{

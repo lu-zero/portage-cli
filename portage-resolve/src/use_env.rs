@@ -163,7 +163,7 @@ async fn compute_use_env(
         }
         None => {
             let profile_link = portage_dir.join("make.profile");
-            let profile_path = std::fs::canonicalize(profile_link.as_std_path())
+            let profile_path = portage_repo::resolve_profile_path(profile_link.as_std_path())
                 .map_err(|e| anyhow::anyhow!("cannot resolve {profile_link}: {e}"))?;
             ProfileStack::build_in(profile_path, root_dir)
         }

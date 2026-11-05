@@ -2277,6 +2277,23 @@ impl EbuildShell {
         )
     }
 
+    /// [`Self::source_make_defaults`] for a `make.defaults` read into memory, named `shown`
+    pub(crate) async fn source_make_defaults_text(
+        &mut self,
+        text: &str,
+        shown: &str,
+    ) -> Result<()> {
+        self.invalidate_baseline();
+        let params = self.shell.default_exec_params();
+        let source_info = SourceInfo::from(shown);
+        let result = self
+            .shell
+            .run_string(text, &source_info, &params)
+            .await
+            .map_err(|e| Error::Shell(format!("sourcing make.defaults {shown}: {e}")))?;
+        require_completed(&format!("sourcing make.defaults {shown}"), result)
+    }
+
     /// Evaluate conf-layer content held in memory, as strictly as [`Self::source_make_defaults`].
     pub(crate) async fn source_conf_str(&mut self, content: &str) -> Result<()> {
         self.invalidate_baseline();

@@ -14,7 +14,7 @@ use portage_metadata::Eapi;
 use super::layout::LayoutConf;
 use super::repos_conf::ReposConf;
 use crate::error::{Error, Result};
-use crate::tree::{FsTree, TreeSource, content_lines, read_text, tree_lines};
+use crate::tree::{EntryKind, FsTree, TreeSource, content_lines, read_text, tree_lines};
 
 /// Stability status of a profile
 ///
@@ -148,6 +148,9 @@ impl std::fmt::Debug for Profile {
     }
 }
 
+/// Repository trees already opened while building a stack, by repository root
+type RepoTrees = HashMap<Utf8PathBuf, Arc<dyn TreeSource>>;
+
 /// One entry from a profile `packages` file (PMS 5.2.6)
 ///
 /// `*cat/pkg` is a system-package add; `cat/pkg` an advisory (`@profile`) add;
@@ -163,17 +166,24 @@ enum PackageEntry {
 impl Profile {
     /// Open a profile at the given directory path
     pub fn open(path: PathBuf) -> Result<Self> {
-        let (repo, profile_formats) = enclosing_repo(&path);
-        let utf8 = |p: &Path| {
-            Utf8PathBuf::from_path_buf(p.to_path_buf())
-                .map_err(|p| Error::InvalidProfile(format!("not UTF-8: {}", p.display())))
-        };
+        Self::open_with(path, &mut HashMap::new())
+    }
+
+    /// [`Self::open`], reusing the repository trees in `trees` (keyed by repository root)
+    fn open_with(path: PathBuf, trees: &mut RepoTrees) -> Result<Self> {
+        let utf8 = Utf8PathBuf::from_path_buf(path.clone())
+            .map_err(|p| Error::InvalidProfile(format!("not UTF-8: {}", p.display())))?;
         // Inside a repository the profile reads through that repository's tree.
-        let (root, rel) = match &repo {
-            Some(root) => (utf8(root)?, utf8(path.strip_prefix(root).unwrap_or(&path))?),
-            None => (utf8(&path)?, Utf8PathBuf::new()),
+        let (repo, tree, rel, profile_formats) = match enclosing_repo(&utf8, trees) {
+            Some((root, tree, formats)) => {
+                let rel = utf8.strip_prefix(&root).unwrap_or(&utf8).to_path_buf();
+                (Some(root.into_std_path_buf()), tree, rel, formats)
+            }
+            None => {
+                let tree: Arc<dyn TreeSource> = Arc::new(FsTree::new(utf8));
+                (None, tree, Utf8PathBuf::new(), Vec::new())
+            }
         };
-        let tree: Arc<dyn TreeSource> = Arc::new(FsTree::new(root));
         let eapi_text = read_text(&*tree, rel.join("eapi").as_str())?;
         let eapi = match eapi_text.as_deref().and_then(|t| content_lines(t).next()) {
             Some(s) => s
@@ -203,8 +213,13 @@ impl Profile {
         tree_lines(&*self.tree, self.rel.join(name).as_str())
     }
 
+    /// The profile file `name`; `None` when it does not exist
+    pub(crate) fn read_file(&self, name: &str) -> Result<Option<String>> {
+        read_text(&*self.tree, self.rel.join(name).as_str())
+    }
+
     /// How the profile file `name` is named in messages
-    fn shown(&self, name: &str) -> String {
+    pub(crate) fn shown(&self, name: &str) -> String {
         self.tree.display(&self.rel.join(name))
     }
 
@@ -468,9 +483,15 @@ impl ProfileStack {
     pub fn build_parents_in(parents: &[PathBuf], config_root: &Utf8Path) -> Result<Self> {
         let repos = ReposConf::load_rooted(config_root, &[])?;
         let mut visited = HashSet::new();
+        let mut trees = HashMap::new();
         let mut profiles = Vec::new();
         for parent in parents {
-            profiles.extend(collect_stack(parent, &mut visited, Some(&repos))?);
+            profiles.extend(collect_stack(
+                parent,
+                &mut visited,
+                &mut trees,
+                Some(&repos),
+            )?);
         }
         if profiles.is_empty() {
             return Err(Error::InvalidProfile("empty profile stack".into()));
@@ -480,7 +501,7 @@ impl ProfileStack {
 
     fn collect(path: &Path, repos: Option<&ReposConf>) -> Result<Self> {
         let mut visited = HashSet::new();
-        let profiles = collect_stack(path, &mut visited, repos)?;
+        let profiles = collect_stack(path, &mut visited, &mut HashMap::new(), repos)?;
         if profiles.is_empty() {
             return Err(Error::InvalidProfile("empty profile stack".into()));
         }
@@ -980,6 +1001,60 @@ pub(crate) fn merge_accept_lists<'a>(iter: impl Iterator<Item = &'a str>) -> Vec
     kept.iter().map(|t| t.to_string()).collect()
 }
 
+/// A profile directory, or a link to one, as an absolute path without symlinks or `..`
+///
+/// Canonicalizes. A path that does not exist on disk is resolved by hand (link targets, `..`,
+/// the longest existing prefix canonicalized) and accepted only inside a repository stored
+/// somewhere other than its checkout, whose profiles have no directory there.
+pub fn resolve_profile_path(path: &Path) -> std::io::Result<PathBuf> {
+    let err = match path.canonicalize() {
+        Ok(p) => return Ok(p),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => e,
+        Err(e) => return Err(e),
+    };
+    let mut target = path.to_path_buf();
+    // Bounded like the kernel's own symlink limit.
+    for _ in 0..40 {
+        let Ok(link) = std::fs::read_link(&target) else {
+            break;
+        };
+        target = match target.parent() {
+            Some(dir) => dir.join(link),
+            None => link,
+        };
+    }
+    let mut lexical = PathBuf::new();
+    for part in target.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                lexical.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => lexical.push(other),
+        }
+    }
+    let Some(existing) = lexical.ancestors().find(|a| a.exists()) else {
+        return Err(err);
+    };
+    let rest = lexical
+        .strip_prefix(existing)
+        .unwrap_or(&lexical)
+        .to_path_buf();
+    let resolved = existing.canonicalize()?.join(rest);
+    let Ok(utf8) = Utf8PathBuf::from_path_buf(resolved.clone()) else {
+        return Err(err);
+    };
+    let inside_stored_repo = utf8
+        .ancestors()
+        .find(|d| crate::tree::is_repository(d))
+        .is_some_and(crate::tree::stored_elsewhere);
+    if inside_stored_repo {
+        Ok(resolved)
+    } else {
+        Err(err)
+    }
+}
+
 /// Recursively collect profiles depth-first, ancestors before self
 ///
 /// `visited` is a set of canonicalized paths already added; a profile seen a
@@ -987,62 +1062,60 @@ pub(crate) fn merge_accept_lists<'a>(iter: impl Iterator<Item = &'a str>) -> Vec
 fn collect_stack(
     path: &Path,
     visited: &mut HashSet<PathBuf>,
+    trees: &mut RepoTrees,
     repos: Option<&ReposConf>,
 ) -> Result<Vec<Profile>> {
-    let canonical = path.canonicalize().map_err(|e| Error::Io {
+    let canonical = resolve_profile_path(path).map_err(|e| Error::Io {
         path: path.to_path_buf(),
         source: e,
     })?;
     if !visited.insert(canonical.clone()) {
         return Ok(vec![]);
     }
-    let profile = Profile::open(canonical)?;
+    let profile = Profile::open_with(canonical, trees)?;
+    // A profile of a repository stored elsewhere has no directory to canonicalize: it has to
+    // exist in that repository's tree instead.
+    if !profile.path.exists()
+        && !matches!(profile.tree.kind(&profile.rel), Ok(Some(EntryKind::Dir)))
+    {
+        return Err(Error::Io {
+            path: path.to_path_buf(),
+            source: std::io::ErrorKind::NotFound.into(),
+        });
+    }
     let mut result = Vec::new();
     for parent in profile.parents(repos)? {
-        result.extend(collect_stack(&parent, visited, repos)?);
+        result.extend(collect_stack(&parent, visited, trees, repos)?);
     }
     result.push(profile);
     Ok(result)
 }
 
-/// The root and effective `profile-formats` of the repository enclosing a profile
-/// directory: the closest ancestor holding `metadata/layout.conf`, whose
-/// `profile-formats` key it reads.
+/// The root, tree and effective `profile-formats` of the repository enclosing a profile directory
 ///
-/// Mirrors portage's longest-path-wins `intersecting_repos` rule: of all
-/// repos whose root path the profile path starts with, the most specific
-/// (nearest) one wins. Returns an empty list when no enclosing repo is
-/// found — equivalent to portage's `portage-1`/`portage-1-compat` default,
-/// so such a profile does not contribute to `@profile`.
-///
-/// This walk approximates `intersecting_repos` using only the filesystem:
-/// `metadata/layout.conf` is the usual repo-root signal, but a repo may
-/// legitimately lack one (defaulting to no `profile-formats`). PMS's own
-/// `profiles/repo_name` marker is checked as a hard stop for that case, so
-/// a real (layout.conf-less) repo root doesn't fall through to an
-/// unrelated ancestor's own `layout.conf` (nested/co-located repos).
-fn enclosing_repo(profile_path: &Path) -> (Option<PathBuf>, Vec<String>) {
-    let mut dir = profile_path.parent();
-    while let Some(d) = dir {
-        let layout_path = d.join("metadata").join("layout.conf");
-        if layout_path.is_file() {
-            // Nearest enclosing repo found. A parse failure means the format
-            // info is unusable; treat it as "no profile-set" (portage would
-            // warn and intersect with the valid-format set, which is empty
-            // here) rather than continuing further up the tree.
-            let formats = std::fs::read_to_string(&layout_path)
-                .ok()
-                .and_then(|text| LayoutConf::parse(&text).ok())
-                .map(|parsed| parsed.profile_formats)
-                .unwrap_or_default();
-            return (Some(d.to_path_buf()), formats);
-        }
-        if d.join("profiles").join("repo_name").is_file() {
-            return (Some(d.to_path_buf()), Vec::new());
-        }
-        dir = d.parent();
-    }
-    (None, Vec::new())
+/// Mirrors portage's longest-path-wins `intersecting_repos` rule: the nearest ancestor that is a
+/// repository wins ([`crate::tree::is_repository`]: `metadata/layout.conf`, `profiles/repo_name`,
+/// or a tree database next to it). A `layout.conf` that fails to parse leaves the formats empty,
+/// so the profile does not contribute to `@profile`.
+fn enclosing_repo(
+    profile_path: &Utf8Path,
+    trees: &mut RepoTrees,
+) -> Option<(Utf8PathBuf, Arc<dyn TreeSource>, Vec<String>)> {
+    let root = profile_path
+        .ancestors()
+        .skip(1)
+        .find(|d| crate::tree::is_repository(d))?;
+    let tree = trees
+        .entry(root.to_path_buf())
+        .or_insert_with(|| crate::tree::tree_at(root))
+        .clone();
+    let formats = read_text(&*tree, "metadata/layout.conf")
+        .ok()
+        .flatten()
+        .and_then(|text| LayoutConf::parse(&text).ok())
+        .map(|parsed| parsed.profile_formats)
+        .unwrap_or_default();
+    Some((root.to_path_buf(), tree, formats))
 }
 
 /// Merge incremental USE-flag lists from a sequence of profile-file results

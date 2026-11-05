@@ -10,56 +10,13 @@ use std::sync::Arc;
 use portage_repo::{RepoSet, Repository, RepositoryBuilder, Result};
 
 /// The builder every em repository starts from
-fn builder(path: &Path) -> RepositoryBuilder {
-    let builder = Repository::builder().user_cache_root(crate::xdg::md5_cache_root());
-    #[cfg(feature = "redb")]
-    let builder = with_tree_db(builder, path);
-    #[cfg(not(feature = "redb"))]
-    let _ = path;
-    builder
-}
-
-/// Read the tree from `<location>.redb` and the md5-cache from `<location>.md5-cache.redb`
-/// when they exist (experimental)
-#[cfg(feature = "redb")]
-fn with_tree_db(builder: RepositoryBuilder, path: &Path) -> RepositoryBuilder {
-    use portage_repo::tree::redb::{RedbCache, RedbTree};
-    use portage_repo::tree::{EntrySource, FsEntries};
-
-    let db = PathBuf::from(format!("{}.redb", path.display()));
-    let Ok(db) = camino::Utf8PathBuf::from_path_buf(db) else {
-        return builder;
-    };
-    if !db.is_file() {
-        return builder;
-    }
-    let tree = match RedbTree::open(db.clone()) {
-        Ok(tree) => Arc::new(tree),
-        Err(e) => {
-            crate::style::warn_line!("ignoring {db}: {e}");
-            return builder;
-        }
-    };
-    let cache_db = db.with_extension("md5-cache.redb");
-    let entries: Arc<dyn EntrySource> = if cache_db.is_file() {
-        match RedbCache::open(cache_db.clone(), Arc::clone(&tree)) {
-            Ok(cache) => Arc::new(cache),
-            Err(e) => {
-                crate::style::warn_line!("ignoring {cache_db}: {e}");
-                return builder;
-            }
-        }
-    } else {
-        Arc::new(FsEntries)
-    };
-    tracing::debug!("reading {} from {db}", path.display());
-    builder.storage(tree, entries)
+fn builder() -> RepositoryBuilder {
+    Repository::builder().user_cache_root(crate::xdg::md5_cache_root())
 }
 
 /// Open a tree with secondary at `$XDG_CACHE_HOME/em/md5-cache/<repo-name>`
 pub fn open(path: impl Into<PathBuf>) -> Result<Repository> {
-    let path = path.into();
-    builder(&path).open(path)
+    builder().open(path)
 }
 
 /// Open a tree and its masters (owned by the returned `Repository`, see
@@ -70,8 +27,7 @@ pub fn open_with_masters(
     masters_override: Option<&[String]>,
     default_master: Option<&str>,
 ) -> Result<Repository> {
-    let path = path.into();
-    builder(&path).open_with_masters(path, repos_dir, masters_override, default_master)
+    builder().open_with_masters(path, repos_dir, masters_override, default_master)
 }
 
 /// The full priority-ordered [`RepoSet`] for this invocation: `main` plus

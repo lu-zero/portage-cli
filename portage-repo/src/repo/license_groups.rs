@@ -2,7 +2,6 @@
 //! [`AcceptSet`] token expansion for `ACCEPT_LICENSE`.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use portage_metadata::interner::{DefaultInterner, Interned};
 use portage_metadata::{LicenseExpr, RestrictExpr};
@@ -20,16 +19,8 @@ pub struct LicenseGroupRegistry {
 impl LicenseGroupRegistry {
     /// Load group definitions from `repo/profiles/license_groups`
     pub fn from_repo(repo: &Repository) -> Result<Self> {
-        let path = repo.path().join("profiles/license_groups");
-        Self::from_file(path.as_std_path())
-    }
-
-    /// Parse a `license_groups` file (tolerates absence → empty registry)
-    pub fn from_file(path: &Path) -> Result<Self> {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            return Ok(Self::default());
-        };
-        Ok(Self::parse(&content))
+        let text = crate::tree::read_text(repo.tree(), "profiles/license_groups")?;
+        Ok(text.map(|t| Self::parse(&t)).unwrap_or_default())
     }
 
     /// Parse `profiles/license_groups` content
