@@ -29,9 +29,27 @@ fn bench_repo_load(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("repository/load");
     group.sample_size(10);
+    // No sidecar store, so no gap index: every call walks and stats every ebuild.
     group.bench_function("repo_entries", |b| {
         b.iter(|| {
             let entries = runtime.block_on(repo_entries(&repo));
+            assert_eq!(entries.len(), entry_count);
+            std::hint::black_box(entries)
+        })
+    });
+
+    // What `em` does on an unchanged tree: a real cache root, so the gap index from the first call skips the ebuild walk.
+    let cache_root = tempfile::tempdir().expect("cache root");
+    let indexed = Repository::builder()
+        .user_cache_root(
+            camino::Utf8PathBuf::try_from(cache_root.path().to_owned()).expect("utf-8 cache root"),
+        )
+        .open(&repo_path)
+        .expect("failed to open repository");
+    assert_eq!(runtime.block_on(repo_entries(&indexed)).len(), entry_count);
+    group.bench_function("repo_entries_indexed", |b| {
+        b.iter(|| {
+            let entries = runtime.block_on(repo_entries(&indexed));
             assert_eq!(entries.len(), entry_count);
             std::hint::black_box(entries)
         })
