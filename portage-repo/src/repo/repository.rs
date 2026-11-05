@@ -40,7 +40,15 @@ type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
 /// ```
 pub struct Ebuilds {
     walker: WalkDir,
+    source: EbuildSource,
     filter: Option<Arc<EbuildFilter>>,
+}
+
+/// The repository the walked ebuilds belong to: its checkout root and its tree
+#[derive(Clone)]
+struct EbuildSource {
+    root: Utf8PathBuf,
+    tree: Arc<dyn TreeSource>,
 }
 
 /// Concrete iterator produced by [`Ebuilds::into_iter`]
@@ -49,13 +57,15 @@ pub struct Ebuilds {
 /// to an [`Ebuild`] on the fly, applying the optional filter.
 pub struct EbuildsIter {
     inner: jwalk::DirEntryIter<((), ())>,
+    source: EbuildSource,
     filter: Option<Arc<EbuildFilter>>,
 }
 
 impl Ebuilds {
-    fn new(walker: WalkDir) -> Self {
+    fn new(walker: WalkDir, source: EbuildSource) -> Self {
         Self {
             walker,
+            source,
             filter: None,
         }
     }
@@ -79,7 +89,10 @@ impl Ebuilds {
     }
 }
 
-fn dir_entry_to_ebuild(entry: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<Ebuild> {
+fn dir_entry_to_ebuild(
+    entry: jwalk::Result<jwalk::DirEntry<((), ())>>,
+    source: &EbuildSource,
+) -> Option<Ebuild> {
     let entry = entry.ok()?;
     let path: Utf8PathBuf = entry.path().try_into().ok()?;
     let stem = path.file_name()?.strip_suffix(".ebuild")?;
@@ -90,7 +103,8 @@ fn dir_entry_to_ebuild(entry: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Optio
     cpv_str.push('/');
     cpv_str.push_str(stem);
     let cpv = Cpv::parse(&cpv_str).ok()?;
-    Some(Ebuild::new(cpv, path))
+    let rel = path.strip_prefix(&source.root).ok()?.to_path_buf();
+    Some(Ebuild::in_tree(cpv, path, source.tree.clone(), rel))
 }
 
 impl IntoIterator for Ebuilds {
@@ -100,6 +114,7 @@ impl IntoIterator for Ebuilds {
     fn into_iter(self) -> EbuildsIter {
         EbuildsIter {
             inner: self.walker.into_iter(),
+            source: self.source,
             filter: self.filter,
         }
     }
@@ -110,7 +125,7 @@ impl Iterator for EbuildsIter {
 
     fn next(&mut self) -> Option<Ebuild> {
         loop {
-            let ebuild = dir_entry_to_ebuild(self.inner.next()?)?;
+            let ebuild = dir_entry_to_ebuild(self.inner.next()?, &self.source)?;
             match &self.filter {
                 Some(f) if !f(&ebuild) => continue,
                 _ => return Some(ebuild),
@@ -656,7 +671,13 @@ impl Repository {
                 });
             });
 
-        Ok(Ebuilds::new(walker))
+        Ok(Ebuilds::new(
+            walker,
+            EbuildSource {
+                root: self.path.clone(),
+                tree: self.tree.clone(),
+            },
+        ))
     }
 
     /// Look up a single category by name
@@ -987,6 +1008,11 @@ impl Repository {
             .into_iter()
             .filter_map(|(name, _)| Some(name.strip_suffix(".eclass")?.to_string()))
             .collect())
+    }
+
+    /// The text of `eclass/<name>.eclass` in this repository (not its masters)
+    pub fn eclass_text(&self, name: &str) -> Result<Option<String>> {
+        read_text(&*self.tree, &format!("eclass/{name}.eclass"))
     }
 
     /// List available license names from `licenses/`

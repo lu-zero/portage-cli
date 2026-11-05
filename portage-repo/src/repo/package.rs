@@ -97,7 +97,12 @@ impl Package {
                 cpv_str.push('/');
                 cpv_str.push_str(stem);
                 if let Ok(cpv) = Cpv::parse(&cpv_str) {
-                    ebuilds.push(Ebuild::new(cpv, self.path.join(&name)));
+                    ebuilds.push(Ebuild::in_tree(
+                        cpv,
+                        self.path.join(&name),
+                        self.tree.clone(),
+                        self.rel(&name),
+                    ));
                 }
             }
         }
@@ -113,9 +118,14 @@ impl Package {
         let cpv_str = format!("{}/{}-{version}", self.cpn.category, self.cpn.package);
         let cpv = Cpv::parse(&cpv_str)?;
         let filename = format!("{}-{version}.ebuild", self.cpn.package);
-        Ok(self
-            .is_file(&filename)
-            .then(|| Ebuild::new(cpv, self.path.join(&filename))))
+        Ok(self.is_file(&filename).then(|| {
+            Ebuild::in_tree(
+                cpv,
+                self.path.join(&filename),
+                self.tree.clone(),
+                self.rel(&filename),
+            )
+        }))
     }
 
     /// Whether a `Manifest` file exists (cheap existence check)

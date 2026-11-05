@@ -124,7 +124,26 @@ fn targets_match(targets: &[Target], cpv: &Cpv) -> bool {
 #[derive(Clone)]
 struct Job {
     label: String,
-    path: camino::Utf8PathBuf,
+    source: Source,
+}
+
+/// Where a job's text comes from
+#[derive(Clone)]
+enum Source {
+    /// A file on disk (an installed copy of an ebuild)
+    File(camino::Utf8PathBuf),
+    Ebuild(portage_repo::Ebuild),
+    Eclass(std::sync::Arc<portage_repo::Repository>, String),
+}
+
+impl Source {
+    fn text(&self) -> Option<String> {
+        match self {
+            Source::File(path) => std::fs::read_to_string(path).ok(),
+            Source::Ebuild(ebuild) => ebuild.read_raw().ok(),
+            Source::Eclass(repo, name) => repo.eclass_text(name).ok().flatten(),
+        }
+    }
 }
 
 pub(crate) struct Options {
@@ -175,16 +194,11 @@ fn open_repos(
 
 fn render_ebuild_label(
     label_kind: Label,
-    repo_path: &camino::Utf8Path,
     repo_name: &str,
     ebuild: &portage_repo::Ebuild,
 ) -> String {
     match label_kind {
-        Label::Path => ebuild
-            .path()
-            .strip_prefix(repo_path)
-            .map(|p| p.to_string())
-            .unwrap_or_else(|_| ebuild.path().to_string()),
+        Label::Path => ebuild.path_in_repo().to_string(),
         Label::Atom => ebuild.cpv().to_string(),
         Label::AtomRepo => format!("{}::{repo_name}", ebuild.cpv()),
     }
@@ -201,16 +215,17 @@ fn discover(cli: &Cli, opts: &Options, mode: &Mode, label_kind: Label) -> Result
             }
             let repos = open_repos(&cli.search_repos())?;
             let mut jobs = Vec::new();
-            for (repo, name) in &repos {
+            for (repo, name) in repos {
+                let repo = std::sync::Arc::new(repo);
                 let mut names = repo.eclasses()?;
                 names.sort();
                 for eclass in names {
-                    let path = repo.path().join("eclass").join(format!("{eclass}.eclass"));
                     let label = match label_kind {
                         Label::Path => format!("eclass/{eclass}.eclass"),
                         Label::Atom | Label::AtomRepo => format!("eclass/{eclass}::{name}"),
                     };
-                    jobs.push(Job { label, path });
+                    let source = Source::Eclass(std::sync::Arc::clone(&repo), eclass);
+                    jobs.push(Job { label, source });
                 }
             }
             Ok(jobs)
@@ -233,7 +248,10 @@ fn discover(cli: &Cli, opts: &Options, mode: &Mode, label_kind: Label) -> Result
                         Label::Atom => p.cpv().to_string(),
                         Label::AtomRepo => format!("{}::installed", p.cpv()),
                     };
-                    Job { label, path }
+                    Job {
+                        label,
+                        source: Source::File(path),
+                    }
                 })
                 .collect())
         }
@@ -247,10 +265,10 @@ fn discover(cli: &Cli, opts: &Options, mode: &Mode, label_kind: Label) -> Result
                     if !targets_match(&targets, eb.cpv()) {
                         continue;
                     }
-                    let label = render_ebuild_label(label_kind, repo.path(), name, &eb);
+                    let label = render_ebuild_label(label_kind, name, &eb);
                     jobs.push(Job {
                         label,
-                        path: eb.path().to_owned(),
+                        source: Source::Ebuild(eb),
                     });
                 }
             }
@@ -395,7 +413,7 @@ async fn run_jobs(jobs: Vec<Job>, opts: &Options, emit: Emit) -> Result<usize> {
             let mut buf = String::new();
             let mut matched_files = 0usize;
             for job in &chunk {
-                let Ok(text) = std::fs::read_to_string(&job.path) else {
+                let Some(text) = job.source.text() else {
                     continue;
                 };
                 let mut lines = String::new();

@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -6,8 +6,9 @@ use portage_atom::Cpv;
 use portage_metadata::Eapi;
 use regex::Regex;
 
-use super::util;
+use super::pkgmetadata::PkgMetadata;
 use crate::error::{Error, Result};
+use crate::tree::{FsTree, TreeSource, read_text};
 
 /// PMS 7.3.1 regex for detecting EAPI before sourcing
 ///
@@ -27,15 +28,50 @@ static EAPI_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Metadata extraction goes through [`EbuildShell`](crate::EbuildShell).
 ///
 /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Ebuild {
     cpv: Cpv,
     path: Utf8PathBuf,
+    /// Where the file is read from, and its path in that tree
+    tree: Arc<dyn TreeSource>,
+    rel: Utf8PathBuf,
+}
+
+impl std::fmt::Debug for Ebuild {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ebuild")
+            .field("cpv", &self.cpv)
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Ebuild {
-    pub(crate) fn new(cpv: Cpv, path: Utf8PathBuf) -> Self {
-        Self { cpv, path }
+    /// An ebuild at `rel` in `tree`, whose checkout path is `path`
+    pub(crate) fn in_tree(
+        cpv: Cpv,
+        path: Utf8PathBuf,
+        tree: Arc<dyn TreeSource>,
+        rel: Utf8PathBuf,
+    ) -> Self {
+        Self {
+            cpv,
+            path,
+            tree,
+            rel,
+        }
+    }
+
+    /// An ebuild file on disk, read from the repository three directories up
+    fn on_disk(cpv: Cpv, path: Utf8PathBuf) -> Self {
+        let root = path
+            .ancestors()
+            .nth(3)
+            .or_else(|| path.parent())
+            .unwrap_or(Utf8Path::new("/"))
+            .to_path_buf();
+        let rel = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
+        Self::in_tree(cpv, path, Arc::new(FsTree::new(root)), rel)
     }
 
     /// The full category/package-version atom
@@ -63,9 +99,30 @@ impl Ebuild {
         &self.path
     }
 
+    /// The ebuild's path inside its repository (`cat/pkg/pkg-1.ebuild`)
+    pub fn path_in_repo(&self) -> &Utf8Path {
+        &self.rel
+    }
+
+    /// How the ebuild is named to the user: its path, or a URI into the database holding it
+    pub fn display(&self) -> String {
+        self.tree.display(&self.rel)
+    }
+
     /// Read the raw ebuild file content
     pub fn read_raw(&self) -> Result<String> {
-        util::read_to_string(&self.path)
+        read_text(&*self.tree, self.rel.as_str())?.ok_or_else(|| Error::Io {
+            path: self.display().into(),
+            source: std::io::ErrorKind::NotFound.into(),
+        })
+    }
+
+    /// The package's `metadata.xml`, next to the ebuild; `None` when there is none
+    pub fn metadata_xml(&self) -> Result<Option<PkgMetadata>> {
+        let rel = self.rel.with_file_name("metadata.xml");
+        read_text(&*self.tree, rel.as_str())?
+            .map(|text| PkgMetadata::parse(&text))
+            .transpose()
     }
 
     /// Construct an [`Ebuild`] from an already-known [`Cpv`] and its on-disk
@@ -82,7 +139,7 @@ impl Ebuild {
     /// eclass resolution.
     pub fn with_cpv(cpv: Cpv, path: &Utf8Path) -> Self {
         let real_path = path.canonicalize_utf8().unwrap_or_else(|_| path.to_owned());
-        Self::new(cpv, real_path)
+        Self::on_disk(cpv, real_path)
     }
 
     /// Construct an [`Ebuild`] directly from a `.ebuild` file path
@@ -118,7 +175,7 @@ impl Ebuild {
         // overlay category — a `cross-*` symlink reads as the real ebuild but
         // builds under `cross-<CTARGET>`.
         let real_path = path.canonicalize_utf8().unwrap_or_else(|_| path.to_owned());
-        Ok(Self::new(cpv, real_path))
+        Ok(Self::on_disk(cpv, real_path))
     }
 
     /// Repository root inferred from the ebuild path
