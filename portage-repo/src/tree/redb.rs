@@ -1,8 +1,15 @@
-//! A repository stored in one redb file: the git objects of one commit plus path and md5-cache
-//! indexes, written by a sync that never makes a checkout.
+//! A repository stored in redb, written by a sync that never makes a checkout
+//!
+//! Two files with separate lifecycles: the tree (`<location>.redb`: the git objects of one commit,
+//! a path index and the md5 of every ebuild and eclass) and the md5-cache
+//! (`<location>.md5-cache.redb`: `cat/PF` → entry text). Cache entries are checked against the
+//! tree's digests, so the cache may lag behind or run ahead of the tree.
 
 use std::collections::HashMap;
 use std::io;
+use std::ops::Bound;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use futures_util::future::BoxFuture;
@@ -16,9 +23,10 @@ use crate::repo::Repository;
 
 const OBJECTS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("objects");
 const PATHS: TableDefinition<&str, &[u8]> = TableDefinition::new("paths");
-const MD5_CACHE: TableDefinition<&str, &[u8]> = TableDefinition::new("md5_cache");
 const META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 const ECLASSES: TableDefinition<&str, &[u8]> = TableDefinition::new("eclasses");
+const EBUILDS: TableDefinition<&str, &[u8]> = TableDefinition::new("ebuilds");
+const CACHE_ENTRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("entries");
 
 const CODEC_RAW: u8 = 0;
 const CODEC_ZSTD: u8 = 1;
@@ -26,6 +34,9 @@ const KIND_TREE: u8 = 2;
 const KIND_BLOB: u8 = 3;
 
 type Oid = [u8; 20];
+
+/// The valid entries found in one key range, with the range's index
+type RangeEntries = (usize, Vec<(Cpv, CacheEntry)>);
 
 /// A repository tree read from a redb database
 pub struct RedbTree {
@@ -173,7 +184,23 @@ impl TreeSource for RedbTree {
     }
 }
 
-impl EntrySource for RedbTree {
+/// The md5-cache database of a [`RedbTree`]
+pub struct RedbCache {
+    db: ReadOnlyDatabase,
+    file: Utf8PathBuf,
+    tree: Arc<RedbTree>,
+}
+
+impl RedbCache {
+    /// Open the cache database at `file`, describing `tree`
+    pub fn open(file: impl Into<Utf8PathBuf>, tree: Arc<RedbTree>) -> io::Result<Self> {
+        let file = file.into();
+        let db = ReadOnlyDatabase::open(&file).map_err(db_err)?;
+        Ok(RedbCache { db, file, tree })
+    }
+}
+
+impl EntrySource for RedbCache {
     fn entries<'a>(&'a self, repo: &'a Repository) -> BoxFuture<'a, Vec<(Cpv, CacheEntry)>> {
         Box::pin(async move {
             match self.read_entries(repo) {
@@ -187,7 +214,14 @@ impl EntrySource for RedbTree {
     }
 }
 
-impl RedbTree {
+/// Whether the `_md5_` hex text records `digest`
+fn md5_matches(recorded: Option<&str>, digest: &[u8]) -> bool {
+    let mut bytes = [0u8; 16];
+    recorded
+        .is_some_and(|hex| hex::decode_to_slice(hex, &mut bytes).is_ok() && bytes[..] == *digest)
+}
+
+impl RedbCache {
     /// The md5 of every eclass, recorded when the tree was written
     fn eclass_digests(
         txn: &redb::ReadTransaction,
@@ -203,66 +237,129 @@ impl RedbTree {
         Ok(out)
     }
 
+    /// Valid entries for the keys in `lo..hi`, merging the ordered `ebuilds` and `entries` tables
+    fn entries_in(
+        ebuilds: &redb::ReadOnlyTable<&str, &[u8]>,
+        cache: &redb::ReadOnlyTable<&str, &[u8]>,
+        (lo, hi): (Option<&str>, Option<&str>),
+        stored: Option<&HashMap<Interned<DefaultInterner>, md5::Digest>>,
+        out: &mut Vec<(Cpv, CacheEntry)>,
+    ) -> io::Result<usize> {
+        let bounds = (
+            lo.map_or(Bound::Unbounded, Bound::Included),
+            hi.map_or(Bound::Unbounded, Bound::Excluded),
+        );
+        let mut entries = cache.range::<&str>(bounds).map_err(db_err)?.peekable();
+        let mut missing = 0;
+        for row in ebuilds.range::<&str>(bounds).map_err(db_err)? {
+            let (key, digest) = row.map_err(db_err)?;
+            let key = key.value();
+            let mut found = None;
+            while let Some(next) =
+                entries.next_if(|e| e.as_ref().is_ok_and(|(k, _)| k.value() <= key))
+            {
+                let (k, v) = next.map_err(db_err)?;
+                if k.value() == key {
+                    found = Some(v);
+                }
+            }
+            let Some(stored_entry) = found else {
+                missing += 1;
+                continue;
+            };
+            let Ok(cpv) = Cpv::parse(key) else { continue };
+            let (KIND_BLOB, data) = decode(stored_entry.value())? else {
+                continue;
+            };
+            let Ok(text) = std::str::from_utf8(&data) else {
+                continue;
+            };
+            let Ok(entry) = CacheEntry::parse(text) else {
+                continue;
+            };
+            if !md5_matches(entry.md5.as_deref(), digest.value()) {
+                continue;
+            }
+            let fresh = stored.is_none_or(|stored| {
+                entry
+                    .eclasses
+                    .iter()
+                    .all(|(name, d)| stored.get(name) == Some(d))
+            });
+            if fresh {
+                out.push((cpv, entry));
+            }
+        }
+        Ok(missing)
+    }
+
     fn read_entries(&self, repo: &Repository) -> io::Result<Vec<(Cpv, CacheEntry)>> {
-        let txn = self.db.begin_read().map_err(db_err)?;
+        let tree_txn = self.tree.db.begin_read().map_err(db_err)?;
+        let cache_txn = self.db.begin_read().map_err(db_err)?;
         // Inherited eclasses may come from a master on another backend: those go through the
         // master's tree, the own ones are compared with the stored digests.
         let stored = if repo.masters().is_empty() {
-            Some(Self::eclass_digests(&txn)?)
+            Some(Self::eclass_digests(&tree_txn)?)
         } else {
             None
         };
-        let index = txn.open_table(MD5_CACHE).map_err(db_err)?;
-        let mut keys: Vec<(String, Oid)> = Vec::new();
-        for row in index.iter().map_err(db_err)? {
-            let (k, v) = row.map_err(db_err)?;
-            if let Ok(oid) = Oid::try_from(v.value()) {
-                keys.push((k.value().to_string(), oid));
-            }
-        }
-        drop(index);
-
-        let workers = crate::default_worker_count().max(1);
-        let chunk = keys.len().div_ceil(workers).max(1);
+        // Split the key space at category names; the ranges between them cover every key,
+        // listed category or not. Workers take ranges in turn.
+        let mut cuts: Vec<String> = match self.tree.read(Utf8Path::new("profiles/categories"))? {
+            Some(bytes) => String::from_utf8_lossy(&bytes)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(|c| format!("{c}/"))
+                .collect(),
+            None => Vec::new(),
+        };
+        cuts.sort();
+        let ranges: Vec<(Option<&str>, Option<&str>)> = std::iter::once(None)
+            .chain(cuts.iter().map(|c| Some(c.as_str())))
+            .zip(
+                cuts.iter()
+                    .map(|c| Some(c.as_str()))
+                    .chain(std::iter::once(None)),
+            )
+            .collect();
+        let next = AtomicUsize::new(0);
+        let missing = AtomicUsize::new(0);
+        let workers = crate::default_worker_count().clamp(1, ranges.len());
         let parsed: Vec<(Cpv, CacheEntry)> = std::thread::scope(|s| {
-            let handles: Vec<_> = keys
-                .chunks(chunk)
-                .map(|part| {
-                    let (txn, stored) = (&txn, stored.as_ref());
-                    s.spawn(move || -> io::Result<Vec<(Cpv, CacheEntry)>> {
-                        let objects = txn.open_table(OBJECTS).map_err(db_err)?;
-                        let mut out = Vec::with_capacity(part.len());
-                        for (key, oid) in part {
-                            let Ok(cpv) = Cpv::parse(key) else { continue };
-                            let Some((KIND_BLOB, data)) = Self::object(&objects, oid)? else {
-                                continue;
-                            };
-                            let Ok(text) = std::str::from_utf8(&data) else {
-                                continue;
-                            };
-                            let Ok(entry) = CacheEntry::parse(text) else {
-                                continue;
-                            };
-                            let fresh = stored.is_none_or(|stored| {
-                                entry
-                                    .eclasses
-                                    .iter()
-                                    .all(|(name, d)| stored.get(name) == Some(d))
-                            });
-                            if fresh {
-                                out.push((cpv, entry));
-                            }
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    let (tree_txn, cache_txn, ranges, next, missing) =
+                        (&tree_txn, &cache_txn, &ranges, &next, &missing);
+                    let stored = stored.as_ref();
+                    s.spawn(move || -> io::Result<Vec<RangeEntries>> {
+                        let ebuilds = tree_txn.open_table(EBUILDS).map_err(db_err)?;
+                        let cache = cache_txn.open_table(CACHE_ENTRIES).map_err(db_err)?;
+                        let mut out = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(&range) = ranges.get(i) else { break };
+                            let mut part = Vec::new();
+                            let n = Self::entries_in(&ebuilds, &cache, range, stored, &mut part)?;
+                            missing.fetch_add(n, Ordering::Relaxed);
+                            out.push((i, part));
                         }
                         Ok(out)
                     })
                 })
                 .collect();
-            let mut all = Vec::with_capacity(keys.len());
+            // Key order, whichever worker took which range.
+            let mut parts = Vec::new();
             for h in handles {
-                all.extend(h.join().map_err(|_| db_err("entry worker panicked"))??);
+                parts.extend(h.join().map_err(|_| db_err("entry worker panicked"))??);
             }
-            Ok::<_, io::Error>(all)
+            parts.sort_unstable_by_key(|(i, _)| *i);
+            Ok::<_, io::Error>(parts.into_iter().flat_map(|(_, part)| part).collect())
         })?;
+        let missing = missing.into_inner();
+        if missing > 0 {
+            tracing::debug!("{}: {missing} ebuilds have no md5-cache entry", self.file);
+        }
 
         if stored.is_some() {
             return Ok(parsed);

@@ -19,27 +19,41 @@ fn builder(path: &Path) -> RepositoryBuilder {
     builder
 }
 
-/// Read the tree from `<location>.redb` when it exists (experimental)
+/// Read the tree from `<location>.redb` and the md5-cache from `<location>.md5-cache.redb`
+/// when they exist (experimental)
 #[cfg(feature = "redb")]
 fn with_tree_db(builder: RepositoryBuilder, path: &Path) -> RepositoryBuilder {
+    use portage_repo::tree::redb::{RedbCache, RedbTree};
+    use portage_repo::tree::{EntrySource, FsEntries};
+
     let db = PathBuf::from(format!("{}.redb", path.display()));
-    if !db.is_file() {
-        return builder;
-    }
     let Ok(db) = camino::Utf8PathBuf::from_path_buf(db) else {
         return builder;
     };
-    match portage_repo::tree::redb::RedbTree::open(db.clone()) {
-        Ok(tree) => {
-            tracing::debug!("reading {} from {db}", path.display());
-            let tree = Arc::new(tree);
-            builder.storage(tree.clone(), tree)
-        }
+    if !db.is_file() {
+        return builder;
+    }
+    let tree = match RedbTree::open(db.clone()) {
+        Ok(tree) => Arc::new(tree),
         Err(e) => {
             crate::style::warn_line!("ignoring {db}: {e}");
-            builder
+            return builder;
         }
-    }
+    };
+    let cache_db = db.with_extension("md5-cache.redb");
+    let entries: Arc<dyn EntrySource> = if cache_db.is_file() {
+        match RedbCache::open(cache_db.clone(), Arc::clone(&tree)) {
+            Ok(cache) => Arc::new(cache),
+            Err(e) => {
+                crate::style::warn_line!("ignoring {cache_db}: {e}");
+                return builder;
+            }
+        }
+    } else {
+        Arc::new(FsEntries)
+    };
+    tracing::debug!("reading {} from {db}", path.display());
+    builder.storage(tree, entries)
 }
 
 /// Open a tree with secondary at `$XDG_CACHE_HOME/em/md5-cache/<repo-name>`

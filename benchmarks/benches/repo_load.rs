@@ -62,13 +62,14 @@ fn bench_repo_load(c: &mut Criterion) {
 
     #[cfg(feature = "redb")]
     if let Ok(db) = std::env::var("GENTOO_REDB") {
+        use portage_repo::tree::redb::{RedbCache, RedbTree};
+        let cache_db = std::env::var("GENTOO_REDB_CACHE").expect("GENTOO_REDB_CACHE");
         let open_redb = || {
-            let tree = std::sync::Arc::new(
-                portage_repo::tree::redb::RedbTree::open(db.as_str()).expect("redb"),
-            );
+            let tree = std::sync::Arc::new(RedbTree::open(db.as_str()).expect("redb"));
+            let cache = RedbCache::open(cache_db.as_str(), tree.clone()).expect("cache redb");
             Repository::builder()
                 .in_memory_cache()
-                .storage(tree.clone(), tree)
+                .storage(tree, std::sync::Arc::new(cache))
                 .open(&repo_path)
                 .expect("failed to open repository")
         };
