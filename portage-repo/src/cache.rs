@@ -605,24 +605,41 @@ fn cache_cpvs_in_dirs(
         }
     }
 
-    if opts.latest_per_cpn && !items.is_empty() {
-        use std::collections::HashMap;
-        let mut best: HashMap<portage_atom::Cpn, (portage_atom::Cpv, PathBuf, Option<SystemTime>)> =
-            HashMap::with_capacity(items.len());
-        for (cpv, path, mtime) in items.drain(..) {
-            best.entry(cpv.cpn)
-                .and_modify(|(prev_cpv, prev_path, prev_mtime)| {
-                    if cpv.version > prev_cpv.version {
-                        *prev_cpv = cpv.clone();
-                        *prev_path = path.clone();
-                        *prev_mtime = mtime;
-                    }
-                })
-                .or_insert((cpv, path, mtime));
-        }
-        items = best.into_values().collect();
+    if opts.latest_per_cpn {
+        items = latest_per_cpn(items);
     }
     items
+}
+
+/// Keep only the highest version of each package, across every repository in `items`
+fn latest_per_cpn<S>(
+    items: Vec<(portage_atom::Cpv, S, Option<SystemTime>)>,
+) -> Vec<(portage_atom::Cpv, S, Option<SystemTime>)> {
+    let mut best: std::collections::HashMap<
+        portage_atom::Cpn,
+        (portage_atom::Cpv, S, Option<SystemTime>),
+    > = std::collections::HashMap::with_capacity(items.len());
+    for item in items {
+        match best.entry(item.0.cpn) {
+            std::collections::hash_map::Entry::Occupied(mut prev) => {
+                if item.0.version > prev.get().0.version {
+                    prev.insert(item);
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(item);
+            }
+        }
+    }
+    best.into_values().collect()
+}
+
+/// Where one cache entry's text comes from
+pub(crate) enum CacheItem {
+    /// A file in an md5-cache directory
+    File(PathBuf),
+    /// Text a storage backend already read
+    Text(String),
 }
 
 /// Read every `md5-cache` entry across `repos` in parallel, applying
@@ -691,14 +708,38 @@ where
 {
     // Phase 1 — discover (and optionally pre-dedupe) every cache file off
     // the async runtime. Phase 2 receives the same worker budget below.
+    // A backend that keeps its entries elsewhere hands over their text instead.
     let jobs = cache_jobs(opts);
-    let dirs = repos.iter().map(Repository::cache_dir).collect::<Vec<_>>();
+    let mut stored = Vec::new();
+    let mut dirs = Vec::new();
+    for repo in repos {
+        match repo.entry_source().raw_entries(opts.latest_per_cpn) {
+            Some(raw) => {
+                let raw = raw.map_err(|e| crate::repo::util::io_err(repo.path(), e))?;
+                stored.extend(
+                    raw.into_iter()
+                        .map(|(cpv, text)| (cpv, CacheItem::Text(text), None)),
+                );
+            }
+            None => dirs.push(repo.cache_dir()),
+        }
+    }
     let discovery_opts = opts.clone();
-    let items = tokio::task::spawn_blocking(move || {
+    let found = tokio::task::spawn_blocking(move || {
         cache_cpvs_in_dirs(dirs.into_iter(), &discovery_opts, with_mtime)
     })
     .await
     .map_err(|e| crate::Error::SourceWorker(format!("cache discovery failed: {e}")))?;
+    let mut items: Vec<_> = found
+        .into_iter()
+        .map(|(cpv, path, mtime)| (cpv, CacheItem::File(path), mtime))
+        .collect();
+    if !stored.is_empty() {
+        items.extend(stored);
+        if opts.latest_per_cpn {
+            items = latest_per_cpn(items);
+        }
+    }
     read_and_decode(items, jobs, decode).await
 }
 
@@ -732,6 +773,10 @@ where
     })
     .await
     .map_err(|e| crate::Error::SourceWorker(format!("secondary cache discovery failed: {e}")))?;
+    let items = items
+        .into_iter()
+        .map(|(cpv, path, mtime)| (cpv, CacheItem::File(path), mtime))
+        .collect();
     read_and_decode(items, jobs, decode).await
 }
 
@@ -743,7 +788,7 @@ where
 /// local `Vec`. Concat at the end. Avoids shared-mutex contention that
 /// would otherwise dominate on many-core boxes.
 async fn read_and_decode<T, F>(
-    items: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)>,
+    items: Vec<(portage_atom::Cpv, CacheItem, Option<SystemTime>)>,
     jobs: usize,
     decode: F,
 ) -> Result<Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>>
@@ -760,7 +805,7 @@ where
     let mut items = items.into_iter();
     let mut handles = Vec::with_capacity(jobs);
     for _ in 0..jobs {
-        let chunk: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)> =
+        let chunk: Vec<(portage_atom::Cpv, CacheItem, Option<SystemTime>)> =
             items.by_ref().take(chunk_size).collect();
         if chunk.is_empty() {
             break;
@@ -769,13 +814,13 @@ where
         handles.push(tokio::task::spawn_blocking(move || {
             let mut out: Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)> =
                 Vec::with_capacity(chunk.len());
-            for (cpv, path, mtime) in chunk {
-                let result = match fs::read_to_string(&path) {
-                    Ok(text) => decode(&text),
-                    Err(e) => Err(crate::Error::Io {
-                        path: path.clone(),
-                        source: e,
-                    }),
+            for (cpv, item, mtime) in chunk {
+                let result = match item {
+                    CacheItem::Text(text) => decode(&text),
+                    CacheItem::File(path) => match fs::read_to_string(&path) {
+                        Ok(text) => decode(&text),
+                        Err(e) => Err(crate::Error::Io { path, source: e }),
+                    },
                 };
                 out.push((cpv, mtime, result));
             }
@@ -853,12 +898,18 @@ mod tests {
     async fn zero_jobs_reads_all_cache_entries() {
         let dir = tempfile::tempdir().unwrap();
         let first = dir.path().join("first");
-        let second = dir.path().join("second");
         std::fs::write(&first, "first").unwrap();
-        std::fs::write(&second, "second").unwrap();
         let items = vec![
-            (portage_atom::Cpv::parse("cat/a-1.0").unwrap(), first, None),
-            (portage_atom::Cpv::parse("cat/b-1.0").unwrap(), second, None),
+            (
+                portage_atom::Cpv::parse("cat/a-1.0").unwrap(),
+                CacheItem::File(first),
+                None,
+            ),
+            (
+                portage_atom::Cpv::parse("cat/b-1.0").unwrap(),
+                CacheItem::Text("second".into()),
+                None,
+            ),
         ];
         let opts = CacheReadOpts {
             jobs: Some(0),

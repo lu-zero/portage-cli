@@ -305,6 +305,10 @@ impl EntrySource for RedbCache {
             }
         })
     }
+
+    fn raw_entries(&self, latest_per_cpn: bool) -> Option<io::Result<Vec<(Cpv, String)>>> {
+        Some(self.raw_texts(latest_per_cpn))
+    }
 }
 
 impl crate::metadata_cache::MetadataCache for RedbCache {
@@ -331,6 +335,58 @@ impl crate::metadata_cache::MetadataCache for RedbCache {
 
     fn is_populated(&self) -> bool {
         true
+    }
+}
+
+impl RedbCache {
+    fn raw_texts(&self, latest_per_cpn: bool) -> io::Result<Vec<(Cpv, String)>> {
+        let txn = self.db.begin_read().map_err(db_err)?;
+        let table = txn.open_table(CACHE_ENTRIES).map_err(db_err)?;
+        // One sequential pass copies; parsing names and decompressing is spread over workers,
+        // like the directory read spreads file reads.
+        let mut stored: Vec<(String, Vec<u8>)> = Vec::new();
+        for row in table.iter().map_err(db_err)? {
+            let (key, value) = row.map_err(db_err)?;
+            stored.push((key.value().to_string(), value.value().to_vec()));
+        }
+        let workers = crate::default_worker_count().max(1);
+        let chunk = stored.len().div_ceil(workers).max(1);
+        let all: Vec<(Cpv, String)> = std::thread::scope(|s| {
+            let handles: Vec<_> = stored
+                .chunks(chunk)
+                .map(|part| {
+                    s.spawn(move || -> io::Result<Vec<(Cpv, String)>> {
+                        let mut out = Vec::with_capacity(part.len());
+                        for (key, raw) in part {
+                            let Ok(cpv) = Cpv::parse(key) else { continue };
+                            let (_, data) = decode(raw)?;
+                            if let Ok(text) = String::from_utf8(data) {
+                                out.push((cpv, text));
+                            }
+                        }
+                        Ok(out)
+                    })
+                })
+                .collect();
+            let mut all = Vec::with_capacity(stored.len());
+            for h in handles {
+                all.extend(h.join().map_err(|_| db_err("cache worker panicked"))??);
+            }
+            Ok::<_, io::Error>(all)
+        })?;
+        if !latest_per_cpn {
+            return Ok(all);
+        }
+        let mut best: HashMap<portage_atom::Cpn, (Cpv, String)> = HashMap::new();
+        for (cpv, text) in all {
+            match best.get(&cpv.cpn) {
+                Some((prev, _)) if prev.version >= cpv.version => {}
+                _ => {
+                    best.insert(cpv.cpn, (cpv, text));
+                }
+            }
+        }
+        Ok(best.into_values().collect())
     }
 }
 

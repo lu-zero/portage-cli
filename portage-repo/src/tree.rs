@@ -48,6 +48,11 @@ pub trait TreeSource: Send + Sync {
 pub trait EntrySource: Send + Sync {
     /// Every valid `(cpv, entry)` of `repo`
     fn entries<'a>(&'a self, repo: &'a Repository) -> BoxFuture<'a, Vec<(Cpv, CacheEntry)>>;
+    /// Every stored entry's text, unchecked (only the highest version of each package when
+    /// `latest_per_cpn`); `None` means read the checkout's md5-cache directory
+    fn raw_entries(&self, _latest_per_cpn: bool) -> Option<io::Result<Vec<(Cpv, String)>>> {
+        None
+    }
 }
 
 /// The storage of the repository at `location`

@@ -517,6 +517,11 @@ impl Repository {
         self.entry_source.entries(self).await
     }
 
+    /// How the repository's metadata entries are produced
+    pub(crate) fn entry_source(&self) -> &dyn EntrySource {
+        &*self.entry_source
+    }
+
     /// Where the repository's files are read from
     pub(crate) fn tree(&self) -> &dyn TreeSource {
         &*self.tree
