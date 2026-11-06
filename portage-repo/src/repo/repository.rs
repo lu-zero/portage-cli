@@ -14,7 +14,7 @@ use super::category::Categories;
 use super::ebuild::Ebuild;
 use crate::metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
 use crate::tree::{
-    EntrySource, Storage, TreeSource, content_lines, read_text, tree_lines, tree_names,
+    EbuildFile, EntrySource, Storage, TreeSource, content_lines, read_text, tree_lines, tree_names,
 };
 
 type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
@@ -280,6 +280,8 @@ pub struct Repository {
     /// every consumer) so `ebuilds`/`find_cpns`/`is_fresh_cached` can't be
     /// called with a mismatched or stale masters list.
     masters: Vec<Repository>,
+    /// Under which copies of a tree stored elsewhere are made for builds
+    checkout_root: Option<Utf8PathBuf>,
 }
 
 impl std::fmt::Debug for Repository {
@@ -317,6 +319,7 @@ enum SecondarySpec {
 pub struct RepositoryBuilder {
     secondary: Option<SecondarySpec>,
     storage: Option<Storage>,
+    checkouts: Option<Utf8PathBuf>,
 }
 
 impl RepositoryBuilder {
@@ -344,16 +347,23 @@ impl RepositoryBuilder {
 
     /// Read the tree, entries and primary cache from `storage` instead of the checkout
     ///
-    /// Profiles, `em regen` and builds still use the checkout at the path given to `open`.
+    /// `em regen` still uses the checkout at the path given to `open`.
     pub fn storage(mut self, storage: Storage) -> Self {
         self.storage = Some(storage);
+        self
+    }
+
+    /// Builds from a repository stored elsewhere than a checkout use copies of its package
+    /// directories at `root/<location>/<tree>`, masters' included
+    pub fn checkout_root(mut self, root: impl Into<Utf8PathBuf>) -> Self {
+        self.checkouts = Some(root.into());
         self
     }
 
     /// Open an ebuild repository at `path`
     pub fn open(self, path: impl Into<PathBuf>) -> Result<Repository> {
         let spec = self.secondary.ok_or(Error::BuilderMissingSecondary)?;
-        Repository::open_with_secondary(path, spec, self.storage)
+        Repository::open_with_secondary(path, spec, self.storage, self.checkouts.as_deref())
     }
 
     /// Open a repository and resolve masters from `repos_dir`
@@ -382,7 +392,9 @@ impl RepositoryBuilder {
         default_master: Option<&str>,
     ) -> Result<Repository> {
         let spec = self.secondary.ok_or(Error::BuilderMissingSecondary)?;
-        let mut repo = Repository::open_with_secondary(path, spec.clone(), self.storage)?;
+        let checkouts = self.checkouts.as_deref();
+        let mut repo =
+            Repository::open_with_secondary(path, spec.clone(), self.storage, checkouts)?;
         let mut masters: Vec<Repository> = Vec::new();
         let mut seen = HashSet::new();
         seen.insert(repo.name().to_string());
@@ -410,6 +422,7 @@ impl Repository {
         path: impl Into<PathBuf>,
         secondary_spec: SecondarySpec,
         storage: Option<Storage>,
+        checkouts: Option<&Utf8Path>,
     ) -> Result<Self> {
         let std_path = path.into();
         let path = Utf8PathBuf::from_path_buf(std_path).map_err(Error::InvalidRepository)?;
@@ -463,6 +476,7 @@ impl Repository {
             secondary,
             secondary_dir,
             masters: Vec::new(),
+            checkout_root: checkouts.map(Utf8Path::to_owned),
         })
     }
 
@@ -505,7 +519,8 @@ impl Repository {
                 SecondarySpec::UserRoot(root) => SecondarySpec::UserRoot(root.clone()),
                 SecondarySpec::Memory | SecondarySpec::Custom(_) => SecondarySpec::Memory,
             };
-            let master = Self::open_with_secondary(master_path, master_spec, None)?;
+            let checkouts = repo.checkout_root.as_deref();
+            let master = Self::open_with_secondary(master_path, master_spec, None, checkouts)?;
             Self::resolve_masters_with_spec(&master, repos_dir, out, seen, spec, None, None)?;
             out.push(master);
         }
@@ -530,6 +545,27 @@ impl Repository {
     /// Absolute path to the repository root
     pub fn path(&self) -> &Utf8Path {
         &self.path
+    }
+
+    /// Where copies of this repository go, keyed by its location so two trees sharing a name
+    /// (the host's and a stage's) never prune each other
+    fn copies_dir(&self) -> Option<Utf8PathBuf> {
+        let root = self.checkout_root.as_ref()?;
+        Some(root.join(self.path.strip_prefix("/").unwrap_or(&self.path)))
+    }
+
+    /// `cpv`'s ebuild, for a build to make real with [`EbuildFile::checkout`]
+    pub fn ebuild_file(&self, cpv: &Cpv) -> EbuildFile {
+        let rel = Utf8PathBuf::from(format!(
+            "{}/{}/{}-{}.ebuild",
+            cpv.cpn.category, cpv.cpn.package, cpv.cpn.package, cpv.version
+        ));
+        EbuildFile::new(
+            Arc::clone(&self.tree),
+            self.copies_dir(),
+            rel,
+            self.path.clone(),
+        )
     }
 
     /// The tree to search for eclasses; `None` when it has no `eclass/` directory

@@ -42,6 +42,9 @@ pub trait TreeSource: Send + Sync {
     fn ebuild_index(&self) -> Option<io::Result<Vec<Utf8PathBuf>>> {
         None
     }
+    /// A real directory holding `rels` at their repo-relative paths: the checkout itself, or a
+    /// copy under `copies` kept per tree and reused
+    fn checkout(&self, rels: &[&Utf8Path], copies: Option<&Utf8Path>) -> io::Result<Utf8PathBuf>;
 }
 
 /// How a backend produces the valid metadata entries of a repository
@@ -170,6 +173,68 @@ impl TreeFile {
     }
 }
 
+/// An ebuild in its repository's tree, made a real file only when a build needs one
+#[derive(Clone)]
+pub struct EbuildFile {
+    tree: Arc<dyn TreeSource>,
+    copies: Option<Utf8PathBuf>,
+    rel: Utf8PathBuf,
+    location: Utf8PathBuf,
+}
+
+impl std::fmt::Debug for EbuildFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.tree.display(&self.rel))
+    }
+}
+
+impl EbuildFile {
+    pub(crate) fn new(
+        tree: Arc<dyn TreeSource>,
+        copies: Option<Utf8PathBuf>,
+        rel: Utf8PathBuf,
+        location: Utf8PathBuf,
+    ) -> Self {
+        EbuildFile {
+            tree,
+            copies,
+            rel,
+            location,
+        }
+    }
+
+    /// The ebuild at `path`, in the checkout three levels above it
+    pub fn on_disk(path: &Utf8Path) -> Self {
+        let location = path
+            .ancestors()
+            .nth(3)
+            .unwrap_or(Utf8Path::new(""))
+            .to_owned();
+        let rel = path.strip_prefix(&location).unwrap_or(path).to_owned();
+        EbuildFile {
+            tree: Arc::new(FsTree::new(location.clone())),
+            copies: None,
+            rel,
+            location,
+        }
+    }
+
+    /// Where its repository is configured, to open it by
+    pub fn location(&self) -> &Utf8Path {
+        &self.location
+    }
+
+    /// The ebuild as a real file in a real package directory, for `FILESDIR` and `EBUILD`
+    pub fn checkout(&self) -> Result<Utf8PathBuf> {
+        let pkg = self.rel.parent().unwrap_or(Utf8Path::new(""));
+        let root = self
+            .tree
+            .checkout(&[pkg], self.copies.as_deref())
+            .map_err(|e| crate::repo::util::io_err(self.tree.display(pkg), e))?;
+        Ok(root.join(&self.rel))
+    }
+}
+
 /// A checkout on disk
 #[derive(Clone, Debug)]
 pub struct FsTree {
@@ -240,6 +305,10 @@ impl TreeSource for FsTree {
 
     fn display(&self, rel: &Utf8Path) -> String {
         self.root.join(rel).into_string()
+    }
+
+    fn checkout(&self, _rels: &[&Utf8Path], _copies: Option<&Utf8Path>) -> io::Result<Utf8PathBuf> {
+        Ok(self.root.clone())
     }
 }
 
@@ -326,4 +395,42 @@ pub(crate) fn tree_names(tree: &dyn TreeSource, rel: &str) -> Result<Vec<(String
         .collect();
     names.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     Ok(names)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_directory_of_files_reads_in_name_order_without_dotfiles_or_backups() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let conf = root.join("package.use");
+        std::fs::create_dir_all(&conf).unwrap();
+        for (name, text) in [("b", "2"), ("a", "1"), (".hidden", "x"), ("c~", "x")] {
+            std::fs::write(conf.join(name), text).unwrap();
+        }
+        let texts = TreeFile::on_disk(&conf).texts();
+        let shown: Vec<_> = texts
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (conf.join("a").as_str(), "1"),
+                (conf.join("b").as_str(), "2")
+            ]
+        );
+        assert!(TreeFile::on_disk(&conf).is_dir());
+        assert!(TreeFile::on_disk(&root.join("missing")).texts().is_empty());
+    }
+
+    #[test]
+    fn an_ebuild_on_disk_is_its_own_checkout() {
+        let path = Utf8Path::new("/var/db/repos/gentoo/app-misc/jq/jq-1.8.2.ebuild");
+        let ebuild = EbuildFile::on_disk(path);
+        assert_eq!(ebuild.location(), "/var/db/repos/gentoo");
+        assert_eq!(ebuild.checkout().unwrap(), path);
+    }
 }
