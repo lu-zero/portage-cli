@@ -149,19 +149,25 @@ pub async fn regen_cache(
             )
         }
         RegenWriteTarget::Repository => {
-            let staged_primary = stage_dir_target(
-                primary_dir.as_std_path(),
-                ebuilds.iter().map(Ebuild::category),
-            );
+            // A repository stored elsewhere has no md5-cache directory to write: use the secondary.
+            let staged_primary = (!repo.stored_elsewhere())
+                .then(|| {
+                    stage_dir_target(
+                        primary_dir.as_std_path(),
+                        ebuilds.iter().map(Ebuild::category),
+                    )
+                    .ok()
+                })
+                .flatten();
             match staged_primary {
-                Ok(staging) => {
+                Some(staging) => {
                     let writer = Arc::new(DirMetadataCache::new(staging.clone()));
                     (
                         PreparedWriteTarget::Dir(writer),
                         Some((primary_dir.clone().into_std_path_buf(), staging)),
                     )
                 }
-                Err(_) => match repo.secondary_cache_dir() {
+                None => match repo.secondary_cache_dir() {
                     Some(secondary_dir) => {
                         let staging = stage_dir_target(
                             secondary_dir.as_std_path(),

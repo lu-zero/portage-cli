@@ -251,6 +251,10 @@ impl TreeSource for RedbTree {
         prune_copies(copies, &root);
         Ok(root)
     }
+
+    fn is_checkout(&self) -> bool {
+        false
+    }
 }
 
 /// How long a copy of another tree, or a staging directory left by a killed em, is kept unused

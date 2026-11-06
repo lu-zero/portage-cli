@@ -346,8 +346,6 @@ impl RepositoryBuilder {
     }
 
     /// Read the tree, entries and primary cache from `storage` instead of the checkout
-    ///
-    /// `em regen` still uses the checkout at the path given to `open`.
     pub fn storage(mut self, storage: Storage) -> Self {
         self.storage = Some(storage);
         self
@@ -547,6 +545,12 @@ impl Repository {
         &self.path
     }
 
+    /// Whether the repository lives somewhere other than a checkout at [`Self::path`], so
+    /// writers that target its directory must not run
+    pub fn stored_elsewhere(&self) -> bool {
+        !self.tree.is_checkout()
+    }
+
     /// Where copies of this repository go, keyed by its location so two trees sharing a name
     /// (the host's and a stage's) never prune each other
     fn copies_dir(&self) -> Option<Utf8PathBuf> {
@@ -581,10 +585,8 @@ impl Repository {
         &self.masters
     }
 
-    /// Directory backing the in-tree primary md5-cache (`metadata/md5-cache`
-    /// under [`Self::path`]), regardless of whether it's currently writable
-    /// — matches `open_with_secondary`'s own construction of `primary`
-    /// (private, in this module).
+    /// The checkout's md5-cache directory (`metadata/md5-cache` under [`Self::path`]), whether
+    /// or not it exists or is writable; a repository stored elsewhere has none
     pub fn primary_cache_dir(&self) -> Utf8PathBuf {
         self.path.join("metadata").join("md5-cache")
     }

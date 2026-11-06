@@ -45,6 +45,8 @@ pub trait TreeSource: Send + Sync {
     /// A real directory holding `rels` at their repo-relative paths: the checkout itself, or a
     /// copy under `copies` kept per tree and reused
     fn checkout(&self, rels: &[&Utf8Path], copies: Option<&Utf8Path>) -> io::Result<Utf8PathBuf>;
+    /// Whether the tree is a checkout on disk, which writers may change in place
+    fn is_checkout(&self) -> bool;
 }
 
 /// How a backend produces the valid metadata entries of a repository
@@ -101,14 +103,15 @@ pub(crate) fn tree_at(location: &Utf8Path) -> Arc<dyn TreeSource> {
     Arc::new(FsTree::new(location))
 }
 
-/// Whether the repository at `location` is stored somewhere other than its checkout
+/// Whether [`storage_at`] finds the repository at `location` somewhere other than its checkout
 pub(crate) fn stored_elsewhere(location: &Utf8Path) -> bool {
-    #[cfg(feature = "redb")]
-    if redb::tree_file(location).is_file() {
-        return true;
+    cfg_select! {
+        feature = "redb" => redb::tree_file(location).is_file(),
+        _ => {
+            let _ = location;
+            false
+        }
     }
-    let _ = location;
-    false
 }
 
 /// Whether `location` holds a repository: a checkout with `metadata/layout.conf` or
@@ -309,6 +312,10 @@ impl TreeSource for FsTree {
 
     fn checkout(&self, _rels: &[&Utf8Path], _copies: Option<&Utf8Path>) -> io::Result<Utf8PathBuf> {
         Ok(self.root.clone())
+    }
+
+    fn is_checkout(&self) -> bool {
+        true
     }
 }
 
