@@ -1489,6 +1489,10 @@ impl EbuildShell {
                 }
                 result
             }
+            // An ebuild read from a database has no file to retry: report the parse error.
+            Err(e) if !ebuild.path().is_file() => {
+                return Err(Error::Shell(format!("parsing {}: {e}", ebuild.path())));
+            }
             Err(_) => self
                 .shell
                 .source_script(
