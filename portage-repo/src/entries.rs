@@ -481,7 +481,33 @@ pub async fn alias_entries(
 ) -> Vec<(Cpv, CacheEntry)> {
     resolve_ebuilds(
         source,
-        Store::Alias(store),
+        Store::Only(store),
+        ebuilds,
+        &mut HashMap::new(),
+        &mut EclassMemo::default(),
+    )
+    .await
+}
+
+/// Entries for `cpvs`, which the storage backend holds no valid entry for: the secondary
+/// cache's when still valid, otherwise sourced through the tree and written there
+#[cfg(feature = "redb")]
+pub(crate) async fn backend_gaps(repo: &Repository, cpvs: Vec<Cpv>) -> Vec<(Cpv, CacheEntry)> {
+    if cpvs.is_empty() {
+        return Vec::new();
+    }
+    tracing::debug!(
+        "repo '{}': {} ebuild(s) with no valid stored entry",
+        repo.name(),
+        cpvs.len()
+    );
+    let ebuilds: Vec<_> = cpvs
+        .iter()
+        .filter_map(|cpv| repo.ebuild_for_cpv(cpv).ok().flatten())
+        .collect();
+    resolve_ebuilds(
+        repo,
+        Store::Only(repo.secondary()),
         ebuilds,
         &mut HashMap::new(),
         &mut EclassMemo::default(),
@@ -494,8 +520,9 @@ pub async fn alias_entries(
 enum Store<'a> {
     /// The repo's own primary-then-secondary cache
     Repo,
-    /// An alias's own cache; its cpvs have no in-tree entry
-    Alias(&'a dyn MetadataCache),
+    /// Only this cache: an alias's own, or the secondary for ebuilds the primary has no valid
+    /// entry for
+    Only(&'a dyn MetadataCache),
 }
 
 /// Run the four-step chain over `ebuilds`, consuming matching entries out of
@@ -538,7 +565,7 @@ async fn resolve_ebuilds(
         // this hits secondary (and any primary entry not in the bulk map).
         let stored = match store {
             Store::Repo => repo.cache_entry(&cpv),
-            Store::Alias(alias) => alias.get(&cpv),
+            Store::Only(only) => only.get(&cpv),
         };
         if let Ok(Some(entry)) = stored
             && valid(&entry, digests)
@@ -616,7 +643,7 @@ async fn resolve_ebuilds(
                 }
                 let put = match store {
                     Store::Repo => repo.put_secondary(&cpv, &entry),
-                    Store::Alias(alias) => alias.put(&cpv, &entry),
+                    Store::Only(only) => only.put(&cpv, &entry),
                 };
                 if let Err(e) = put {
                     tracing::warn!(

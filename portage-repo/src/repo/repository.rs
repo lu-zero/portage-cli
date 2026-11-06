@@ -857,6 +857,12 @@ impl Repository {
         self.secondary.get(cpv)
     }
 
+    /// The secondary (always-writable) store
+    #[cfg(feature = "redb")]
+    pub(crate) fn secondary(&self) -> &dyn MetadataCache {
+        &*self.secondary
+    }
+
     /// Persist `entry` to the secondary (always-writable) store
     pub fn put_secondary(&self, cpv: &Cpv, entry: &CacheEntry) -> Result<()> {
         self.secondary.put(cpv, entry)

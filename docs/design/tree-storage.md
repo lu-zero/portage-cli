@@ -130,14 +130,17 @@ flowchart TB
   which -->|directory| idx{"sync stamp matches the gap index?"}
   idx -->|yes| fast["read md5-cache + gap entries, check eclass digests"]
   idx -->|no| slow["walk + stat every ebuild, re-digest suspects, rewrite the index"]
-  which -->|redb| scan["scan md5_cache table, compare stored eclass md5s"]
+  which -->|redb| scan["merge the ebuilds and entries tables, compare stored md5s"]
+  scan --> gaps["ebuilds with no valid entry: secondary cache, else source and write it"]
   fast --> out(["Vec of (Cpv, CacheEntry)"])
   slow --> out
-  scan --> out
+  gaps --> out
 ```
 
-The secondary cache (`MetadataCache`, em's own store for overlays without an md5-cache) is
-unchanged: both backends can still fall back to sourcing an ebuild and writing the result there.
+Finding what lacks a valid entry is per backend; filling it is shared, on the worker pool `em
+regen` uses. The redb merge sees each ebuild with no entry, an `_md5_` that differs or a stale
+eclass, so a cache database lagging the tree, or missing, costs one sourcing of those ebuilds
+(all 34k: 10 s), then reads of em's secondary cache.
 
 ## Profiles
 
@@ -244,7 +247,7 @@ explanations name files with `redb://` URIs.
 | kind | sites | why, or what it becomes |
 |---|---|---|
 | Builds | `Ebuild::path` (`FILESDIR`, `EBUILD`, the Manifest), standalone `em ebuild <path>` | the package directory is real by construction: the checkout's, or step 7's copy |
-| Uncached sourcing | an ebuild whose metadata is not cached (overlays without md5-cache, alias packages) | sourcing reads through the tree; the redb backend drops entries it lacks instead of regenerating them |
+| Uncached sourcing | an ebuild whose metadata is not cached (overlays without md5-cache, alias packages) | reads through the tree, on the shared worker pool |
 | The directory backend's own work | gap index, sync stamp, mtime suspects, md5-cache walk, `search.rs`'s symlinked-ebuild fallback | checkout-only by nature |
 | Identity from the directory name | `mirrordist.rs` keys its default deletion database on it | switching to `repo.name()` could orphan an existing database |
 | Raw `repos.conf` walks | `clean.rs` `declared_categories` (falls back to hyphenated directory names without `profiles/categories`) | moving it to `Repository` changes behaviour |

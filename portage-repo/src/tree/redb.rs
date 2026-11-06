@@ -35,8 +35,11 @@ const KIND_BLOB: u8 = 3;
 
 type Oid = [u8; 20];
 
-/// The valid entries found in one key range, with the range's index
-type RangeEntries = (usize, Vec<(Cpv, CacheEntry)>);
+/// Valid entries, and the ebuilds without one
+type Split = (Vec<(Cpv, CacheEntry)>, Vec<Cpv>);
+
+/// [`Split`] of one key range, with the range's index
+type RangeEntries = (usize, Vec<(Cpv, CacheEntry)>, Vec<Cpv>);
 
 /// A repository tree read from a redb database
 pub struct RedbTree {
@@ -333,19 +336,29 @@ impl RedbTree {
 
     /// `cat/pkg/pkg-ver.ebuild` for every key of the `ebuilds` table (`cat/pkg-ver`)
     fn ebuild_paths(&self) -> io::Result<Vec<Utf8PathBuf>> {
+        Ok(self
+            .cpvs()?
+            .into_iter()
+            .map(|cpv| {
+                let pf = format!("{}-{}", cpv.cpn.package, cpv.version);
+                Utf8PathBuf::from(format!(
+                    "{}/{}/{pf}.ebuild",
+                    cpv.cpn.category, cpv.cpn.package
+                ))
+            })
+            .collect())
+    }
+
+    /// Every cpv in the `ebuilds` table
+    fn cpvs(&self) -> io::Result<Vec<Cpv>> {
         let txn = self.db.begin_read().map_err(db_err)?;
         let table = txn.open_table(EBUILDS).map_err(db_err)?;
         let mut out = Vec::new();
         for row in table.iter().map_err(db_err)? {
             let (key, _) = row.map_err(db_err)?;
-            let Ok(cpv) = Cpv::parse(key.value()) else {
-                continue;
-            };
-            let (cat, pf) = key.value().split_once('/').unwrap_or_default();
-            out.push(Utf8PathBuf::from(format!(
-                "{cat}/{}/{pf}.ebuild",
-                cpv.cpn.package
-            )));
+            if let Ok(cpv) = Cpv::parse(key.value()) {
+                out.push(cpv);
+            }
         }
         Ok(out)
     }
@@ -403,19 +416,20 @@ pub(crate) fn storage_at(location: &Utf8Path) -> Option<super::Storage> {
     let tree = open_tree(location)?;
     let cache_db = tree_file(location).with_extension("md5-cache.redb");
     let mut storage = super::Storage::checkout(location);
-    if cache_db.is_file() {
+    let cache = if cache_db.is_file() {
         match RedbCache::open(cache_db.clone(), Arc::clone(&tree)) {
-            Ok(cache) => {
-                let cache = Arc::new(cache);
-                storage.entries = cache.clone();
-                storage.primary = cache;
-            }
+            Ok(cache) => cache,
             Err(e) => {
-                tracing::warn!("ignoring {cache_db}: {e}");
-                return None;
+                tracing::warn!("ignoring {cache_db}, sourcing what it would hold: {e}");
+                RedbCache::missing(cache_db, Arc::clone(&tree))
             }
         }
-    }
+    } else {
+        RedbCache::missing(cache_db, Arc::clone(&tree))
+    };
+    let cache = Arc::new(cache);
+    storage.entries = cache.clone();
+    storage.primary = cache;
     tracing::debug!("reading {location} from {}", tree.file);
     storage.tree = tree;
     Some(storage)
@@ -423,7 +437,8 @@ pub(crate) fn storage_at(location: &Utf8Path) -> Option<super::Storage> {
 
 /// The md5-cache database of a [`RedbTree`]
 pub struct RedbCache {
-    db: ReadOnlyDatabase,
+    /// `None` when there is no cache database: every ebuild is then left to be sourced
+    db: Option<ReadOnlyDatabase>,
     file: Utf8PathBuf,
     tree: Arc<RedbTree>,
 }
@@ -433,7 +448,20 @@ impl RedbCache {
     pub fn open(file: impl Into<Utf8PathBuf>, tree: Arc<RedbTree>) -> io::Result<Self> {
         let file = file.into();
         let db = ReadOnlyDatabase::open(&file).map_err(db_err)?;
-        Ok(RedbCache { db, file, tree })
+        Ok(RedbCache {
+            db: Some(db),
+            file,
+            tree,
+        })
+    }
+
+    /// No cache database at `file` (yet) for `tree`
+    pub fn missing(file: impl Into<Utf8PathBuf>, tree: Arc<RedbTree>) -> Self {
+        RedbCache {
+            db: None,
+            file: file.into(),
+            tree,
+        }
     }
 }
 
@@ -441,10 +469,20 @@ impl EntrySource for RedbCache {
     fn entries<'a>(&'a self, repo: &'a Repository) -> BoxFuture<'a, Vec<(Cpv, CacheEntry)>> {
         Box::pin(async move {
             match self.read_entries(repo) {
-                Ok(out) => out,
+                Ok((mut out, gaps)) => {
+                    out.extend(crate::entries::backend_gaps(repo, gaps).await);
+                    out
+                }
                 Err(e) => {
+                    // Every ebuild still has its text in the tree: source them all.
                     tracing::error!("repo '{}': {}: {e}", repo.name(), self.file);
-                    Vec::new()
+                    match self.tree.cpvs() {
+                        Ok(cpvs) => crate::entries::backend_gaps(repo, cpvs).await,
+                        Err(e) => {
+                            tracing::error!("repo '{}': {}: {e}", repo.name(), self.tree.file);
+                            Vec::new()
+                        }
+                    }
                 }
             }
         })
@@ -460,7 +498,10 @@ impl crate::metadata_cache::MetadataCache for RedbCache {
         let key = format!("{}/{}-{}", cpv.cpn.category, cpv.cpn.package, cpv.version);
         let shown = || format!("{}?{key}", self.file);
         let io = |e: io::Error| crate::repo::util::io_err(shown(), e);
-        let txn = self.db.begin_read().map_err(db_err).map_err(io)?;
+        let Some(db) = &self.db else {
+            return Ok(None);
+        };
+        let txn = db.begin_read().map_err(db_err).map_err(io)?;
         let table = txn.open_table(CACHE_ENTRIES).map_err(db_err).map_err(io)?;
         let Some(stored) = table.get(key.as_str()).map_err(db_err).map_err(io)? else {
             return Ok(None);
@@ -478,13 +519,16 @@ impl crate::metadata_cache::MetadataCache for RedbCache {
     }
 
     fn is_populated(&self) -> bool {
-        true
+        self.db.is_some()
     }
 }
 
 impl RedbCache {
     fn raw_texts(&self, latest_per_cpn: bool) -> io::Result<Vec<(Cpv, String)>> {
-        let txn = self.db.begin_read().map_err(db_err)?;
+        let Some(db) = &self.db else {
+            return Ok(Vec::new());
+        };
+        let txn = db.begin_read().map_err(db_err)?;
         let table = txn.open_table(CACHE_ENTRIES).map_err(db_err)?;
         // One sequential pass copies; parsing names and decompressing is spread over workers,
         // like the directory read spreads file reads.
@@ -560,62 +604,69 @@ impl RedbCache {
     /// Valid entries for the keys in `lo..hi`, merging the ordered `ebuilds` and `entries` tables
     fn entries_in(
         ebuilds: &redb::ReadOnlyTable<&str, &[u8]>,
-        cache: &redb::ReadOnlyTable<&str, &[u8]>,
+        cache: Option<&redb::ReadOnlyTable<&str, &[u8]>>,
         (lo, hi): (Option<&str>, Option<&str>),
         stored: Option<&HashMap<Interned<DefaultInterner>, md5::Digest>>,
         out: &mut Vec<(Cpv, CacheEntry)>,
-    ) -> io::Result<usize> {
+        gaps: &mut Vec<Cpv>,
+    ) -> io::Result<()> {
         let bounds = (
             lo.map_or(Bound::Unbounded, Bound::Included),
             hi.map_or(Bound::Unbounded, Bound::Excluded),
         );
-        let mut entries = cache.range::<&str>(bounds).map_err(db_err)?.peekable();
-        let mut missing = 0;
+        let mut entries = cache
+            .map(|c| c.range::<&str>(bounds))
+            .transpose()
+            .map_err(db_err)?
+            .into_iter()
+            .flatten()
+            .peekable();
         for row in ebuilds.range::<&str>(bounds).map_err(db_err)? {
             let (key, digest) = row.map_err(db_err)?;
             let key = key.value();
             let mut found = None;
+            // An error row is taken and returned, not left peeked to turn every later key into a gap.
             while let Some(next) =
-                entries.next_if(|e| e.as_ref().is_ok_and(|(k, _)| k.value() <= key))
+                entries.next_if(|e| e.as_ref().map_or(true, |(k, _)| k.value() <= key))
             {
                 let (k, v) = next.map_err(db_err)?;
                 if k.value() == key {
                     found = Some(v);
                 }
             }
-            let Some(stored_entry) = found else {
-                missing += 1;
-                continue;
-            };
             let Ok(cpv) = Cpv::parse(key) else { continue };
-            let (KIND_BLOB, data) = decode(stored_entry.value())? else {
-                continue;
+            let entry = match found.map(|v| decode(v.value())).transpose()? {
+                Some((KIND_BLOB, data)) => std::str::from_utf8(&data)
+                    .ok()
+                    .and_then(|text| CacheEntry::parse(text).ok()),
+                _ => None,
             };
-            let Ok(text) = std::str::from_utf8(&data) else {
-                continue;
-            };
-            let Ok(entry) = CacheEntry::parse(text) else {
-                continue;
-            };
-            if !md5_matches(entry.md5.as_deref(), digest.value()) {
-                continue;
-            }
-            let fresh = stored.is_none_or(|stored| {
-                entry
-                    .eclasses
-                    .iter()
-                    .all(|(name, d)| stored.get(name) == Some(d))
+            let valid = entry.filter(|entry| {
+                md5_matches(entry.md5.as_deref(), digest.value())
+                    && stored.is_none_or(|stored| {
+                        entry
+                            .eclasses
+                            .iter()
+                            .all(|(name, d)| stored.get(name) == Some(d))
+                    })
             });
-            if fresh {
-                out.push((cpv, entry));
+            match valid {
+                Some(entry) => out.push((cpv, entry)),
+                None => gaps.push(cpv),
             }
         }
-        Ok(missing)
+        Ok(())
     }
 
-    fn read_entries(&self, repo: &Repository) -> io::Result<Vec<(Cpv, CacheEntry)>> {
+    /// The valid entries, and the ebuilds that have none
+    fn read_entries(&self, repo: &Repository) -> io::Result<Split> {
         let tree_txn = self.tree.db.begin_read().map_err(db_err)?;
-        let cache_txn = self.db.begin_read().map_err(db_err)?;
+        let cache_txn = self
+            .db
+            .as_ref()
+            .map(|db| db.begin_read())
+            .transpose()
+            .map_err(db_err)?;
         // Inherited eclasses may come from a master on another backend: those go through the
         // master's tree, the own ones are compared with the stored digests.
         let stored = if repo.masters().is_empty() {
@@ -644,25 +695,34 @@ impl RedbCache {
             )
             .collect();
         let next = AtomicUsize::new(0);
-        let missing = AtomicUsize::new(0);
         let workers = crate::default_worker_count().clamp(1, ranges.len());
-        let parsed: Vec<(Cpv, CacheEntry)> = std::thread::scope(|s| {
+        let (parsed, mut gaps) = std::thread::scope(|s| {
             let handles: Vec<_> = (0..workers)
                 .map(|_| {
-                    let (tree_txn, cache_txn, ranges, next, missing) =
-                        (&tree_txn, &cache_txn, &ranges, &next, &missing);
+                    let (tree_txn, cache_txn, ranges, next) =
+                        (&tree_txn, &cache_txn, &ranges, &next);
                     let stored = stored.as_ref();
                     s.spawn(move || -> io::Result<Vec<RangeEntries>> {
                         let ebuilds = tree_txn.open_table(EBUILDS).map_err(db_err)?;
-                        let cache = cache_txn.open_table(CACHE_ENTRIES).map_err(db_err)?;
+                        let cache = cache_txn
+                            .as_ref()
+                            .map(|txn| txn.open_table(CACHE_ENTRIES))
+                            .transpose()
+                            .map_err(db_err)?;
                         let mut out = Vec::new();
                         loop {
                             let i = next.fetch_add(1, Ordering::Relaxed);
                             let Some(&range) = ranges.get(i) else { break };
-                            let mut part = Vec::new();
-                            let n = Self::entries_in(&ebuilds, &cache, range, stored, &mut part)?;
-                            missing.fetch_add(n, Ordering::Relaxed);
-                            out.push((i, part));
+                            let (mut part, mut gaps) = (Vec::new(), Vec::new());
+                            Self::entries_in(
+                                &ebuilds,
+                                cache.as_ref(),
+                                range,
+                                stored,
+                                &mut part,
+                                &mut gaps,
+                            )?;
+                            out.push((i, part, gaps));
                         }
                         Ok(out)
                     })
@@ -673,22 +733,24 @@ impl RedbCache {
             for h in handles {
                 parts.extend(h.join().map_err(|_| db_err("entry worker panicked"))??);
             }
-            parts.sort_unstable_by_key(|(i, _)| *i);
-            Ok::<_, io::Error>(parts.into_iter().flat_map(|(_, part)| part).collect())
+            parts.sort_unstable_by_key(|(i, _, _)| *i);
+            let (mut parsed, mut gaps) = (Vec::new(), Vec::new());
+            for (_, part, part_gaps) in parts {
+                parsed.extend(part);
+                gaps.extend(part_gaps);
+            }
+            Ok::<_, io::Error>((parsed, gaps))
         })?;
-        let missing = missing.into_inner();
-        if missing > 0 {
-            tracing::debug!("{}: {missing} ebuilds have no md5-cache entry", self.file);
-        }
 
         if stored.is_some() {
-            return Ok(parsed);
+            return Ok((parsed, gaps));
         }
         let mut digests = HashMap::new();
-        Ok(parsed
+        let (fresh, stale): (Vec<_>, Vec<_>) = parsed
             .into_iter()
-            .filter(|(_, entry)| repo.is_fresh_cached(entry, &mut digests))
-            .collect())
+            .partition(|(_, entry)| repo.is_fresh_cached(entry, &mut digests));
+        gaps.extend(stale.into_iter().map(|(cpv, _)| cpv));
+        Ok((fresh, gaps))
     }
 }
 
@@ -768,6 +830,88 @@ mod tests {
         assert_eq!(tree.kind(Utf8Path::new("eclass/none")).unwrap(), None);
         assert_eq!(tree.list(Utf8Path::new("eclass/a.eclass")).unwrap(), None);
         assert_eq!(tree.list(Utf8Path::new("profiles")).unwrap(), None);
+    }
+
+    #[test]
+    fn entries_without_a_valid_stored_entry_are_gaps() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = Utf8Path::from_path(dir.path()).unwrap().join("t.redb");
+        let db = redb::Database::create(&file).unwrap();
+        let eclass = md5::compute("eclass");
+        let entry = |ebuild: &str, eclass: md5::Digest| {
+            let text = format!(
+                "EAPI=8\nDESCRIPTION=t\nSLOT=0\n_eclasses_=e\t{eclass:x}\n_md5_={:x}\n",
+                md5::compute(ebuild)
+            );
+            [&[KIND_BLOB, CODEC_RAW][..], text.as_bytes()].concat()
+        };
+        let txn = db.begin_write().unwrap();
+        {
+            let mut ebuilds = txn.open_table(EBUILDS).unwrap();
+            let mut cache = txn.open_table(CACHE_ENTRIES).unwrap();
+            for (key, text) in [
+                ("a/fresh-1", "fresh"),
+                ("a/missing-1", "missing"),
+                ("b/edited-1", "edited now"),
+                ("b/stale-1", "stale"),
+            ] {
+                ebuilds.insert(key, &md5::compute(text).0[..]).unwrap();
+            }
+            cache
+                .insert("a/fresh-1", &entry("fresh", eclass)[..])
+                .unwrap();
+            cache
+                .insert("b/edited-1", &entry("edited", eclass)[..])
+                .unwrap();
+            cache
+                .insert("b/stale-1", &entry("stale", md5::compute("old"))[..])
+                .unwrap();
+            cache
+                .insert("c/removed-1", &entry("removed", eclass)[..])
+                .unwrap();
+        }
+        txn.commit().unwrap();
+
+        let txn = db.begin_read().unwrap();
+        let (ebuilds, cache) = (
+            txn.open_table(EBUILDS).unwrap(),
+            txn.open_table(CACHE_ENTRIES).unwrap(),
+        );
+        let stored = HashMap::from([(Interned::intern("e"), eclass)]);
+        let (mut valid, mut gaps) = (Vec::new(), Vec::new());
+        for range in [(None, Some("b/")), (Some("b/"), None)] {
+            RedbCache::entries_in(
+                &ebuilds,
+                Some(&cache),
+                range,
+                Some(&stored),
+                &mut valid,
+                &mut gaps,
+            )
+            .unwrap();
+        }
+        let names = |cpvs: Vec<&Cpv>| cpvs.iter().map(|c| c.to_string()).collect::<Vec<_>>();
+        assert_eq!(names(valid.iter().map(|(c, _)| c).collect()), ["a/fresh-1"]);
+        assert_eq!(
+            names(gaps.iter().collect()),
+            ["a/missing-1", "b/edited-1", "b/stale-1"]
+        );
+
+        let (mut valid, mut gaps) = (Vec::new(), Vec::new());
+        RedbCache::entries_in(
+            &ebuilds,
+            None,
+            (None, None),
+            Some(&stored),
+            &mut valid,
+            &mut gaps,
+        )
+        .unwrap();
+        assert!(
+            valid.is_empty(),
+            "with no cache database every ebuild is a gap"
+        );
+        assert_eq!(gaps.len(), 4);
     }
 
     #[test]
