@@ -21,7 +21,7 @@ A `::gentoo` checkout is 132,574 files. em reads it in three ways, each with its
 | Sync, 1–12 days behind | git fetch + `reset --hard`: 0.83–1.96 s | fetch, resolve, apply in one transaction: 0.54–1.41 s |
 | Entries, unchanged tree | 71–76 ms (139 ms counting freeing them): gap index, read 34k files, eclass digests | 56 ms: merge the ebuild and md5-cache tables, compare stored md5s |
 | Entries, first run after a sync | 415 ms: stat 34k ebuilds, re-digest ~5k whose mtime moved | same as the unchanged case: the tree came from one verified commit |
-| `em -p @world`, cold page cache | 1.40 s, 124 MiB read | 1.33 s, 99 MiB read |
+| `em -p @world`, cold page cache | 1.32–1.42 s, 124 MiB read | 1.19–1.25 s, 119 MiB read |
 
 The spike lives on the `spike/redb-storage` branch (`spikes/tree-redb`).
 
@@ -84,40 +84,45 @@ Three levels, because they differ in who owns the logic:
 3. **Checkout** gives the build a real package directory, because `FILESDIR` and `EBUILD` are
    paths. The ebuild text, eclasses and the repository's own files are read through the tree.
 
-### Sketch
+### Traits
 
 ```rust
 /// Bytes of one repository's tree, addressed by repo-relative path
 pub trait TreeSource: Send + Sync {
-    /// `Ok(None)` when the file does not exist
-    fn read(&self, rel: &Utf8Path) -> Result<Option<Bytes>>;
-    /// Names of the immediate children of `rel`, with their kind
-    fn list(&self, rel: &Utf8Path) -> Result<Vec<(String, EntryKind)>>;
-    fn kind(&self, rel: &Utf8Path) -> Result<Option<EntryKind>>;
-    /// A real directory holding `rels`; the directory backend returns its own path, others a
-    /// copy under `copies`
-    fn checkout(&self, rels: &[&Utf8Path], copies: Option<&Utf8Path>) -> Result<Checkout>;
+    /// `Ok(None)` when it does not exist or is a directory
+    fn read(&self, rel: &Utf8Path) -> io::Result<Option<Vec<u8>>>;
+    /// `Ok(None)` when it does not exist or is not a directory
+    fn list(&self, rel: &Utf8Path) -> io::Result<Option<Vec<(String, EntryKind)>>>;
+    fn kind(&self, rel: &Utf8Path) -> io::Result<Option<EntryKind>>;
+    /// A path, or a `redb://` URI
+    fn display(&self, rel: &Utf8Path) -> String;
+    /// Every `cat/pkg/*.ebuild`, when the backend indexes them; `None` walks the tree
+    fn ebuild_index(&self) -> Option<io::Result<Vec<Utf8PathBuf>>> { None }
+    /// A real directory holding `rels`: the checkout itself, or a copy under `copies`
+    fn checkout(&self, rels: &[&Utf8Path], copies: Option<&Utf8Path>) -> io::Result<Utf8PathBuf>;
+    /// Whether writers may change the tree in place
+    fn is_checkout(&self) -> bool;
 }
 
 /// How a backend produces the valid metadata entries
-#[async_trait]
 pub trait EntrySource: Send + Sync {
-    async fn entries(&self, repo: &Repository) -> Vec<(Cpv, CacheEntry)>;
+    fn entries<'a>(&'a self, repo: &'a Repository) -> BoxFuture<'a, Vec<(Cpv, CacheEntry)>>;
+    /// Stored entry texts, unchecked; `None` reads the checkout's md5-cache directory
+    fn raw_entries(&self, latest_per_cpn: bool) -> Option<io::Result<Vec<(Cpv, String)>>> { None }
 }
 
-pub struct Repository {
-    tree: Arc<dyn TreeSource>,
-    entries: Arc<dyn EntrySource>,
-    layout: LayoutConf,
-    name: Interned<DefaultInterner>,
-    secondary: Arc<dyn MetadataCache>,
-    masters: Vec<Repository>,
+/// What `Repository` holds instead of a bare directory
+pub struct Storage {
+    pub tree: Arc<dyn TreeSource>,
+    pub entries: Arc<dyn EntrySource>,
+    pub primary: Arc<dyn MetadataCache>,
 }
 ```
 
-`Repository::path()` goes away from the public API. A caller that truly needs a path (the sync
-code on a checkout, `em regen` writing the md5-cache) asks the directory backend for it
-explicitly, so a redb repository answers "not a checkout" instead of a path that does not exist.
+`Repository::path()` stays as the repository's location, which identifies it and keys its
+copies; readers go through the tree. A writer that needs the directory checks
+`Repository::stored_elsewhere()` (the tree is not a checkout) first, instead of writing under a
+path that does not exist.
 
 `list` on redb walks git tree objects from the root tree id rather than range-scanning the
 `paths` table: listing the repository root would otherwise scan all 132k keys.
@@ -187,17 +192,18 @@ flowchart LR
   set --> load["load_repos: one entry list per repo"]
 ```
 
-- An overlay on disk can name a redb `::gentoo` as its master: eclass lookup goes through the
-  master's `TreeSource`, and the build checkout copies the eclasses it inherits.
+- An overlay on disk can name a redb `::gentoo` as its master: `inherit` reads eclasses through
+  the master's `TreeSource`, so nothing of the master is copied.
 - An alias repository has no tree. `load_repos` clones its source's entries, so it works on any
-  backend unchanged. Its build path (`PlannedMerge.ebuild_path`) becomes a checkout of the
-  source package.
+  backend unchanged. Its plan entry (`PlannedMerge.ebuild`) names the source repository's
+  ebuild, whose package directory the build makes real.
 
 ## Sync and interop
 
 - A redb repository syncs itself: protocol-v2 fetch of a thin pack, signature check of the tip,
-  one write transaction. Readers see the old or new tree, never a mix, so `em -p` can run during
-  a sync.
+  one write transaction, so the tree is the old one or the new one, never a mix. In redb's
+  default mode a reader and the sync's writer lock the file against each other at open: an em
+  running keeps a sync from starting, and the other way round.
 - Portage still needs a checkout. A Portage sync module (`sync-type`) can call em to sync the
   database, then write only that sync's changed files into the checkout. That keeps one fetch
   and one source of truth; it does not save the checkout's disk space.
@@ -207,7 +213,10 @@ flowchart LR
 - `/etc/portage` (`make.conf`, `package.*`, `repos.conf`), the installed-package database,
   binpkgs.
 - Writers: `em regen` filling the in-tree md5-cache, `em select repos` and `em setup` creating
-  repositories, `regen_use` writing `use.local.desc`. On a redb repository they refuse.
+  repositories, `regen_use` writing `use.local.desc`, `em sync`. On a redb repository `em regen`
+  writes em's secondary cache instead and `regen_use` asks for `-o`. The others do not check:
+  `em sync` would fetch a checkout at the location that the database then hides, and `em setup`
+  looks for a host repository by its `profiles/repo_name` on disk.
 
 ## Migration
 
@@ -236,7 +245,10 @@ Steps 1–7 are on the `tree-source` branch:
    through the trees of the repository and its masters, so `_eclasses_` digests come from the
    text sourced. Only the package directory must be real, for `FILESDIR`, `EBUILD` and the
    Manifest: a checkout's own, or for redb a copy under `/var/cache/edb/em-checkout` as root
-   (otherwise `$XDG_CACHE_HOME/em/checkout`), per tree, staged and renamed whole.
+   (otherwise `$XDG_CACHE_HOME/em/checkout`), keyed by location and tree, staged and renamed
+   whole. Using a copy refreshes its time; copies unused for a week are pruned, so an em still
+   building from an older tree keeps its files. The hakoniwa sandbox binds the databases and
+   the copies.
 
 With `::gentoo` only in redb, no checkout at its location, `em -pv @world`, `em pkg use`,
 `em query`, `em search` and `em grep` give the checkout's output; `em query which` and mask
@@ -252,7 +264,7 @@ explanations name files with `redb://` URIs.
 | Identity from the directory name | `mirrordist.rs` keys its default deletion database on it | switching to `repo.name()` could orphan an existing database |
 | Raw `repos.conf` walks | `clean.rs` `declared_categories` (falls back to hyphenated directory names without `profiles/categories`) | moving it to `Repository` changes behaviour |
 | Profile paths written out | crossdev builds profile paths into crossdev's config | paths are what the config holds |
-| Writers | `setup/repo.rs`, `select/repos.rs`, `regen_use.rs`, `em regen` | directory backend only; a redb repository refuses |
+| Writers | `setup/repo.rs`, `select/repos.rs`, `regen_use.rs`, `em regen`, sync | directory backend only; `em regen` and `regen_use` check `stored_elsewhere()` |
 | Configuration | `repo_open.rs` compares locations, `info.rs` `resolve_volatile` | sync owns the checkout |
 
 ## Decisions
@@ -277,20 +289,20 @@ path:
 
 | Role | Uses | Becomes |
 |---|---|---|
-| Read the content | md5 of the ebuild (`entries.rs:517`), `em grep` text, `metadata.xml` next to it (`query/uses.rs:33`), the Manifest for `em ebuild fetch` | `Ebuild::read()`, `Package::metadata_xml()`, `Package::manifest()` through `TreeSource` |
-| Identity | "already sourced this phase?" memo (`build/shell.rs:1263,1985`) | `(repo, cpv)` |
-| Symlinked ebuilds (crossdev symlink overlays) | `canonicalize` to find the master's entry (`entries.rs:669`, `search.rs:324`) | directory backend only; a redb tree has no symlinks into other repos |
-| Build environment | `source` by path, `EBUILD` (PMS 11.1 asks for an absolute path), `FILESDIR` = ebuild dir + `files`, copying the ebuild into the binpkg and the VDB | `Checkout`: a real directory, the repo's own for the directory backend |
+| Read the content | md5 of the ebuild (`entries::check`), `em grep` text, `metadata.xml` next to it (`query/uses.rs`), the Manifest for `em ebuild fetch` | `Ebuild::read()`, `Package::metadata_xml()`, `Package::manifest()` through `TreeSource` |
+| Identity | "already sourced this phase?" memo (`EbuildShell::mark_phase_sourced`) | `(repo, cpv)` |
+| Symlinked ebuilds (crossdev symlink overlays) | `canonicalize` to find the master's entry (`entries::master_cache_entry`, `search.rs`) | directory backend only; a redb tree has no symlinks into other repos |
+| Build environment | `EBUILD` (PMS 11.1 asks for an absolute path), `FILESDIR` = ebuild dir + `files`, the Manifest, copying the ebuild into the binpkg and the VDB | `EbuildFile::checkout`: a real package directory, the repo's own for the directory backend |
 | Shown to the user | `em query which` prints it, `em grep` path labels, error messages | the location path `repos.conf` gives; see below |
 
 `Ebuild` keeps its repository's tree and its path in it (`path_in_repo`); reading, `metadata.xml`
-and `display()` (the name shown) go through the tree. `path()` remains for the build until it runs
-from a `Checkout`.
+and `display()` (the name shown) go through the tree. The build gets `path()` from
+`EbuildFile::checkout`, so it names a real file on either backend.
 
 What em shows for a file in a redb repository is a URI naming the database file and the path
 inside it: `redb:///var/db/repos/gentoo.redb?sys-apps/portage/portage-3.0.70.ebuild`. `em query
 which`, `em grep` labels and error messages use it. The build environment never sees it: `EBUILD`
-and `FILESDIR` point into the `Checkout`. The path part is written as-is (`+` is literal in an RFC
+and `FILESDIR` point into the package directory `EbuildFile::checkout` made real. The path part is written as-is (`+` is literal in an RFC
 3986 query); only `%`, `#`, spaces and control characters are percent-encoded, which PMS names never
 contain and only arbitrary files under `files/` might.
 
@@ -315,17 +327,18 @@ tree as ordinary files: sync applies git diffs to it.
 The bench times entries without freeing them (`iter_with_large_drop`): freeing 34k entries costs
 ~65 ms in either backend, and em does it off the caller's thread.
 
+End-to-end `em -p @world` and uncached sourcing times, re-measured with both trees on one
+commit, are in [`tree-storage-experiment.md`](./tree-storage-experiment.md).
+
 | | master | branch, checkout | branch, redb |
 |---|---|---|---|
 | entries, unchanged tree (bench) | 73–75 ms | 71–76 ms | 56 ms |
 | `profile_updates` (~70 small files, bench) | 411 µs | 395 µs | 448 µs |
-| `em -p @world`, warm | 945 ± 20 ms | 940 ± 25 ms | 950 ± 39 ms (system 277 ms against 431) |
-| `em -p @world`, cold page cache | | 1.404 ± 0.012 s, reads 124 MiB | 1.333 ± 0.065 s, reads 99 MiB |
 
 - The `dyn TreeSource` indirection costs nothing measurable.
 - Warm, the entries saving disappears in a ~0.95 s run; redb trades system time for zstd decoding.
-- Cold, redb reads the 31 MiB cache file in one pass and 5 MiB of the tree file. With the md5-cache
-  keyed by oid inside the tree file, the same run read 264 MiB and was the slowest of the three.
+- With the md5-cache keyed by oid inside the tree file, a cold run read 264 MiB and was the
+  slowest of the three; the separate cache file is read in one pass.
 - redb small reads are ~13% slower: one read transaction and a zstd decode per file.
 - Space depends on the filesystem. On btrfs with `compress=zstd:3` the checkout's files take
   112 MiB (`compsize`; 124k of the 132k files are stored inline in btrfs metadata), less than
