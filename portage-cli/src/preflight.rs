@@ -195,7 +195,7 @@ mod tests {
             merge_root,
             cpv,
             slot: None,
-            ebuild_path: camino::Utf8PathBuf::new(),
+            ebuild: portage_repo::tree::EbuildFile::on_disk(camino::Utf8Path::new("")),
             use_flags: Vec::new(),
             depend: DepEntry::parse(depend)?,
             bdepend: Vec::new(),

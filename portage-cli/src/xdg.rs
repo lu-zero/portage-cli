@@ -54,6 +54,15 @@ pub fn md5_cache_root() -> Utf8PathBuf {
     em_cache_dir().join("md5-cache")
 }
 
+/// Copies of package directories from a repository stored in a database, for builds:
+/// `/var/cache/edb/em-checkout` as root, shared by every root run, else `$XDG_CACHE_HOME/em/checkout`
+pub fn checkout_root() -> Utf8PathBuf {
+    if rustix::process::geteuid().is_root() {
+        return Utf8PathBuf::from("/var/cache/edb/em-checkout");
+    }
+    em_cache_dir().join("checkout")
+}
+
 /// `$XDG_STATE_HOME/em/news` — `em news`'s unread/read/skip tracking when
 /// operating on the bare host (no `--root`/`--prefix`/`--local`).
 ///

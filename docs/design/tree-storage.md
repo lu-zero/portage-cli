@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Steps 1–5 done; builds (step 7) still need a checkout. Experimental redb backend behind the `redb` feature. Decisions recorded 2026-11-05 |
+| Status | Steps 1–7 done. Experimental redb backend behind the `redb` feature. Decisions recorded 2026-11-05 |
 | Date | 2026-11-05 |
 | Scope | `portage-repo`'s `Repository`, and the callers in `portage-resolve` and `portage-cli` that reach into the tree by path |
 | Non-scope | Host configuration (`/etc/portage`), the installed-package database, binpkgs |
@@ -58,7 +58,7 @@ flowchart TB
   subgraph intent["What callers ask (Repository API)"]
     ent["entries(): valid metadata for every cpv"]
     files["profile files, layout.conf, categories, use.desc, Manifests, eclass text"]
-    mat["checkout(cpn): a real directory for a build"]
+    mat["checkout(cpn): a real package directory for a build"]
   end
   subgraph tree["TreeSource: bytes by repo-relative path"]
     fs["FsTree: a checkout"]
@@ -70,7 +70,7 @@ flowchart TB
   dbent --> db
   files -->|"shared parsers"| tree
   mat -->|"FsTree: the real dir, no copy"| fs
-  mat -->|"RedbTree: package dir + eclasses into a temp dir"| db
+  mat -->|"RedbTree: a copy of the package dir, kept per tree"| db
 ```
 
 Three levels, because they differ in who owns the logic:
@@ -81,8 +81,8 @@ Three levels, because they differ in who owns the logic:
    gap index, md5 re-digests) only exists because files change under em; a redb tree is one
    commit, so its answer is a table read. Building entries on top of `TreeSource` would make the
    redb backend pay for checks it does not need.
-3. **Checkout** gives the build a real directory: ebuild sourcing, `files/`, `eapply` and the
-   binpkg/VDB copy of the ebuild all need paths.
+3. **Checkout** gives the build a real package directory, because `FILESDIR` and `EBUILD` are
+   paths. The ebuild text, eclasses and the repository's own files are read through the tree.
 
 ### Sketch
 
@@ -94,8 +94,9 @@ pub trait TreeSource: Send + Sync {
     /// Names of the immediate children of `rel`, with their kind
     fn list(&self, rel: &Utf8Path) -> Result<Vec<(String, EntryKind)>>;
     fn kind(&self, rel: &Utf8Path) -> Result<Option<EntryKind>>;
-    /// A real directory holding `rels`; the directory backend returns its own path
-    fn checkout(&self, rels: &[&Utf8Path]) -> Result<Checkout>;
+    /// A real directory holding `rels`; the directory backend returns its own path, others a
+    /// copy under `copies`
+    fn checkout(&self, rels: &[&Utf8Path], copies: Option<&Utf8Path>) -> Result<Checkout>;
 }
 
 /// How a backend produces the valid metadata entries
@@ -218,7 +219,7 @@ flowchart LR
 ```
 
 Steps 2–5 change no behaviour and are checked against the `repo_load` and `resolve` benches.
-Steps 1–5 are on the `tree-source` branch:
+Steps 1–7 are on the `tree-source` branch:
 
 1. Callers read Manifests and cache entries through `Repository` (748f93f6).
 2. `TreeSource`, `EntrySource` and `Storage` (tree, entries, primary cache), the checkout by default.
@@ -227,6 +228,12 @@ Steps 1–5 are on the `tree-source` branch:
 5. Ebuilds read through their repository's tree; discovery uses the backend's index when it keeps
    one; bulk md5-cache reads take the backend's stored entries; mask explanations, alias entries,
    `em grep`, `em query`, `em info` and moveinst read through the tree.
+6. The redb backend and its `em` wiring, behind the `redb` feature.
+7. A build opens its repository by the location the plan carries, and `inherit` reads eclasses
+   through the trees of the repository and its masters, so `_eclasses_` digests come from the
+   text sourced. Only the package directory must be real, for `FILESDIR`, `EBUILD` and the
+   Manifest: a checkout's own, or for redb a copy under `/var/cache/edb/em-checkout` as root
+   (otherwise `$XDG_CACHE_HOME/em/checkout`), per tree, staged and renamed whole.
 
 With `::gentoo` only in redb, no checkout at its location, `em -pv @world`, `em pkg use`,
 `em query`, `em search` and `em grep` give the checkout's output; `em query which` and mask
@@ -236,7 +243,8 @@ explanations name files with `redb://` URIs.
 
 | kind | sites | why, or what it becomes |
 |---|---|---|
-| Builds | `PlannedMerge.ebuild_path`, `Ebuild::path`, `build/shell.rs` (eclass lookup, `files/`, sourcing), `profile.bashrc`, binpkg and VDB copies of the ebuild, `em ebuild fetch` reading the Manifest, crossdev sourcing `multilib.eclass`; sourcing an ebuild whose metadata is not cached (overlays without md5-cache, alias packages) | step 7: a `Checkout` with the package directory and its inherited eclasses |
+| Builds | `Ebuild::path` (`FILESDIR`, `EBUILD`, the Manifest), standalone `em ebuild <path>` | the package directory is real by construction: the checkout's, or step 7's copy |
+| Uncached sourcing | an ebuild whose metadata is not cached (overlays without md5-cache, alias packages) | sourcing reads through the tree; the redb backend drops entries it lacks instead of regenerating them |
 | The directory backend's own work | gap index, sync stamp, mtime suspects, md5-cache walk, `search.rs`'s symlinked-ebuild fallback | checkout-only by nature |
 | Identity from the directory name | `mirrordist.rs` keys its default deletion database on it | switching to `repo.name()` could orphan an existing database |
 | Raw `repos.conf` walks | `clean.rs` `declared_categories` (falls back to hyphenated directory names without `profiles/categories`) | moving it to `Repository` changes behaviour |

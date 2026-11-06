@@ -433,12 +433,9 @@ pub(super) fn assemble(
     // The merge plan for the build loop: ebuild paths come from the package's
     // source repo (main or overlay), USE from the same effective fold the
     // displayed plan used.
-    let repo_path_of = |cpv: &Cpv| -> camino::Utf8PathBuf {
+    let repo_of = |cpv: &Cpv| {
         let name = repo::repo_name_of(&data, cpv);
-        set.by_name(name.as_str())
-            .unwrap_or(set.main())
-            .path()
-            .to_owned()
+        set.by_name(name.as_str()).unwrap_or(set.main())
     };
     let plan: Vec<PlannedMerge> = plan_entries
         .iter()
@@ -475,15 +472,12 @@ pub(super) fn assemble(
             // `Ebuild::from_path`, must match for VDB/gcc-config routing).
             let real_cpn = data.real_cpn_of.get(cpn).copied().unwrap_or(*cpn);
             let real_cpv = Cpv::new(real_cpn, ver.clone());
-            let ebuild_path = repo_path_of(&real_cpv)
-                .join(real_cpn.category.as_str())
-                .join(real_cpn.package.as_str())
-                .join(format!("{}-{}.ebuild", real_cpn.package, ver));
+            let ebuild = repo_of(&real_cpv).ebuild_file(&real_cpv);
             PlannedMerge {
                 merge_root: entry.merge_root,
                 cpv: cpv.clone(),
                 slot: pkg.slot(),
-                ebuild_path,
+                ebuild,
                 use_flags: flags,
                 depend,
                 bdepend,

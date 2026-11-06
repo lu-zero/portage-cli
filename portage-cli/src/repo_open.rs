@@ -11,7 +11,9 @@ use portage_repo::{RepoSet, Repository, RepositoryBuilder, Result};
 
 /// The builder every em repository starts from
 fn builder() -> RepositoryBuilder {
-    Repository::builder().user_cache_root(crate::xdg::md5_cache_root())
+    Repository::builder()
+        .user_cache_root(crate::xdg::md5_cache_root())
+        .checkout_root(crate::xdg::checkout_root())
 }
 
 /// Open a tree with secondary at `$XDG_CACHE_HOME/em/md5-cache/<repo-name>`

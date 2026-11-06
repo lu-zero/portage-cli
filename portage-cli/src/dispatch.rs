@@ -83,6 +83,7 @@ impl RunAsync<&cli::Cli> for WorkerArgs {
             .collect();
         ebuild::run_install_worker(ebuild::InstallWorker {
             ebuild_path: &self.ebuild,
+            repo: &self.repo,
             cpv_str: &self.cpv,
             use_flags_str: &self.use_flags,
             work_base: &self.work_base,
