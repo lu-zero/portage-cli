@@ -1149,6 +1149,14 @@ fn sysroot(target: &CrossTarget, globals: &Cli) -> Utf8PathBuf {
 /// target's own config-root: it falls back to the host's `repos.conf`, then
 /// portage's well-known default, so the very first `--init-target` on a
 /// fresh root can still find the real ebuild tree to symlink/reference.
+/// multilib.eclass's text from the main repository
+fn multilib_eclass(globals: &Cli) -> Result<String> {
+    let gentoo = main_repo(globals)?;
+    gentoo
+        .eclass_text("multilib")?
+        .with_context(|| format!("multilib.eclass not found in {}", gentoo.name()))
+}
+
 pub(crate) fn main_repo(globals: &Cli) -> Result<Repository> {
     let target_conf = globals.outer_roots().repos_conf().ok();
     let host_conf = ReposConf::load_rooted(Utf8Path::new("/"), &[]).ok();
@@ -1996,9 +2004,9 @@ fn cross_env_entries(
     spec: &spec::SysrootSpec,
     derived: Option<&DerivedProfile>,
 ) -> Result<Vec<config_plan::ConfigEntry>> {
-    let eclass_dir = gentoo.join("eclass");
-    let host_ml = multilib::query(&host_chost(), &eclass_dir)?;
-    let target_ml = multilib::query(&target.tuple, &eclass_dir)?;
+    let eclass = multilib_eclass(globals)?;
+    let host_ml = multilib::query(&host_chost(), &eclass)?;
+    let target_ml = multilib::query(&target.tuple, &eclass)?;
 
     let header = format!(
         "CTARGET={}\nSYMLINK_LIB=no\nCOLLISION_IGNORE=\"${{COLLISION_IGNORE}} /usr/lib/debug/.build-id\"\n",
@@ -2295,8 +2303,7 @@ fn write_clang_cfg(target: &CrossTarget, globals: &Cli, runtimes: ClangRuntimes)
 /// untracked compat symlinks; em creates them here after the libc lands.
 fn link_abi_osdirs(target: &CrossTarget, globals: &Cli) -> Result<()> {
     let sysroot = sysroot(target, globals);
-    let gentoo = main_repo(globals)?;
-    let ml = multilib::query(&target.tuple, &gentoo.path().join("eclass"))?;
+    let ml = multilib::query(&target.tuple, &multilib_eclass(globals)?)?;
     let default_abi = ml.default_abi();
     // Only the default ABI is bare-named (`lib64` rather than `lib64/<abi>`);
     // the others already install into their suffixed osdir, which gcc finds.
