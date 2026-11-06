@@ -9,24 +9,20 @@
 
 use std::sync::Arc;
 
-use camino::Utf8PathBuf;
 use portage_metadata::EbuildMetadata;
 
 use crate::{Ebuild, Repository, Result};
 
 /// Result of sourcing an ebuild
 ///
-/// Bundles the extracted metadata with the resolved file paths of every
-/// eclass that was sourced (in inheritance order). The paths come from the
-/// `inherit` builtin's own resolution against the live eclass search dirs,
-/// so they correctly reflect eclasses pulled from master repositories rather
-/// than the local repo — which a name-based lookup at write time cannot.
+/// Bundles the extracted metadata with the md5 of every eclass that was sourced (in inheritance
+/// order), taken from the text `inherit` read, wherever in the masters it was found.
 #[derive(Debug, Clone)]
 pub struct SourcedEbuild {
     /// Parsed metadata variables (DEPEND, IUSE, EAPI, …)
     pub metadata: EbuildMetadata,
-    /// Eclasses sourced for this ebuild, paired `(name, file path)`
-    pub eclasses: Vec<(String, Utf8PathBuf)>,
+    /// Eclasses sourced for this ebuild, paired `(name, md5)`
+    pub eclasses: Vec<(String, md5::Digest)>,
     /// MD5 digest of the ebuild content that was sourced
     pub ebuild_md5: String,
 }
@@ -34,8 +30,7 @@ pub struct SourcedEbuild {
 /// One finished source attempt, in completion order
 pub type SourceItem = (Ebuild, Result<SourcedEbuild>);
 
-type AstCache =
-    Arc<papaya::HashMap<String, std::result::Result<brush_parser::ast::Program, String>>>;
+type AstCache = crate::build::inherit::EclassCache;
 
 /// Shared eclass AST cache
 ///

@@ -7,14 +7,15 @@
 //! A builtin's `source_script()` calls happen outside any bash function frame,
 //! sidestepping the scoping issue entirely.
 //!
-//! Eclass ASTs are cached in a shared [`papaya::HashMap`] so that the same
-//! eclass is only parsed once across all shells in a regen run.
+//! Eclasses are read through the trees of the repository and its masters. Their ASTs are
+//! cached in a shared [`papaya::HashMap`] so that each is parsed once across all shells in a
+//! regen run.
 //!
 //! See [PMS 10.2](https://projects.gentoo.org/pms/9/pms.html#x1-10200010.2)
 //! for eclass metadata variable accumulation.
 
-use camino::Utf8PathBuf;
-use std::io::{Read, Write};
+use camino::Utf8Path;
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -22,6 +23,7 @@ use brush_core::builtins;
 
 use super::die::DieFlag;
 use crate::error::stopped_message;
+use crate::tree::{EntryKind, TreeSource};
 use brush_parser::ast::Program;
 
 /// Accumulating metadata variables (PMS 10.2) for EAPI < 8
@@ -72,16 +74,17 @@ pub(crate) const E_VARS_ALL: &[&str] = &[
     "E_RESTRICT",
 ];
 
-/// One sourced eclass: its name and the resolved file path it was loaded from
-///
-/// Tracking the path is essential for cache writing/validation: an eclass may
-/// come from a master repo's `eclass/` directory rather than the local repo,
-/// and reconstructing the path from the name alone would search only the local
-/// tree.
+/// An eclass's AST and the md5 of the text it was parsed from
+pub(crate) type ParsedEclass = std::result::Result<(Program, md5::Digest), String>;
+
+/// Parsed eclasses shared across shells, keyed by where each was read
+pub(crate) type EclassCache = Arc<papaya::HashMap<String, ParsedEclass>>;
+
+/// One sourced eclass: its name and the md5 of the text sourced, which `_eclasses_` records
 #[derive(Clone, Debug)]
 pub(crate) struct InheritedEclass {
     pub(crate) name: String,
-    pub(crate) path: Utf8PathBuf,
+    pub(crate) md5: md5::Digest,
 }
 
 /// Persistent state for the `inherit` builtin
@@ -96,8 +99,10 @@ pub(crate) struct InheritedEclass {
 pub(crate) struct InheritState {
     /// Transitive eclasses sourced so far in this shell, in inheritance order
     pub(crate) inherited: Vec<InheritedEclass>,
-    /// Shared AST cache keyed by eclass name
-    pub(crate) cache: Arc<papaya::HashMap<String, std::result::Result<Program, String>>>,
+    /// Shared AST cache
+    pub(crate) cache: EclassCache,
+    /// Trees searched for `eclass/<name>.eclass`, in order
+    pub(crate) trees: Vec<Arc<dyn TreeSource>>,
 }
 
 impl Default for InheritState {
@@ -105,6 +110,7 @@ impl Default for InheritState {
         Self {
             inherited: Vec::new(),
             cache: Arc::new(papaya::HashMap::new()),
+            trees: Vec::new(),
         }
     }
 }
@@ -146,8 +152,10 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for InheritCommand {
         let is_top_level = get_var(context.shell, "ECLASS").is_empty();
         let mut inherit = get_var(context.shell, "INHERIT");
 
-        let cache: Arc<papaya::HashMap<String, std::result::Result<Program, String>>> =
-            context.state_mut::<InheritState>().cache.clone();
+        let (cache, trees) = {
+            let state = context.state_mut::<InheritState>();
+            (state.cache.clone(), state.trees.clone())
+        };
 
         for eclass in &self.eclasses {
             let already_inherited = {
@@ -165,8 +173,7 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for InheritCommand {
                 continue;
             }
 
-            let eclass_file = find_eclass(context.shell, eclass);
-            let Some(eclass_file) = eclass_file else {
+            let Some((tree, rel)) = find_eclass(&trees, eclass) else {
                 return Ok(die(
                     &context,
                     &format!("inherit: eclass not found: {eclass}"),
@@ -188,7 +195,8 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for InheritCommand {
             // Look up or parse the eclass AST. The papaya pin guard is
             // dropped before we .await, so no Send issues.
             let parser_options = context.shell.parser_options();
-            let source_info = brush_core::SourceInfo::from(eclass_file.as_std_path().to_owned());
+            let shown = tree.display(Utf8Path::new(&rel));
+            let source_info = brush_core::SourceInfo::from(std::path::PathBuf::from(&shown));
             let params = context.shell.default_exec_params();
 
             // Use pin_owned() for an owned guard that is Send — safe across .await.
@@ -196,17 +204,17 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for InheritCommand {
             // even under concurrent worker access, avoiding duplicate parses.
             let pinned = cache.pin_owned();
             let mut was_miss = false;
-            let cached = pinned.get_or_insert_with(eclass.clone(), || {
+            let cached = pinned.get_or_insert_with(shown.clone(), || {
                 was_miss = true;
-                parse_eclass_file(&eclass_file, &parser_options)
+                parse_eclass(&*tree, &rel, &parser_options)
             });
             if was_miss {
                 CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
             } else {
                 CACHE_HITS.fetch_add(1, Ordering::Relaxed);
             }
-            let program = match cached {
-                Ok(program) => program,
+            let (program, md5) = match cached {
+                Ok((program, md5)) => (program, *md5),
                 Err(error) => {
                     return Ok(die(
                         &context,
@@ -249,7 +257,7 @@ impl<SE: brush_core::ShellExtensions> builtins::Builtin<SE> for InheritCommand {
                 let state = context.state_mut::<InheritState>();
                 state.inherited.push(InheritedEclass {
                     name: eclass.clone(),
-                    path: eclass_file.clone(),
+                    md5,
                 });
                 let inherited_str = state
                     .inherited
@@ -281,19 +289,24 @@ pub fn cache_stats() -> (u64, u64) {
     )
 }
 
-/// Parse an eclass file into a `Program`
-pub(crate) fn parse_eclass_file(
-    path: &Utf8PathBuf,
+/// Parse the eclass at `rel` in `tree`
+fn parse_eclass(
+    tree: &dyn TreeSource,
+    rel: &str,
     options: &brush_parser::ParserOptions,
-) -> std::result::Result<Program, String> {
-    let mut buf = String::new();
-    let mut file = std::fs::File::open(path).map_err(|e| format!("cannot open {}: {e}", path))?;
-    file.read_to_string(&mut buf)
-        .map_err(|e| format!("cannot read {}: {e}", path))?;
-    let mut parser = brush_parser::Parser::new(buf.as_bytes(), options);
-    parser
+) -> ParsedEclass {
+    let rel = Utf8Path::new(rel);
+    let shown = tree.display(rel);
+    let text = tree
+        .read(rel)
+        .map_err(|e| format!("cannot read {shown}: {e}"))?
+        .ok_or_else(|| format!("{shown} disappeared"))?;
+    let md5 = md5::compute(&text);
+    let mut parser = brush_parser::Parser::new(&text[..], options);
+    let program = parser
         .parse_program()
-        .map_err(|e| format!("parse error in {}: {e}", path))
+        .map_err(|e| format!("parse error in {shown}: {e}"))?;
+    Ok((program, md5))
 }
 
 /// Raise `die` with `message` and fail the `inherit` call.
@@ -326,17 +339,11 @@ fn set_var<SE: brush_core::ShellExtensions>(
     );
 }
 
-fn find_eclass<SE: brush_core::ShellExtensions>(
-    shell: &brush_core::Shell<SE>,
-    name: &str,
-) -> Option<Utf8PathBuf> {
-    let dirs = shell.env_str("__PORTAGE_ECLASS_DIRS")?;
-    let filename = format!("{name}.eclass");
-    for dir in dirs.split(':') {
-        let path = Utf8PathBuf::from(dir).join(&filename);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    None
+/// The first tree holding `eclass/<name>.eclass`, with that path
+fn find_eclass(trees: &[Arc<dyn TreeSource>], name: &str) -> Option<(Arc<dyn TreeSource>, String)> {
+    let rel = format!("eclass/{name}.eclass");
+    let tree = trees
+        .iter()
+        .find(|t| matches!(t.kind(Utf8Path::new(&rel)), Ok(Some(EntryKind::File))))?;
+    Some((Arc::clone(tree), rel))
 }

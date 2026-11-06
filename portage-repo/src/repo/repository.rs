@@ -532,6 +532,12 @@ impl Repository {
         &self.path
     }
 
+    /// The tree to search for eclasses; `None` when it has no `eclass/` directory
+    pub(crate) fn eclass_tree(&self) -> Option<Arc<dyn TreeSource>> {
+        let kind = self.tree.kind(Utf8Path::new("eclass"));
+        matches!(kind, Ok(Some(crate::tree::EntryKind::Dir))).then(|| Arc::clone(&self.tree))
+    }
+
     /// Resolved master repositories, set by [`RepositoryBuilder::open_with_masters`]
     /// — empty for a repo opened with the plain [`RepositoryBuilder::open`],
     /// or one with no `masters =` entry in `metadata/layout.conf`.

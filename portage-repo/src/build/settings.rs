@@ -531,14 +531,7 @@ mod tests {
     async fn the_shells_own_variables_are_not_settings() {
         let f = Fixture::new();
         let s = f.settings("", "__LOCAL=\"x\"\n", &[]).await;
-        for name in [
-            "BASHPID",
-            "IFS",
-            "PWD",
-            "OPTIND",
-            "__LOCAL",
-            "__PORTAGE_ECLASS_DIRS",
-        ] {
+        for name in ["BASHPID", "IFS", "PWD", "OPTIND", "__LOCAL"] {
             assert_eq!(s.get(name), None, "{name}");
         }
     }

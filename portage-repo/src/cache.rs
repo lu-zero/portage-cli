@@ -21,13 +21,6 @@ use crate::metadata_cache::DirMetadataCache;
 use crate::source::{SourceContext, SourceOpts, SourcedEbuild};
 use crate::{Ebuild, Repository, Result};
 
-/// Shared eclass file → md5 cache used across all regen workers
-///
-/// `papaya::HashMap` gives lock-free reads; the first-miss race where two
-/// workers concurrently read and hash the same eclass is benign because
-/// `insert` is atomic and the digests are identical.
-type ChecksumCache = Arc<papaya::HashMap<PathBuf, md5::Digest>>;
-
 /// Where [`regen_cache`] writes sourced metadata
 #[derive(Debug, Clone, Default)]
 pub enum RegenWriteTarget {
@@ -192,7 +185,6 @@ pub async fn regen_cache(
             .as_ref()
             .is_some_and(|(dir, _)| dir == primary_dir.as_std_path());
     let ctx = SourceContext::new();
-    let checksum_cache: ChecksumCache = Arc::new(papaya::HashMap::new());
     let done = Arc::new(AtomicUsize::new(0));
     let errors = Arc::new(AtomicUsize::new(0));
     let errors_cb = Arc::clone(&errors);
@@ -215,17 +207,15 @@ pub async fn regen_cache(
                     let write_err = match &write {
                         PreparedWriteTarget::None => None,
                         PreparedWriteTarget::Dir(writer) => {
-                            write_entry_to_dir(&ebuild, sourced, writer, &checksum_cache).err()
+                            write_entry_to_dir(&ebuild, sourced, writer).err()
                         }
-                        PreparedWriteTarget::Repository => {
-                            build_entry(&ebuild, sourced, &checksum_cache)
-                                .and_then(|entry| {
-                                    repo_for_write
-                                        .write_cache_entry(ebuild.cpv(), &entry)
-                                        .map_err(|e| e.to_string())
-                                })
-                                .err()
-                        }
+                        PreparedWriteTarget::Repository => build_entry(&ebuild, sourced)
+                            .and_then(|entry| {
+                                repo_for_write
+                                    .write_cache_entry(ebuild.cpv(), &entry)
+                                    .map_err(|e| e.to_string())
+                            })
+                            .err(),
                     };
                     match write_err {
                         Some(e) => Err(crate::Error::CacheWrite(e)),
@@ -441,25 +431,7 @@ fn merge_dir_target(dir: &Path, staging: &Utf8Path) -> Result<()> {
     fs::remove_dir_all(staging).map_err(|e| io_err(staging, e))
 }
 
-fn eclass_md5(path: &Utf8Path, cache: &ChecksumCache) -> std::result::Result<md5::Digest, String> {
-    let pinned = cache.pin();
-    if let Some(&d) = pinned.get(path.as_std_path()) {
-        return Ok(d);
-    }
-    let data = fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
-    let digest = md5::compute(&data);
-    pinned.insert(path.to_path_buf().into_std_path_buf(), digest);
-    Ok(digest)
-}
-
-fn build_entry(
-    ebuild: &Ebuild,
-    sourced: SourcedEbuild,
-    checksum_cache: &ChecksumCache,
-) -> std::result::Result<CacheEntry, String> {
-    // Md5 every eclass that was actually sourced, using its resolved path.
-    // This is path-accurate across master repos — a name-only lookup would
-    // miss eclasses inherited from a master overlay's eclass/ directory.
+fn build_entry(ebuild: &Ebuild, sourced: SourcedEbuild) -> std::result::Result<CacheEntry, String> {
     let SourcedEbuild {
         metadata,
         eclasses,
@@ -472,14 +444,10 @@ fn build_entry(
             metadata.parse_failure_summary()
         ));
     }
-    let eclasses: Vec<(portage_atom::interner::Interned<_>, md5::Digest)> = eclasses
+    let eclasses = eclasses
         .into_iter()
-        .map(|(name, path)| {
-            let digest =
-                eclass_md5(&path, checksum_cache).map_err(|e| format!("eclass {name}: {e}"))?;
-            Ok((portage_atom::interner::Interned::intern(&name), digest))
-        })
-        .collect::<std::result::Result<_, String>>()?;
+        .map(|(name, digest)| (portage_atom::interner::Interned::intern(&name), digest))
+        .collect();
 
     Ok(CacheEntry {
         metadata,
@@ -492,9 +460,8 @@ fn write_entry_to_dir(
     ebuild: &Ebuild,
     sourced: SourcedEbuild,
     writer: &DirMetadataCache,
-    checksum_cache: &ChecksumCache,
 ) -> std::result::Result<(), String> {
-    let entry = build_entry(ebuild, sourced, checksum_cache)?;
+    let entry = build_entry(ebuild, sourced)?;
     writer
         .put_prepared(ebuild.cpv(), &entry)
         .map_err(|e| e.to_string())?;

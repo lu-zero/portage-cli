@@ -5,7 +5,6 @@
 //! Exit code is 1 if there are any sourcing errors or metadata mismatches.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::process;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -259,21 +258,13 @@ async fn main() {
 
                 let portage_repo::source::SourcedEbuild {
                     metadata,
-                    eclasses: eclass_paths,
+                    eclasses,
                     ebuild_md5,
                 } = metadata;
-                let eclasses: Vec<(portage_atom::interner::Interned<_>, md5::Digest)> =
-                    eclass_paths
-                        .into_iter()
-                        .filter_map(|(name, path)| {
-                            fs::read(path.as_std_path()).ok().map(|data| {
-                                (
-                                    portage_atom::interner::Interned::intern(&name),
-                                    md5::compute(&data),
-                                )
-                            })
-                        })
-                        .collect();
+                let eclasses: Vec<(portage_atom::interner::Interned<_>, md5::Digest)> = eclasses
+                    .into_iter()
+                    .map(|(name, digest)| (portage_atom::interner::Interned::intern(&name), digest))
+                    .collect();
 
                 let sourced_entry = CacheEntry {
                     metadata,

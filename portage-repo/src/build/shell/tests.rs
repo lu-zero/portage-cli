@@ -63,19 +63,33 @@ async fn eclass_search_path_prefers_own_repo_over_masters() {
     let m2_repo = Repository::builder().in_memory_cache().open(&m2).unwrap();
     let own_repo = Repository::builder().in_memory_cache().open(&own).unwrap();
 
-    let shell = own_repo
+    for (repo, name) in [(&m1, "m1"), (&m2, "m2"), (&own, "own")] {
+        std::fs::write(repo.join("eclass/pick.eclass"), format!("PICKED={name}\n")).unwrap();
+    }
+    std::fs::write(m1.join("eclass/only1.eclass"), "ONLY1=yes\n").unwrap();
+    for (repo, name) in [(&m1, "m1"), (&m2, "m2")] {
+        std::fs::write(
+            repo.join("eclass/masters.eclass"),
+            format!("MASTER={name}\n"),
+        )
+        .unwrap();
+    }
+
+    let mut shell = own_repo
         .shell_with_masters(&[&m1_repo, &m2_repo])
         .await
         .unwrap();
-
-    let dirs = shell.get_var("__PORTAGE_ECLASS_DIRS").unwrap_or_default();
-    let expected = format!(
-        "{}:{}:{}",
-        own.join("eclass").display(),
-        m2.join("eclass").display(),
-        m1.join("eclass").display(),
+    shell
+        .run_string("inherit pick only1 masters")
+        .await
+        .unwrap();
+    assert_eq!(shell.get_var("PICKED").as_deref(), Some("own"));
+    assert_eq!(shell.get_var("ONLY1").as_deref(), Some("yes"));
+    assert_eq!(
+        shell.get_var("MASTER").as_deref(),
+        Some("m2"),
+        "a later master wins"
     );
-    assert_eq!(dirs, expected);
 }
 
 #[tokio::test]

@@ -64,7 +64,6 @@ struct EclassMemo {
         portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
         Option<md5::Digest>,
     >,
-    by_path: HashMap<camino::Utf8PathBuf, Option<md5::Digest>>,
 }
 
 /// Name of the sidecar listing the CPVs the in-tree cache does not serve
@@ -588,34 +587,10 @@ async fn resolve_ebuilds(
         {
             Ok(sourced) => {
                 let mut eclasses = Vec::with_capacity(sourced.eclasses.len());
-                let mut eclass_unreadable = false;
-                for (name, path) in &sourced.eclasses {
-                    let digest = match digests.by_path.get(path) {
-                        Some(cached) => *cached,
-                        None => {
-                            let computed =
-                                std::fs::read(path).ok().map(|bytes| md5::compute(&bytes));
-                            // A failed read is not memoized: the next ebuild retries it.
-                            if computed.is_some() {
-                                digests.by_path.insert(path.clone(), computed);
-                            }
-                            computed
-                        }
-                    };
-                    if let Some(digest) = digest {
-                        let name = portage_atom::interner::Interned::intern(name);
-                        digests.by_name.insert(name, Some(digest));
-                        eclasses.push((name, digest));
-                    } else {
-                        eclass_unreadable = true;
-                    }
-                }
-                if eclass_unreadable {
-                    tracing::error!(
-                        "repo '{}': {cpv}: eclass could not be read, not caching the entry",
-                        repo.name()
-                    );
-                    continue;
+                for (name, digest) in &sourced.eclasses {
+                    let name = portage_atom::interner::Interned::intern(name);
+                    digests.by_name.insert(name, Some(*digest));
+                    eclasses.push((name, *digest));
                 }
                 let entry = CacheEntry {
                     metadata: sourced.metadata,
