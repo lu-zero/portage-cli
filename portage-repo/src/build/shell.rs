@@ -304,6 +304,7 @@ pub struct EbuildShell {
     /// the first phase sources it; reset when a different ebuild runs.
     phase_sourced_ebuild: Option<Utf8PathBuf>,
     repo_path: Utf8PathBuf,
+    repo_name: portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
     /// Active USE flags for this shell session
     /// Used by the `use()`, `usev()`, `usex()` functions.
     use_flags: HashSet<String>,
@@ -759,6 +760,7 @@ impl EbuildShell {
             profile_shell: None,
             phase_sourced_ebuild: None,
             repo_path: repo.path().to_path_buf(),
+            repo_name: repo.name(),
             use_flags: HashSet::new(),
         };
 
@@ -2483,13 +2485,7 @@ impl EbuildShell {
                 p.sort();
                 p
             },
-            // The repo name lives in `<repo>/profiles/repo_name`, not a shell var.
-            repository: std::fs::read_to_string(
-                self.repo_path.join("profiles/repo_name").as_std_path(),
-            )
-            .ok()
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty()),
+            repository: Some(self.repo_name),
             inherited: split("INHERITED"),
             features: get_opt("FEATURES"),
             chost: get_opt("CHOST"),

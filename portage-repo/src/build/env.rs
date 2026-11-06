@@ -46,8 +46,9 @@ pub struct EbuildEnv {
     pub idepend: Option<String>,
     /// Phase functions defined by the ebuild (e.g. `["configure", "install"]`)
     pub defined_phases: Vec<String>,
-    /// Repository name the ebuild was sourced from, or `None`
-    pub repository: Option<String>,
+    /// Repository the ebuild was sourced from
+    pub repository:
+        Option<portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>>,
     /// Eclasses inherited by the ebuild (INHERITED), in inherit order
     pub inherited: Vec<String>,
     /// FEATURES active for the build, or `None`
