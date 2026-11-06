@@ -140,7 +140,7 @@ flowchart TB
 Finding what lacks a valid entry is per backend; filling it is shared, on the worker pool `em
 regen` uses. The redb merge sees each ebuild with no entry, an `_md5_` that differs or a stale
 eclass, so a cache database lagging the tree, or missing, costs one sourcing of those ebuilds
-(all 34k: 10 s), then reads of em's secondary cache.
+(all 34k: about 8 s, as long as `em regen`), then reads of em's secondary cache.
 
 ## Profiles
 

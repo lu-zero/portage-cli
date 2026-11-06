@@ -784,6 +784,16 @@ impl Repository {
         pkg.ebuild(&cpv.version.to_string())
     }
 
+    /// `cpv`'s ebuild, which the storage backend's own index says exists
+    #[cfg(feature = "redb")]
+    pub(crate) fn listed_ebuild(&self, cpv: Cpv) -> Ebuild {
+        let rel = Utf8PathBuf::from(format!(
+            "{}/{}/{}-{}.ebuild",
+            cpv.cpn.category, cpv.cpn.package, cpv.cpn.package, cpv.version
+        ));
+        Ebuild::in_tree(cpv, self.path.join(&rel), Arc::clone(&self.tree), rel)
+    }
+
     /// Look up a single package by `Cpn`; `None` when this repo has no such package
     pub fn package(&self, cpn: &Cpn) -> Option<Package> {
         self.category(cpn.category.as_ref())?

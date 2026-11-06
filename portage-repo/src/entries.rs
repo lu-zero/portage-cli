@@ -47,6 +47,7 @@
 //! matches the md5-cache format's own contract.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use portage_atom::Cpv;
 use portage_metadata::CacheEntry;
@@ -502,8 +503,8 @@ pub(crate) async fn backend_gaps(repo: &Repository, cpvs: Vec<Cpv>) -> Vec<(Cpv,
         cpvs.len()
     );
     let ebuilds: Vec<_> = cpvs
-        .iter()
-        .filter_map(|cpv| repo.ebuild_for_cpv(cpv).ok().flatten())
+        .into_iter()
+        .map(|cpv| repo.listed_ebuild(cpv))
         .collect();
     resolve_ebuilds(
         repo,
@@ -525,8 +526,169 @@ enum Store<'a> {
     Only(&'a dyn MetadataCache),
 }
 
+/// Fewest items worth a thread of their own
+const ITEMS_PER_THREAD: usize = 256;
+
+/// `f` over `items` on scoped threads, in order, each thread starting from its own `init()`
+fn par_map<T: Send, S: Send, R: Send>(
+    items: Vec<T>,
+    init: impl Fn() -> S + Sync,
+    f: impl Fn(&mut S, T) -> R + Sync,
+) -> (Vec<R>, Vec<S>) {
+    let workers = crate::default_worker_count().min(items.len().div_ceil(ITEMS_PER_THREAD));
+    let chunk = items.len().div_ceil(workers.max(1)).max(1);
+    let mut parts: Vec<Vec<T>> = Vec::with_capacity(workers);
+    let mut items = items.into_iter();
+    loop {
+        let part: Vec<T> = items.by_ref().take(chunk).collect();
+        if part.is_empty() {
+            break;
+        }
+        parts.push(part);
+    }
+    let (init, f) = (&init, &f);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = parts
+            .into_iter()
+            .map(|part| {
+                scope.spawn(move || {
+                    let mut state = init();
+                    let out: Vec<R> = part.into_iter().map(|item| f(&mut state, item)).collect();
+                    (out, state)
+                })
+            })
+            .collect();
+        let (mut out, mut states) = (Vec::new(), Vec::new());
+        for handle in handles {
+            match handle.join() {
+                Ok((part, state)) => {
+                    out.extend(part);
+                    states.push(state);
+                }
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        }
+        (out, states)
+    })
+}
+
+/// The entry `result` gives for `ebuild`, written to the store; `None` when sourcing failed
+fn finish(
+    repo: &Repository,
+    store: Store<'_>,
+    ebuild: &crate::repo::Ebuild,
+    result: crate::Result<crate::source::SourcedEbuild>,
+) -> Option<(Cpv, CacheEntry)> {
+    let cpv = ebuild.cpv().clone();
+    let sourced = match result {
+        Ok(sourced) => sourced,
+        Err(e) => {
+            tracing::error!("repo '{}': failed to source {cpv}: {e}", repo.name());
+            return None;
+        }
+    };
+    let eclasses = sourced
+        .eclasses
+        .iter()
+        .map(|(name, digest)| (portage_atom::interner::Interned::intern(name), *digest))
+        .collect();
+    let entry = CacheEntry {
+        metadata: sourced.metadata,
+        md5: Some(sourced.ebuild_md5),
+        eclasses,
+    };
+    // serialize() drops a field that failed to parse, so writing the entry would hide the
+    // failure for good: skip the ebuild, as build_entry does.
+    if entry.metadata.has_parse_failure() {
+        tracing::error!(
+            "repo '{}': {cpv}: {}, skipping",
+            repo.name(),
+            entry.metadata.parse_failure_summary()
+        );
+        return None;
+    }
+    let put = match store {
+        Store::Repo => repo.put_secondary(&cpv, &entry),
+        Store::Only(only) => only.put(&cpv, &entry),
+    };
+    if let Err(e) = put {
+        tracing::warn!(
+            "repo '{}': failed to write secondary cache for {cpv}: {e}",
+            repo.name()
+        );
+    }
+    Some((cpv, entry))
+}
+
+/// What [`check`] found for one ebuild
+#[allow(clippy::large_enum_variant)] // `Served` is the common case; boxing it allocates per entry
+enum Checked {
+    /// A valid entry from a cache
+    Served(Cpv, CacheEntry),
+    /// Nothing valid: source it
+    Source(crate::repo::Ebuild),
+    /// Unreadable, or not text
+    Skip,
+}
+
+/// The bulk entry, the store's or a master's, when one is valid for `ebuild`
+fn check(
+    repo: &Repository,
+    store: Store<'_>,
+    ebuild: crate::repo::Ebuild,
+    bulk: Option<CacheEntry>,
+    digests: &mut EclassMemo,
+) -> Checked {
+    let cpv = ebuild.cpv().clone();
+    let Ok(bytes) = ebuild.read_bytes() else {
+        return Checked::Skip;
+    };
+    let digest = format!("{:x}", md5::compute(&bytes));
+    let mut valid = |entry: &CacheEntry| {
+        entry
+            .md5
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case(&digest))
+            && repo.is_fresh_cached(entry, &mut digests.by_name)
+            && !entry.metadata.has_parse_failure()
+    };
+
+    // Primary bulk walk (in-tree md5-cache).
+    if let Some(entry) = bulk
+        && valid(&entry)
+    {
+        return Checked::Served(cpv, entry);
+    }
+
+    // Layered lookup: primary miss path already tried above for bulk;
+    // this hits secondary (and any primary entry not in the bulk map).
+    let stored = match store {
+        Store::Repo => repo.cache_entry(&cpv),
+        Store::Only(only) => only.get(&cpv),
+    };
+    if let Ok(Some(entry)) = stored
+        && valid(&entry)
+    {
+        return Checked::Served(cpv, entry);
+    }
+
+    // Symlinked ebuild → master's primary cache entry.
+    if let Some(entry) = master_cache_entry(&ebuild, repo.masters(), &digest) {
+        return Checked::Served(cpv, entry);
+    }
+
+    if let Err(error) = std::str::from_utf8(&bytes) {
+        tracing::error!(
+            "repo '{}': failed to source {cpv}: ebuild is not valid UTF-8: {error}",
+            repo.name()
+        );
+        return Checked::Skip;
+    }
+    Checked::Source(ebuild)
+}
+
 /// Run the four-step chain over `ebuilds`, consuming matching entries out of
-/// `cached` (the primary bulk walk) as it goes.
+/// `cached` (the primary bulk walk) as it goes; what is left is sourced in parallel.
 async fn resolve_ebuilds(
     repo: &Repository,
     store: Store<'_>,
@@ -534,131 +696,100 @@ async fn resolve_ebuilds(
     cached: &mut HashMap<Cpv, CacheEntry>,
     digests: &mut EclassMemo,
 ) -> Vec<(Cpv, CacheEntry)> {
-    let masters = repo.masters();
-    let mut out: Vec<(Cpv, CacheEntry)> = Vec::new();
-    let mut shell = None;
+    // The checks are independent per ebuild: spread them over threads, each with its own memo.
+    let items: Vec<_> = ebuilds
+        .into_iter()
+        .map(|ebuild| {
+            let bulk = cached.remove(ebuild.cpv());
+            (ebuild, bulk)
+        })
+        .collect();
+    let total = items.len();
+    let seed = &digests.by_name;
+    let (checked, memos) = par_map(
+        items,
+        || EclassMemo {
+            by_name: seed.clone(),
+        },
+        |memo, (ebuild, bulk)| check(repo, store, ebuild, bulk, memo),
+    );
+    for memo in memos {
+        digests.by_name.extend(memo.by_name);
+    }
 
-    for ebuild in ebuilds {
-        let cpv = ebuild.cpv().clone();
-        let Ok(bytes) = ebuild.read_bytes() else {
-            continue;
-        };
-        let digest = format!("{:x}", md5::compute(&bytes));
-        let valid = |entry: &CacheEntry, digests: &mut EclassMemo| {
-            entry
-                .md5
-                .as_deref()
-                .is_some_and(|m| m.eq_ignore_ascii_case(&digest))
-                && repo.is_fresh_cached(entry, &mut digests.by_name)
-                && !entry.metadata.has_parse_failure()
-        };
-
-        // Primary bulk walk (in-tree md5-cache).
-        if let Some(entry) = cached.remove(&cpv)
-            && valid(&entry, digests)
-        {
-            out.push((cpv, entry));
-            continue;
-        }
-
-        // Layered lookup: primary miss path already tried above for bulk;
-        // this hits secondary (and any primary entry not in the bulk map).
-        let stored = match store {
-            Store::Repo => repo.cache_entry(&cpv),
-            Store::Only(only) => only.get(&cpv),
-        };
-        if let Ok(Some(entry)) = stored
-            && valid(&entry, digests)
-        {
-            out.push((cpv, entry));
-            continue;
-        }
-
-        // Symlinked ebuild → master's primary cache entry.
-        if let Some(entry) = master_cache_entry(&ebuild, masters, &digest) {
-            out.push((cpv, entry));
-            continue;
-        }
-
-        let content = match String::from_utf8(bytes) {
-            Ok(content) => content,
-            Err(error) => {
-                tracing::error!(
-                    "repo '{}': failed to source {cpv}: ebuild is not valid UTF-8: {error}",
-                    repo.name()
-                );
-                continue;
+    // One slot per ebuild, so sourced entries keep their place in the output.
+    let mut slots: Vec<Option<(Cpv, CacheEntry)>> = Vec::with_capacity(total);
+    let mut to_source: Vec<(usize, crate::repo::Ebuild)> = Vec::new();
+    for outcome in checked {
+        match outcome {
+            Checked::Served(cpv, entry) => slots.push(Some((cpv, entry))),
+            Checked::Source(ebuild) => {
+                to_source.push((slots.len(), ebuild));
+                slots.push(None);
             }
-        };
-
-        // Source the ebuild (shell started lazily, masters' eclasses visible).
-        let sh = match &mut shell {
-            Some(s) => s,
-            None => {
-                let master_refs: Vec<&Repository> = masters.iter().collect();
-                match repo.shell_with_masters(&master_refs).await {
-                    Ok(s) => shell.insert(s),
-                    Err(e) => {
-                        tracing::error!(
-                            "repo '{}': cannot start ebuild shell for metadata: {e}",
-                            repo.name()
-                        );
-                        break;
-                    }
-                }
-            }
-        };
-        match sh
-            .source_ebuild_with_content(&ebuild, &content, digest.clone())
-            .await
-        {
-            Ok(sourced) => {
-                let mut eclasses = Vec::with_capacity(sourced.eclasses.len());
-                for (name, digest) in &sourced.eclasses {
-                    let name = portage_atom::interner::Interned::intern(name);
-                    digests.by_name.insert(name, Some(*digest));
-                    eclasses.push((name, *digest));
-                }
-                let entry = CacheEntry {
-                    metadata: sourced.metadata,
-                    md5: Some(sourced.ebuild_md5),
-                    eclasses,
-                };
-                // Sourcing is the freshest possible source of truth - if the
-                // ebuild's own DEPEND-family/SRC_URI text still fails to
-                // parse here, re-sourcing again later won't fix it. Writing
-                // the entry anyway would launder the failure: serialize()
-                // omits a parse-failed field entirely (290ce4c), and the
-                // written-back text reparses clean next time (no raw text
-                // left to fail), so the failure could never be detected
-                // again. Match build_entry's precedent instead: skip this
-                // ebuild rather than silently caching it dependency-free.
-                if entry.metadata.has_parse_failure() {
-                    tracing::error!(
-                        "repo '{}': {cpv}: {}, skipping",
-                        repo.name(),
-                        entry.metadata.parse_failure_summary()
-                    );
-                    continue;
-                }
-                let put = match store {
-                    Store::Repo => repo.put_secondary(&cpv, &entry),
-                    Store::Only(only) => only.put(&cpv, &entry),
-                };
-                if let Err(e) = put {
-                    tracing::warn!(
-                        "repo '{}': failed to write secondary cache for {cpv}: {e}",
-                        repo.name()
-                    );
-                }
-                out.push((cpv, entry));
-            }
-            Err(e) => {
-                tracing::error!("repo '{}': failed to source {cpv}: {e}", repo.name());
-            }
+            Checked::Skip => {}
         }
     }
-    out
+
+    let sourced = source_all(repo, to_source).await;
+    let (finished, _) = par_map(
+        sourced,
+        || (),
+        |(), (slot, ebuild, result)| (slot, finish(repo, store, &ebuild, result)),
+    );
+    for (slot, found) in finished {
+        if let Some((cpv, entry)) = found {
+            for (name, digest) in &entry.eclasses {
+                digests.by_name.insert(*name, Some(*digest));
+            }
+            slots[slot] = Some((cpv, entry));
+        }
+    }
+    slots.into_iter().flatten().collect()
+}
+
+/// Source `ebuilds` on the shared worker pool, each returned with the slot it came with
+async fn source_all(
+    repo: &Repository,
+    ebuilds: Vec<(usize, crate::repo::Ebuild)>,
+) -> Vec<(
+    usize,
+    crate::repo::Ebuild,
+    crate::Result<crate::source::SourcedEbuild>,
+)> {
+    if ebuilds.is_empty() {
+        return Vec::new();
+    }
+    let (slots, ebuilds): (HashMap<Cpv, usize>, Vec<_>) = ebuilds
+        .into_iter()
+        .map(|(slot, ebuild)| ((ebuild.cpv().clone(), slot), ebuild))
+        .unzip();
+    let opts = crate::source::SourceOpts {
+        jobs: Some(crate::default_worker_count().min(ebuilds.len())),
+        dedup: false,
+    };
+    let results = Arc::new(Mutex::new(Vec::with_capacity(ebuilds.len())));
+    let sink = Arc::clone(&results);
+    let pool = crate::source::source_parallel_join(
+        repo,
+        ebuilds,
+        &opts,
+        &crate::source::SourceContext::new(),
+        move |ebuild, result| {
+            if let Ok(mut out) = sink.lock() {
+                out.push((ebuild, result));
+            }
+        },
+    )
+    .await;
+    if let Err(e) = pool {
+        tracing::error!("repo '{}': source worker pool failed: {e}", repo.name());
+    }
+    let results = std::mem::take(&mut *results.lock().unwrap_or_else(|e| e.into_inner()));
+    results
+        .into_iter()
+        .filter_map(|(ebuild, result)| Some((*slots.get(ebuild.cpv())?, ebuild, result)))
+        .collect()
 }
 
 /// The master-repo md5-cache entry for a symlinked ebuild, when the link
@@ -693,6 +824,24 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::*;
+
+    #[test]
+    fn par_map_keeps_order_across_threads_and_returns_each_state() {
+        let items: Vec<usize> = (0..ITEMS_PER_THREAD * 3 + 7).collect();
+        let (out, states) = par_map(
+            items.clone(),
+            || 0usize,
+            |seen, i| {
+                *seen += 1;
+                i * 2
+            },
+        );
+        assert_eq!(out, items.iter().map(|i| i * 2).collect::<Vec<_>>());
+        assert!(states.len() > 1, "enough items to spread");
+        assert_eq!(states.iter().sum::<usize>(), items.len());
+        let (none, states) = par_map(Vec::<usize>::new(), || (), |(), i| i);
+        assert!(none.is_empty() && states.is_empty());
+    }
 
     fn make_repo(dir: &tempfile::TempDir) -> Repository {
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
