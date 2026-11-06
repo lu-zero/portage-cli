@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 236" width="720" height="236" role="img" aria-labelledby="t d">
+<title id="t">::gentoo on disk: checkout against redb</title><desc id="d">MiB; the checkout&#x27;s files without .git (96 MiB more at depth 1); redb: tree and md5-cache databases</desc>
+<style>.bg{fill:#fcfcfb}.t1{fill:#0b0b0b}.t2{fill:#52514e}.t3{fill:#898781}.grid{stroke:#e1e0d9;stroke-width:1}.axis{stroke:#c3c2b7;stroke-width:1}.s0{fill:#2a78d6}.s1{fill:#eb6834}text{font-family:system-ui,-apple-system,'Segoe UI',sans-serif}.tick{font-variant-numeric:tabular-nums}@media (prefers-color-scheme: dark){.bg{fill:#1a1a19}.t1{fill:#f0efec}.t2{fill:#c3c2b7}.grid{stroke:#2c2c2a}.axis{stroke:#383835}.s0{fill:#3987e5}.s1{fill:#d95926}}</style>
+<rect class="bg" width="720" height="236" rx="8"/>
+<text class="t1" x="20" y="30" font-size="16" font-weight="600">::gentoo on disk: checkout against redb</text>
+<text class="t2" x="20" y="50" font-size="12.5">MiB; the checkout&#x27;s files without .git (96 MiB more at depth 1); redb: tree and md5-cache databases</text>
+<rect class="s0" x="20" y="64" width="12" height="12" rx="3"/>
+<text class="t2" x="38" y="74" font-size="12.5">checkout files</text>
+<rect class="s1" x="158.39999999999998" y="64" width="12" height="12" rx="3"/>
+<text class="t2" x="176.39999999999998" y="74" font-size="12.5">redb tree + md5-cache</text>
+<line class="axis" x1="200.0" y1="86" x2="200.0" y2="188"/>
+<text class="t3 tick" x="200.0" y="204" font-size="11" text-anchor="middle">0</text>
+<line class="grid" x1="275.0" y1="86" x2="275.0" y2="188"/>
+<text class="t3 tick" x="275.0" y="204" font-size="11" text-anchor="middle">100</text>
+<line class="grid" x1="350.0" y1="86" x2="350.0" y2="188"/>
+<text class="t3 tick" x="350.0" y="204" font-size="11" text-anchor="middle">200</text>
+<line class="grid" x1="425.0" y1="86" x2="425.0" y2="188"/>
+<text class="t3 tick" x="425.0" y="204" font-size="11" text-anchor="middle">300</text>
+<line class="grid" x1="500.0" y1="86" x2="500.0" y2="188"/>
+<text class="t3 tick" x="500.0" y="204" font-size="11" text-anchor="middle">400</text>
+<line class="grid" x1="575.0" y1="86" x2="575.0" y2="188"/>
+<text class="t3 tick" x="575.0" y="204" font-size="11" text-anchor="middle">500</text>
+<line class="grid" x1="650.0" y1="86" x2="650.0" y2="188"/>
+<text class="t3 tick" x="650.0" y="204" font-size="11" text-anchor="middle">600</text>
+<text class="t1" x="188" y="113.0" font-size="12.5" text-anchor="end">Plain filesystem</text>
+<path class="s0" d="M200.0,92.0 H640.8 Q644.8,92.0 644.8,96.0 V104.0 Q644.8,108.0 640.8,108.0 H200.0 Z"><title>Plain filesystem, checkout files: 593 MiB</title></path>
+<text class="t1 tick" x="650.8" y="104" font-size="11.5">593 MiB</text>
+<path class="s1" d="M200.0,110.0 H326.5 Q330.5,110.0 330.5,114.0 V122.0 Q330.5,126.0 326.5,126.0 H200.0 Z"><title>Plain filesystem, redb tree + md5-cache: 174 MiB</title></path>
+<text class="t1 tick" x="336.5" y="122" font-size="11.5">174 MiB</text>
+<text class="t1" x="188" y="169.0" font-size="12.5" text-anchor="end">btrfs with zstd</text>
+<path class="s0" d="M200.0,148.0 H280.0 Q284.0,148.0 284.0,152.0 V160.0 Q284.0,164.0 280.0,164.0 H200.0 Z"><title>btrfs with zstd, checkout files: 112 MiB</title></path>
+<text class="t1 tick" x="290.0" y="160" font-size="11.5">112 MiB</text>
+<path class="s1" d="M200.0,166.0 H325.8 Q329.8,166.0 329.8,170.0 V178.0 Q329.8,182.0 325.8,182.0 H200.0 Z"><title>btrfs with zstd, redb tree + md5-cache: 173 MiB</title></path>
+<text class="t1 tick" x="335.8" y="178" font-size="11.5">173 MiB</text>
+<text class="t3" x="20" y="224" font-size="11">redb keeps its objects zstd-compressed, so filesystem compression gains it nothing.</text>
+</svg>

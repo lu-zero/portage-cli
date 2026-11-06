@@ -6,6 +6,7 @@
 | Date | 2026-11-05 |
 | Scope | `portage-repo`'s `Repository`, and the callers in `portage-resolve` and `portage-cli` that reach into the tree by path |
 | Non-scope | Host configuration (`/etc/portage`), the installed-package database, binpkgs |
+| Results | [`tree-storage-experiment.md`](./tree-storage-experiment.md): measurements and what the experiment taught |
 
 Today a `Repository` *is* a directory: every reader joins a path onto `Repository::path()` and
 calls `std::fs`. This page sketches splitting what a caller wants from the tree (an entry, a
