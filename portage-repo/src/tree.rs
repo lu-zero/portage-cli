@@ -64,12 +64,12 @@ pub trait EntrySource: Send + Sync {
 ///
 /// With the `redb` feature, `<location>.redb` holds the tree and `<location>.md5-cache.redb` the
 /// entries, when they exist; otherwise the checkout at `location` serves both.
-pub(crate) fn storage_at(location: &Utf8Path) -> Storage {
+pub(crate) fn storage_at(location: &Utf8Path) -> io::Result<Storage> {
     #[cfg(feature = "redb")]
-    if let Some(found) = redb::storage_at(location) {
-        return found;
+    if let Some(found) = redb::storage_at(location)? {
+        return Ok(found);
     }
-    Storage::checkout(location)
+    Ok(Storage::checkout(location))
 }
 
 /// Where a repository's files, entries and primary metadata cache come from
@@ -95,12 +95,12 @@ impl Storage {
 }
 
 /// The tree of the repository at `location`, as [`storage_at`] finds it
-pub(crate) fn tree_at(location: &Utf8Path) -> Arc<dyn TreeSource> {
+pub(crate) fn tree_at(location: &Utf8Path) -> io::Result<Arc<dyn TreeSource>> {
     #[cfg(feature = "redb")]
-    if let Some(tree) = redb::tree_at(location) {
-        return tree;
+    if let Some(tree) = redb::tree_at(location)? {
+        return Ok(tree);
     }
-    Arc::new(FsTree::new(location))
+    Ok(Arc::new(FsTree::new(location)))
 }
 
 /// Whether the repository at `location` is read from a database next to it (`<location>.redb`)

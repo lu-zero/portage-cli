@@ -432,7 +432,10 @@ impl Repository {
             tree,
             entries: entry_source,
             primary,
-        } = storage.unwrap_or_else(|| crate::tree::storage_at(&path));
+        } = match storage {
+            Some(storage) => storage,
+            None => crate::tree::storage_at(&path).map_err(|e| util::io_err(&path, e))?,
+        };
         let layout = match read_text(&*tree, "metadata/layout.conf")? {
             Some(text) => LayoutConf::parse(&text)?,
             None => {

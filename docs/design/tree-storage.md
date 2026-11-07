@@ -536,7 +536,8 @@ transport: the paths added, changed and removed, the objects they name, the new 
 `portage-cli`, behind `sync-gix`; `portage-repo` has no network code.
 
 - **Schema.** `tree/redb/schema.rs`; each database records its `schema` in `meta` and one em does
-  not read is refused at open.
+  not read is refused at open. A database that exists but cannot be opened (locked, corrupt, another
+  schema) is an error, never a fallback to the checkout next to it.
 - **Writer.** `TreeWriter::apply` writes objects and refcounts, `paths`, `ebuilds`, `eclasses`,
   `packages`, `meta` and a `sync_log` record in one transaction, in key order, then compacts; the
   md5-cache database follows, with only the changed entries when it was at the old commit.

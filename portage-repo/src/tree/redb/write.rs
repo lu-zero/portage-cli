@@ -789,7 +789,7 @@ mod tests {
     }
 
     fn cache_keys(location: &Utf8Path) -> Vec<String> {
-        let storage = super::super::storage_at(location).unwrap();
+        let storage = super::super::storage_at(location).unwrap().unwrap();
         let mut keys: Vec<_> = storage
             .entries
             .raw_entries(false)
@@ -815,7 +815,7 @@ mod tests {
         assert_eq!(writer.head().unwrap(), Some(([1; 20], tree.root)));
         drop(writer);
 
-        let storage = super::super::storage_at(&location).unwrap();
+        let storage = super::super::storage_at(&location).unwrap().unwrap();
         assert!(!storage.tree.is_checkout());
         assert_eq!(
             read(&*storage.tree, "app-misc/foo/foo-1.ebuild").unwrap(),
@@ -879,7 +879,7 @@ mod tests {
         );
         drop((objects, writer));
 
-        let storage = super::super::storage_at(&location).unwrap();
+        let storage = super::super::storage_at(&location).unwrap().unwrap();
         assert_eq!(read(&*storage.tree, "licenses/B"), None);
         assert_eq!(read(&*storage.tree, "licenses/A").unwrap(), "same text");
         assert_eq!(read(&*storage.tree, "app-misc/bar/bar-1.ebuild"), None);
@@ -945,5 +945,64 @@ mod tests {
                 "app-misc/foo-2=foo 2 entry"
             ]
         );
+    }
+
+    #[test]
+    fn a_locked_or_corrupt_tree_never_falls_back_to_the_checkout() {
+        let (_dir, location) = location();
+        std::fs::create_dir_all(location.join("metadata")).unwrap();
+        std::fs::write(location.join("metadata/layout.conf"), "masters =\n").unwrap();
+        let tree = v1();
+        TreeWriter::import(&location, update(None, &tree, [1; 20])).unwrap();
+        let writer = TreeWriter::open(&location).unwrap().unwrap();
+        assert!(crate::tree::storage_at(&location).is_err());
+        assert!(crate::tree::tree_at(&location).is_err());
+        assert!(
+            crate::Repository::builder()
+                .in_memory_cache()
+                .open(location.clone())
+                .is_err()
+        );
+        drop(writer);
+        assert!(
+            !crate::tree::storage_at(&location)
+                .unwrap()
+                .tree
+                .is_checkout()
+        );
+        std::fs::write(super::super::tree_file(&location), "not a redb database").unwrap();
+        assert!(crate::tree::storage_at(&location).is_err());
+        assert!(crate::tree::tree_at(&location).is_err());
+    }
+
+    #[test]
+    fn read_only_processes_share_the_tree_and_exclude_a_writer() {
+        const CHILD_LOCATION: &str = "EM_REVIEW_REDB_READER_CHILD";
+        if let Some(location) = std::env::var_os(CHILD_LOCATION) {
+            let location = Utf8PathBuf::from_path_buf(location.into()).unwrap();
+            let storage = crate::tree::storage_at(&location).unwrap();
+            assert_eq!(
+                read(&*storage.tree, "licenses/A").as_deref(),
+                Some("same text")
+            );
+            assert!(TreeWriter::open(&location).is_err());
+            return;
+        }
+        let (_dir, location) = location();
+        let tree = v1();
+        TreeWriter::import(&location, update(None, &tree, [1; 20])).unwrap();
+        let reader = crate::tree::storage_at(&location).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tree::redb::write::tests::read_only_processes_share_the_tree_and_exclude_a_writer",
+            ])
+            .env(CHILD_LOCATION, location.as_str())
+            .status()
+            .unwrap();
+        assert!(child.success());
+        assert!(TreeWriter::open(&location).is_err());
+        drop(reader);
+        assert!(TreeWriter::open(&location).unwrap().is_some());
     }
 }

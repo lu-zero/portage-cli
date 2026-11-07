@@ -13,6 +13,7 @@ use portage_metadata::Eapi;
 
 use super::layout::LayoutConf;
 use super::repos_conf::ReposConf;
+use super::util;
 use crate::error::{Error, Result};
 use crate::tree::{EntryKind, FsTree, TreeSource, content_lines, read_text, tree_lines};
 
@@ -174,7 +175,7 @@ impl Profile {
         let utf8 = Utf8PathBuf::from_path_buf(path.clone())
             .map_err(|p| Error::InvalidProfile(format!("not UTF-8: {}", p.display())))?;
         // Inside a repository the profile reads through that repository's tree.
-        let (repo, tree, rel, profile_formats) = match enclosing_repo(&utf8, trees) {
+        let (repo, tree, rel, profile_formats) = match enclosing_repo(&utf8, trees)? {
             Some((root, tree, formats)) => {
                 let rel = utf8.strip_prefix(&root).unwrap_or(&utf8).to_path_buf();
                 (Some(root.into_std_path_buf()), tree, rel, formats)
@@ -1096,31 +1097,36 @@ fn collect_stack(
     Ok(result)
 }
 
+/// A profile's enclosing repository: its root, its tree and its `profile-formats`
+type Enclosing = (Utf8PathBuf, Arc<dyn TreeSource>, Vec<String>);
+
 /// The root, tree and effective `profile-formats` of the repository enclosing a profile directory
 ///
 /// Mirrors portage's longest-path-wins `intersecting_repos` rule: the nearest ancestor that is a
 /// repository wins ([`crate::tree::is_repository`]: `metadata/layout.conf`, `profiles/repo_name`,
 /// or a tree database next to it). A `layout.conf` that fails to parse leaves the formats empty,
 /// so the profile does not contribute to `@profile`.
-fn enclosing_repo(
-    profile_path: &Utf8Path,
-    trees: &mut RepoTrees,
-) -> Option<(Utf8PathBuf, Arc<dyn TreeSource>, Vec<String>)> {
-    let root = profile_path
+fn enclosing_repo(profile_path: &Utf8Path, trees: &mut RepoTrees) -> Result<Option<Enclosing>> {
+    let Some(root) = profile_path
         .ancestors()
         .skip(1)
-        .find(|d| crate::tree::is_repository(d))?;
-    let tree = trees
-        .entry(root.to_path_buf())
-        .or_insert_with(|| crate::tree::tree_at(root))
-        .clone();
+        .find(|d| crate::tree::is_repository(d))
+    else {
+        return Ok(None);
+    };
+    let tree = match trees.entry(root.to_path_buf()) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
+        std::collections::hash_map::Entry::Vacant(entry) => entry
+            .insert(crate::tree::tree_at(root).map_err(|e| util::io_err(root, e))?)
+            .clone(),
+    };
     let formats = read_text(&*tree, "metadata/layout.conf")
         .ok()
         .flatten()
         .and_then(|text| LayoutConf::parse(&text).ok())
         .map(|parsed| parsed.profile_formats)
         .unwrap_or_default();
-    Some((root.to_path_buf(), tree, formats))
+    Ok(Some((root.to_path_buf(), tree, formats)))
 }
 
 /// Merge incremental USE-flag lists from a sequence of profile-file results

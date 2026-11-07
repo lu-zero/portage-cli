@@ -31,30 +31,30 @@ pub(crate) fn cache_file(location: &Utf8Path) -> Utf8PathBuf {
     Utf8PathBuf::from(format!("{location}.md5-cache.redb"))
 }
 
-/// The tree in `<location>.redb`; `None` when there is none or it cannot be opened
-fn open_tree(location: &Utf8Path) -> Option<Arc<RedbTree>> {
+/// The tree in `<location>.redb`; only an absent database permits a checkout fallback.
+fn open_tree(location: &Utf8Path) -> std::io::Result<Option<Arc<RedbTree>>> {
     let db = tree_file(location);
-    if !db.is_file() {
-        return None;
+    match std::fs::symlink_metadata(&db) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+        Ok(_) => {}
     }
-    match RedbTree::open(db.clone()) {
-        Ok(tree) => Some(Arc::new(tree)),
-        Err(e) => {
-            tracing::warn!("ignoring {db}: {e}");
-            None
-        }
-    }
+    RedbTree::open(db.clone())
+        .map(|tree| Some(Arc::new(tree)))
+        .map_err(|e| schema::db_err(format!("{db}: {e}")))
 }
 
 /// [`open_tree`], as a [`TreeSource`]
-pub(crate) fn tree_at(location: &Utf8Path) -> Option<Arc<dyn TreeSource>> {
-    Some(open_tree(location)?)
+pub(crate) fn tree_at(location: &Utf8Path) -> std::io::Result<Option<Arc<dyn TreeSource>>> {
+    Ok(open_tree(location)?.map(|tree| tree as Arc<dyn TreeSource>))
 }
 
 /// The tree in `<location>.redb` and, when present, the entries in `<location>.md5-cache.redb`
-/// (the checkout's otherwise); `None` when there is no tree database or it cannot be opened
-pub(crate) fn storage_at(location: &Utf8Path) -> Option<super::Storage> {
-    let tree = open_tree(location)?;
+/// (the checkout's otherwise); `None` only when there is no tree database
+pub(crate) fn storage_at(location: &Utf8Path) -> std::io::Result<Option<super::Storage>> {
+    let Some(tree) = open_tree(location)? else {
+        return Ok(None);
+    };
     let cache_db = cache_file(location);
     let mut storage = super::Storage::checkout(location);
     let cache = if cache_db.is_file() {
@@ -73,5 +73,5 @@ pub(crate) fn storage_at(location: &Utf8Path) -> Option<super::Storage> {
     storage.primary = cache;
     tracing::debug!("reading {location} from {}", tree.file);
     storage.tree = tree;
-    Some(storage)
+    Ok(Some(storage))
 }
