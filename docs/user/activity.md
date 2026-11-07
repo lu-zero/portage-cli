@@ -46,14 +46,15 @@ phase loop. At session end the worker threads are joined, so the final
 The terminal is itself an activity sink (`HumanStdoutSink`) — the `>>> Emerging
 (N of M) cpv` and `=== (N of M) <Phase> cpv` banners are *projections* of the
 same `PkgStart` / `PhaseEnter` events that `--activity-fd` and `em log current`
-consume, not parallel ad-hoc prints. Verbosity is decided in one place:
+consume, not parallel ad-hoc prints. A real run prints the plan only with `-v`; `-p` and `-a` always
+show it. Verbosity is decided in one place:
 
 | Flags | Console | Build/phase output |
 |-------|---------|--------------------|
 | default | `>>> Emerging (N of M)` + per-phase `===` banners | copied to terminal **and** `build.log` |
 | `-j>1` | banners (one line/pkg; readable) | `build.log` only (no interleaving) |
 | `-q` | nothing (failures still print) | `build.log` only |
-| `-v` | banners + per-phase elapsed time | copied to both |
+| `-v` | the plan, then banners + per-phase elapsed time | copied to both |
 | `FEATURES=candy` | live bars; failures and warnings above them (see below) | `build.log` only |
 
 ### `FEATURES=candy`

@@ -639,7 +639,8 @@ async fn emerge_atoms_inner(
             std::collections::HashSet::new()
         },
         complete_graph: merge_flags.repair_broken_installed(),
-        quiet: false,
+        // A real run lists the plan only with -v; the banners (or candy's bars) show the progress.
+        quiet: !(cli.pretend() || merge_flags.ask || cli.verbose() > 0),
     })
     .await?;
 
