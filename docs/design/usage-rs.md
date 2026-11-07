@@ -296,6 +296,25 @@ and every other emerge flag used as `em <flags> <atoms>`.
 ### Target grammar
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif"
+    fontSize: "14px"
+    primaryColor: "#5fafaf"
+    primaryTextColor: "#5fafaf"
+    primaryBorderColor: "#5fafaf"
+    lineColor: "#8a8a8a"
+    textColor: "#8a8a8a"
+    titleColor: "#5fafaf"
+    clusterBorder: "#8a8a8a"
+  themeCSS: >
+    .cluster rect { fill: #8a8a8a !important; fill-opacity: 0.06 !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background: none !important; background-color: transparent !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span { color: #5faf87; }
+    .edgeLabel rect { fill: none !important; }
+---
 flowchart TD
   argv["argv"] --> parse["Cli::parse_from_argv"]
   parse -->|Help / Version| render["render_help / version, exit 0"]
@@ -307,6 +326,14 @@ flowchart TD
   cli --> info{"cli.info and defaulted emerge with empty atoms?"}
   info -->|yes| infoRun["info::run"]
   info -->|no| dispatch["dispatch::run / later RunAsyncWith"]
+  classDef default fill:#5fafaf14,stroke:#5fafaf,stroke-width:1.5px,color:#5fafaf
+  classDef result fill:#5faf5f14,stroke:#5faf5f,stroke-width:1.5px,color:#5faf5f
+  classDef choice fill:#87afaf14,stroke:#87afaf,stroke-width:1.5px,color:#87afaf
+  classDef fail fill:#d75f5f14,stroke:#d75f5f,stroke-width:1.5px,color:#d75f5f
+  class into,info choice
+  class fail fail
+  class cli,infoRun,dispatch,render result
+  linkStyle 2,4,5 stroke:#d75f5f,color:#d78787
 ```
 
 `__usage_spec__` / `__complete_word__` are intercepted in `main` **before**
@@ -348,6 +375,25 @@ are a `try_into` reject, not bound-and-ignored.
 | `em -p` | “no atoms or applet specified” (or emerge empty-atom equivalent) |
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif"
+    fontSize: "14px"
+    primaryColor: "#5fafaf"
+    primaryTextColor: "#5fafaf"
+    primaryBorderColor: "#5fafaf"
+    lineColor: "#8a8a8a"
+    textColor: "#8a8a8a"
+    titleColor: "#5fafaf"
+    clusterBorder: "#8a8a8a"
+  themeCSS: >
+    .cluster rect { fill: #8a8a8a !important; fill-opacity: 0.06 !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background: none !important; background-color: transparent !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span { color: #5faf87; }
+    .edgeLabel rect { fill: none !important; }
+---
 flowchart LR
   subgraph root["Cli — declared once"]
     G["true globals: -p -v -q --arch --repo --color"]
@@ -370,6 +416,7 @@ flowchart LR
   T --> Q
   T --> A
   R0 -.->|"prefix position only"| E
+  classDef default fill:#5fafaf14,stroke:#5fafaf,stroke-width:1.5px,color:#5fafaf
 ```
 
 ### `Cli` shape (illustrative)

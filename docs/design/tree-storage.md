@@ -30,6 +30,25 @@ live in em, see [Schema and sync in em](#schema-and-sync-in-em).
 ## Today
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif"
+    fontSize: "14px"
+    primaryColor: "#5fafaf"
+    primaryTextColor: "#5fafaf"
+    primaryBorderColor: "#5fafaf"
+    lineColor: "#8a8a8a"
+    textColor: "#8a8a8a"
+    titleColor: "#5fafaf"
+    clusterBorder: "#8a8a8a"
+  themeCSS: >
+    .cluster rect { fill: #8a8a8a !important; fill-opacity: 0.06 !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background: none !important; background-color: transparent !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span { color: #5faf87; }
+    .edgeLabel rect { fill: none !important; }
+---
 flowchart LR
   subgraph callers["portage-cli / portage-resolve"]
     R["resolve: repo_entries, profiles, masks"]
@@ -48,6 +67,9 @@ flowchart LR
   Q -->|"path().join(..)"| FS
   B -->|"Ebuild::path, eclass dirs"| FS
   C -->|"path().join(profiles)"| FS
+  classDef default fill:#5fafaf14,stroke:#5fafaf,stroke-width:1.5px,color:#5fafaf
+  classDef store fill:#00afaf14,stroke:#00afaf,stroke-width:1.5px,color:#00afaf
+  class FS store
 ```
 
 Outside `portage-repo` about 20 places reach into the tree by path, plus the build side and the
@@ -56,6 +78,25 @@ profile code; [What still uses paths](#what-still-uses-paths) lists what is left
 ## Proposed layers
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif"
+    fontSize: "14px"
+    primaryColor: "#5fafaf"
+    primaryTextColor: "#5fafaf"
+    primaryBorderColor: "#5fafaf"
+    lineColor: "#8a8a8a"
+    textColor: "#8a8a8a"
+    titleColor: "#5fafaf"
+    clusterBorder: "#8a8a8a"
+  themeCSS: >
+    .cluster rect { fill: #8a8a8a !important; fill-opacity: 0.06 !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background: none !important; background-color: transparent !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span { color: #5faf87; }
+    .edgeLabel rect { fill: none !important; }
+---
 flowchart TB
   subgraph intent["What callers ask (Repository API)"]
     ent["entries(): valid metadata for every cpv"]
@@ -73,6 +114,9 @@ flowchart TB
   files -->|"shared parsers"| tree
   mat -->|"FsTree: the real dir, no copy"| fs
   mat -->|"RedbTree: a copy of the package dir, kept per tree"| db
+  classDef default fill:#5fafaf14,stroke:#5fafaf,stroke-width:1.5px,color:#5fafaf
+  classDef store fill:#00afaf14,stroke:#00afaf,stroke-width:1.5px,color:#00afaf
+  class fs,db store
 ```
 
 Three levels, because they differ in who owns the logic:
@@ -132,6 +176,25 @@ path that does not exist.
 ## Entries per backend
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif"
+    fontSize: "14px"
+    primaryColor: "#5fafaf"
+    primaryTextColor: "#5fafaf"
+    primaryBorderColor: "#5fafaf"
+    lineColor: "#8a8a8a"
+    textColor: "#8a8a8a"
+    titleColor: "#5fafaf"
+    clusterBorder: "#8a8a8a"
+  themeCSS: >
+    .cluster rect { fill: #8a8a8a !important; fill-opacity: 0.06 !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background: none !important; background-color: transparent !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span { color: #5faf87; }
+    .edgeLabel rect { fill: none !important; }
+---
 flowchart TB
   start(["Repository::entries()"]) --> which{"backend"}
   which -->|directory| idx{"sync stamp matches the gap index?"}
@@ -142,6 +205,11 @@ flowchart TB
   fast --> out(["Vec of (Cpv, CacheEntry)"])
   slow --> out
   gaps --> out
+  classDef default fill:#5fafaf14,stroke:#5fafaf,stroke-width:1.5px,color:#5fafaf
+  classDef result fill:#5faf5f14,stroke:#5faf5f,stroke-width:1.5px,color:#5faf5f
+  classDef choice fill:#87afaf14,stroke:#87afaf,stroke-width:1.5px,color:#87afaf
+  class which,idx choice
+  class start,out result
 ```
 
 Finding what lacks a valid entry is per backend; filling it is shared, on the worker pool `em
@@ -157,6 +225,25 @@ files come from: `Profile` keeps the tree of the repository enclosing it and its
 that tree, and reads every file through it, `make.defaults` included (evaluated as text).
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif"
+    fontSize: "14px"
+    primaryColor: "#5fafaf"
+    primaryTextColor: "#5fafaf"
+    primaryBorderColor: "#5fafaf"
+    lineColor: "#8a8a8a"
+    textColor: "#8a8a8a"
+    titleColor: "#5fafaf"
+    clusterBorder: "#8a8a8a"
+  themeCSS: >
+    .cluster rect { fill: #8a8a8a !important; fill-opacity: 0.06 !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background: none !important; background-color: transparent !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span { color: #5faf87; }
+    .edgeLabel rect { fill: none !important; }
+---
 flowchart LR
   link["/etc/portage/make.profile"] -->|"resolve_profile_path"| abs["/var/db/repos/gentoo/profiles/default/linux/arm64/23.0"]
   abs -->|"nearest ancestor that is a repository"| repo["/var/db/repos/gentoo"]
@@ -164,6 +251,11 @@ flowchart LR
   abs -->|"strip the repository root"| rel["profiles/default/linux/arm64/23.0"]
   tree --> read["tree.read(rel/package.mask, ...)"]
   rel --> read
+  classDef default fill:#5fafaf14,stroke:#5fafaf,stroke-width:1.5px,color:#5fafaf
+  classDef result fill:#5faf5f14,stroke:#5faf5f,stroke-width:1.5px,color:#5faf5f
+  classDef store fill:#00afaf14,stroke:#00afaf,stroke-width:1.5px,color:#00afaf
+  class tree store
+  class read result
 ```
 
 - A repository is recognised by `metadata/layout.conf`, `profiles/repo_name`, or a tree database
@@ -183,6 +275,25 @@ gives a repository already identifies it, and every profile file read goes throu
 Masters and alias repositories work at the level above storage, so they mix backends freely:
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif"
+    fontSize: "14px"
+    primaryColor: "#5fafaf"
+    primaryTextColor: "#5fafaf"
+    primaryBorderColor: "#5fafaf"
+    lineColor: "#8a8a8a"
+    textColor: "#8a8a8a"
+    titleColor: "#5fafaf"
+    clusterBorder: "#8a8a8a"
+  themeCSS: >
+    .cluster rect { fill: #8a8a8a !important; fill-opacity: 0.06 !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background: none !important; background-color: transparent !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span { color: #5faf87; }
+    .edgeLabel rect { fill: none !important; }
+---
 flowchart LR
   subgraph set["RepoSet"]
     g["gentoo: RedbTree"]
@@ -192,6 +303,9 @@ flowchart LR
   o -->|"eclass lookup falls back to master"| g
   a -->|"clones entries under cross-* categories"| g
   set --> load["load_repos: one entry list per repo"]
+  classDef default fill:#5fafaf14,stroke:#5fafaf,stroke-width:1.5px,color:#5fafaf
+  classDef result fill:#5faf5f14,stroke:#5faf5f,stroke-width:1.5px,color:#5faf5f
+  class load result
 ```
 
 - An overlay on disk can name a redb `::gentoo` as its master: `inherit` reads eclasses through
@@ -223,6 +337,25 @@ flowchart LR
 ## Migration
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif"
+    fontSize: "14px"
+    primaryColor: "#5fafaf"
+    primaryTextColor: "#5fafaf"
+    primaryBorderColor: "#5fafaf"
+    lineColor: "#8a8a8a"
+    textColor: "#8a8a8a"
+    titleColor: "#5fafaf"
+    clusterBorder: "#8a8a8a"
+  themeCSS: >
+    .cluster rect { fill: #8a8a8a !important; fill-opacity: 0.06 !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background: none !important; background-color: transparent !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span { color: #5faf87; }
+    .edgeLabel rect { fill: none !important; }
+---
 flowchart LR
   s1["1 cleanups: callers use Repository queries"] --> s2["2 TreeSource + EntrySource, FsTree only"]
   s2 --> s3["3 portage-repo reads through TreeSource"]
@@ -230,6 +363,7 @@ flowchart LR
   s4 --> s5["5 ebuilds, discovery, bulk reads through the backend"]
   s5 --> s6["6 RedbTree behind a feature, resolve side"]
   s6 --> s7["7 checkout() for builds"]
+  classDef default fill:#5fafaf14,stroke:#5fafaf,stroke-width:1.5px,color:#5fafaf
 ```
 
 Steps 2–5 change no behaviour and are checked against the `repo_load` and `resolve` benches.
@@ -359,6 +493,25 @@ The writer moved into em from the spike, so staleness, locking and the doubled m
 decided where the writes happen.
 
 ```mermaid
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif"
+    fontSize: "14px"
+    primaryColor: "#5fafaf"
+    primaryTextColor: "#5fafaf"
+    primaryBorderColor: "#5fafaf"
+    lineColor: "#8a8a8a"
+    textColor: "#8a8a8a"
+    titleColor: "#5fafaf"
+    clusterBorder: "#8a8a8a"
+  themeCSS: >
+    .cluster rect { fill: #8a8a8a !important; fill-opacity: 0.06 !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span, .labelBkg { background: none !important; background-color: transparent !important; }
+    .edgeLabel, .edgeLabel p, .edgeLabel span { color: #5faf87; }
+    .edgeLabel rect { fill: none !important; }
+---
 flowchart LR
   subgraph cli["portage-cli: em sync (sync-gix)"]
     fetch["protocol v2 fetch: thin pack, deepen 1"] --> pack["complete + resolve the pack in memory"]
@@ -373,6 +526,9 @@ flowchart LR
   pack -->|"thin bases, old trees"| write
   write --> schema
   read --> schema
+  classDef default fill:#5fafaf14,stroke:#5fafaf,stroke-width:1.5px,color:#5fafaf
+  classDef store fill:#00afaf14,stroke:#00afaf,stroke-width:1.5px,color:#00afaf
+  class schema store
 ```
 
 `portage-repo` owns every table and writes them through `TreeUpdate`, which knows nothing about git
