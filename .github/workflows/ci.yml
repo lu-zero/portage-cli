@@ -47,7 +47,7 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: clippy
       - run: cargo clippy --workspace --exclude portage-bench -- -D warnings
-      - run: cargo clippy -p portage-repo -p portage-cli --features portage-cli/redb --all-targets -- -D warnings
+      - run: cargo clippy -p portage-repo -p portage-cli --features portage-cli/redb,portage-cli/sync-gix --all-targets -- -D warnings
 
   fmt:
     name: Format

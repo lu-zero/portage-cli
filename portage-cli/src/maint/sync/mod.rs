@@ -6,6 +6,7 @@
 //! |-------------|-----------------|----------|
 //! | `git` | shell `git` ([`git_cmd`]) | pure gix via feature **`sync-gix`** |
 //! | `rsync` | shell `rsync` ([`rsync_cmd`]) | — |
+//! | `git-redb` | redb databases written from git objects, with features **`redb`** and **`sync-gix`** | — |
 //! | other | skipped with a message | — |
 //!
 //! gix is **not** the default: it pulls a large dep graph (build time) and we
@@ -21,6 +22,8 @@
 mod git_cmd;
 #[cfg(feature = "sync-gix")]
 mod git_gix;
+#[cfg(all(feature = "redb", feature = "sync-gix"))]
+mod redb;
 mod rsync_cmd;
 mod verify;
 
@@ -116,6 +119,8 @@ enum SyncOutcome {
 enum SyncKind {
     Git,
     Rsync,
+    #[cfg(all(feature = "redb", feature = "sync-gix"))]
+    GitRedb,
 }
 
 async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
@@ -148,6 +153,14 @@ async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
     let kind = match sync_type.to_ascii_lowercase().as_str() {
         "git" => SyncKind::Git,
         "rsync" => SyncKind::Rsync,
+        #[cfg(all(feature = "redb", feature = "sync-gix"))]
+        "git-redb" => SyncKind::GitRedb,
+        #[cfg(not(all(feature = "redb", feature = "sync-gix")))]
+        "git-redb" => {
+            return Ok(SyncOutcome::Skipped(
+                "sync-type=git-redb needs em built with the redb and sync-gix features".into(),
+            ));
+        }
         other => {
             return Ok(SyncOutcome::Skipped(format!(
                 "sync-type={other} not supported (git, rsync)"
@@ -161,6 +174,8 @@ async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
         let action = match kind {
             SyncKind::Git => git_pretend(&path, sync_uri, volatile),
             SyncKind::Rsync => rsync_cmd::pretend(&path, sync_uri),
+            #[cfg(all(feature = "redb", feature = "sync-gix"))]
+            SyncKind::GitRedb => format!("update {path}.redb from {sync_uri}"),
         };
         return Ok(SyncOutcome::Pretend(action));
     }
@@ -187,11 +202,15 @@ async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
     let uri = sync_uri.to_string();
     let verifier = match kind {
         SyncKind::Git => verify::CommitVerifier::for_repo(entry)?,
+        #[cfg(all(feature = "redb", feature = "sync-gix"))]
+        SyncKind::GitRedb => verify::CommitVerifier::for_repo(entry)?,
         SyncKind::Rsync => None,
     };
     let changed = tokio::task::spawn_blocking(move || match kind {
         SyncKind::Git => git_sync(&path_c, &uri, volatile, quiet, verifier.as_ref()),
         SyncKind::Rsync => rsync_cmd::sync(&path_c, &uri, quiet),
+        #[cfg(all(feature = "redb", feature = "sync-gix"))]
+        SyncKind::GitRedb => redb::sync(&path_c, &uri, quiet, verifier.as_ref()),
     })
     .await
     .context("sync task join")??;
@@ -212,6 +231,8 @@ fn backend_label(kind: SyncKind) -> &'static str {
             }
         }
         SyncKind::Rsync => "rsync (command)",
+        #[cfg(all(feature = "redb", feature = "sync-gix"))]
+        SyncKind::GitRedb => "redb (gix, pure Rust)",
     }
 }
 
