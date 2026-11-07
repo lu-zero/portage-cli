@@ -43,7 +43,8 @@ pub fn open_with_masters(
 /// can break that match) — falls back to priority `-1000` here too. Each
 /// overlay's masters resolve, in order: its own entry (a `PORTDIR_OVERLAY`
 /// entry never has one), else its own `metadata/layout.conf`, else `main`.
-/// A repo that fails to open is reported and skipped, not fatal.
+/// A repo that fails to open is reported and skipped, not fatal; one whose `sync-type` disagrees
+/// with how it is stored is warned about.
 pub fn repo_set_from_conf(
     main: Repository,
     roots: &portage_resolve::Roots,
@@ -55,6 +56,9 @@ pub fn repo_set_from_conf(
     let Ok(conf) = roots.repos_conf() else {
         return RepoSet::single(main);
     };
+    for warning in conf.repos().iter().filter_map(storage_mismatch) {
+        crate::style::warn_line!("{warning}");
+    }
     let repos_dir = main.path().parent().map(PathBuf::from).unwrap_or_default();
     let main = Arc::new(main);
     let mut repos: Vec<Arc<Repository>> = Vec::new();
@@ -94,6 +98,34 @@ pub fn repo_set_from_conf(
         .cloned()
         .collect();
     RepoSet::from_ordered(repos, main_index, aliases)
+}
+
+/// What is read instead when `entry`'s `sync-type` and the storage at its location disagree
+fn storage_mismatch(entry: &portage_repo::RepoEntry) -> Option<String> {
+    let location = entry
+        .location
+        .as_path()
+        .and_then(camino::Utf8Path::from_path)?;
+    let name = entry.name;
+    let redb = entry
+        .sync_type
+        .as_deref()
+        .is_some_and(|t| t.trim().eq_ignore_ascii_case("git-redb"));
+    match (redb, portage_repo::tree::stored_elsewhere(location)) {
+        (true, false) if cfg!(feature = "redb") => Some(format!(
+            "repository '{name}' has sync-type = git-redb but no {location}.redb yet: \
+             reading the checkout until `em sync {name}` creates it"
+        )),
+        (true, false) => Some(format!(
+            "repository '{name}' has sync-type = git-redb, which needs em built with the redb feature: \
+             reading the checkout"
+        )),
+        (false, true) => Some(format!(
+            "repository '{name}' is read from {location}.redb, which its sync-type does not update: \
+             set sync-type = git-redb, or remove {location}.redb and {location}.md5-cache.redb"
+        )),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +303,46 @@ mod tests {
                 .any(|e| e.ebuild.path().starts_with(&overlay_dir)),
             "app-misc/bar must be discoverable via the inherited main-repo category list, got {:?}",
             ebuilds.iter().map(|e| e.ebuild.path()).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[cfg(all(test, feature = "redb"))]
+mod storage_tests {
+    use camino::Utf8PathBuf;
+
+    use super::storage_mismatch;
+
+    fn mismatch(sync_type: &str, database: bool) -> Option<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let location = root.join("repo");
+        if database {
+            std::fs::write(format!("{location}.redb"), "").unwrap();
+        }
+        let conf = root.join("repos.conf");
+        std::fs::write(
+            &conf,
+            format!("[r]\nlocation = {location}\nsync-type = {sync_type}\n"),
+        )
+        .unwrap();
+        let conf = portage_repo::ReposConf::load_from(&[conf]).unwrap();
+        storage_mismatch(conf.find("r").unwrap())
+    }
+
+    #[test]
+    fn a_sync_type_and_storage_that_disagree_are_warned_about() {
+        assert_eq!(mismatch("git-redb", true), None);
+        assert_eq!(mismatch("git", false), None);
+        let missing = mismatch("git-redb", false).unwrap();
+        assert!(
+            missing.contains("until `em sync r` creates it"),
+            "{missing}"
+        );
+        let stale = mismatch("git", true).unwrap();
+        assert!(
+            stale.contains("which its sync-type does not update"),
+            "{stale}"
         );
     }
 }

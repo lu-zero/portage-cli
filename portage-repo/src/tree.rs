@@ -103,8 +103,9 @@ pub(crate) fn tree_at(location: &Utf8Path) -> Arc<dyn TreeSource> {
     Arc::new(FsTree::new(location))
 }
 
-/// Whether [`storage_at`] finds the repository at `location` somewhere other than its checkout
-pub(crate) fn stored_elsewhere(location: &Utf8Path) -> bool {
+/// Whether the repository at `location` is read from a database next to it (`<location>.redb`)
+/// rather than its checkout; always `false` without the `redb` feature
+pub fn stored_elsewhere(location: &Utf8Path) -> bool {
     cfg_select! {
         feature = "redb" => redb::tree_file(location).is_file(),
         _ => {
