@@ -2696,6 +2696,14 @@ async fn an_eclass_that_fails_or_exits_dies_in_inherit() {
 
 #[tokio::test]
 async fn a_default_phase_returns_the_status_of_its_failed_emake() {
+    match std::process::Command::new("make").arg("--version").output() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping real-emake status test: make is not installed");
+            return;
+        }
+        Err(e) => panic!("checking make prerequisite: {e}"),
+        Ok(_) => {}
+    }
     let dir = tempdir().unwrap();
     let body = "src_compile() { printf 'all:\\n\\t@exit 5\\n' > Makefile; default; \
                 echo $? > \"${T}/status\"; }\n";
