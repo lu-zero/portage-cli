@@ -13,9 +13,13 @@ pub(super) const CACHE_ENTRIES: TableDefinition<&str, &[u8]> = TableDefinition::
 pub(super) const REFCOUNT: TableDefinition<&[u8], u32> = TableDefinition::new("refcount");
 pub(super) const PACKAGES: TableDefinition<&str, &str> = TableDefinition::new("packages");
 pub(super) const SYNC_LOG: TableDefinition<u64, &[u8]> = TableDefinition::new("sync_log");
+/// Every symlink in the tree, by path
+pub(super) const LINKS: TableDefinition<&str, ()> = TableDefinition::new("links");
+/// The ebuilds and eclasses reached through a symlink, by the path that reaches them, with their md5
+pub(super) const LINKED: TableDefinition<&str, &[u8]> = TableDefinition::new("linked");
 
 /// `meta.schema` of the tree database
-pub(super) const TREE_SCHEMA: &str = "2";
+pub(super) const TREE_SCHEMA: &str = "3";
 /// `meta.schema` of the md5-cache database
 pub(super) const CACHE_SCHEMA: &str = "1";
 
@@ -132,6 +136,88 @@ pub(super) fn decode(stored: &[u8]) -> io::Result<(u8, Vec<u8>)> {
     }
 }
 
+/// The git mode of a directory entry
+pub(super) const MODE_DIR: &[u8] = b"40000";
+/// The git mode of a symlink entry
+pub(super) const MODE_LINK: &[u8] = b"120000";
+/// Whether a `paths` value, `[mode u16 BE][oid]`, is a symlink's
+pub(super) fn row_is_link(row: &[u8]) -> bool {
+    row.get(..2) == Some(&0o120000u16.to_be_bytes()[..])
+}
+
+/// Symlinks followed for one path before it counts as a loop, as Linux's `ELOOP`
+const MAX_LINKS: usize = 40;
+
+/// The git mode and oid at `rel` in the tree `root`, following the symlinks along it as a
+/// filesystem would (the last component's only when `follow_last`); `None` when nothing is there
+/// or a link points outside the tree, which has nothing beyond its root
+pub(super) fn resolve(
+    root: &Oid,
+    rel: &str,
+    follow_last: bool,
+    object: impl Fn(&Oid) -> io::Result<Option<(u8, Vec<u8>)>>,
+) -> io::Result<Option<(Vec<u8>, Oid)>> {
+    let parts = |path: &str| -> Vec<String> {
+        path.split('/')
+            .rev()
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+            .collect()
+    };
+    // Components still to walk, the next one last; the directories walked, the root first.
+    let mut pending = parts(rel);
+    let mut dirs = vec![*root];
+    let mut found = (MODE_DIR.to_vec(), *root);
+    let mut links = 0;
+    while let Some(part) = pending.pop() {
+        if found.0 != MODE_DIR {
+            return Ok(None);
+        }
+        let parent = dirs[dirs.len() - 1];
+        match part.as_str() {
+            "." => continue,
+            ".." => {
+                if dirs.len() == 1 {
+                    return Ok(None);
+                }
+                dirs.pop();
+                found = (MODE_DIR.to_vec(), dirs[dirs.len() - 1]);
+                continue;
+            }
+            _ => {}
+        }
+        let Some((KIND_TREE, data)) = object(&parent)? else {
+            return Ok(None);
+        };
+        let Some(entry) = tree_entries(&data).find(|e| e.name == part.as_bytes()) else {
+            return Ok(None);
+        };
+        if entry.mode == MODE_LINK && (follow_last || !pending.is_empty()) {
+            links += 1;
+            if links > MAX_LINKS {
+                return Err(db_err(format!("{rel}: too many levels of symbolic links")));
+            }
+            let Some((KIND_BLOB, target)) = object(entry.oid)? else {
+                return Err(db_err(format!(
+                    "{rel}: link {} missing",
+                    hex::encode(entry.oid)
+                )));
+            };
+            match String::from_utf8(target) {
+                Ok(target) if !target.starts_with('/') => pending.extend(parts(&target)),
+                _ => return Ok(None),
+            }
+            found = (MODE_DIR.to_vec(), parent);
+            continue;
+        }
+        if entry.mode == MODE_DIR {
+            dirs.push(*entry.oid);
+        }
+        found = (entry.mode.to_vec(), *entry.oid);
+    }
+    Ok(Some(found))
+}
+
 pub(super) struct TreeEntry<'a> {
     pub(super) mode: &'a [u8],
     pub(super) name: &'a [u8],
@@ -178,7 +264,7 @@ mod tests {
         };
         assert!(check(Some(TREE_SCHEMA)).is_ok());
         let err = check(Some("1")).unwrap_err().to_string();
-        assert_eq!(err, "schema 1, em reads 2");
+        assert_eq!(err, "schema 1, em reads 3");
         assert!(check(None).is_err());
     }
 }

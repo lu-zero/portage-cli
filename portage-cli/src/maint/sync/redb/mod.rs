@@ -522,7 +522,7 @@ mod tests {
             |p: &str| String::from_utf8(tree.read(Utf8Path::new(p)).unwrap().unwrap()).unwrap();
         // `a` and `b` are one tree object under two paths: both are walked.
         assert_eq!(read("b/run"), "#!/bin/sh\n");
-        assert_eq!(read("b/link"), "run");
+        assert_eq!(read("b/link"), "#!/bin/sh\n", "a link reads as its target");
         let mut names = tree.list(Utf8Path::new("a")).unwrap().unwrap();
         names.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(

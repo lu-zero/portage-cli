@@ -11,9 +11,10 @@ use portage_atom::{Cpn, Cpv};
 use redb::{Database, ReadableDatabase, ReadableTable, TableError, WriteTransaction};
 
 use super::schema::{
-    CACHE_ENTRIES, CACHE_SCHEMA, EBUILDS, ECLASSES, MD5_CACHE_DIR, META, OBJECTS, ObjectKind, Oid,
-    PACKAGES, PATHS, REFCOUNT, SYNC_LOG, TREE_SCHEMA, check_schema, db_err, decode, encode,
-    md5_cache_key,
+    CACHE_ENTRIES, CACHE_SCHEMA, EBUILDS, ECLASSES, KIND_BLOB, KIND_TREE, LINKED, LINKS,
+    MD5_CACHE_DIR, META, MODE_DIR, OBJECTS, ObjectKind, Oid, PACKAGES, PATHS, REFCOUNT, SYNC_LOG,
+    TREE_SCHEMA, check_schema, db_err, decode, encode, md5_cache_key, resolve, row_is_link,
+    tree_entries,
 };
 
 /// How many sync records the tree database keeps
@@ -22,6 +23,8 @@ const KEEP_LOG: u64 = 50;
 const MODE_TREE: u16 = 0o040000;
 /// A submodule: names a commit of another repository, never stored here
 const MODE_GITLINK: u16 = 0o160000;
+/// A symlink: its blob is the target, so what it derives comes from what it points to
+const MODE_LINK: u16 = 0o120000;
 
 /// A tree entry: its git mode and object id
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,7 +306,9 @@ impl TreeWriter {
                 if !path.value().starts_with(MD5_CACHE_DIR) {
                     break;
                 }
-                if let Some(key) = md5_cache_key(path.value()) {
+                if let Some(key) = md5_cache_key(path.value())
+                    && !row_is_link(entry.value())
+                {
                     rows.push((key.to_string(), Some(path_oid(entry.value())?)));
                 }
             }
@@ -364,7 +369,7 @@ fn prepare(objects: HashMap<Oid, (ObjectKind, Vec<u8>)>, changes: &[PathChange])
     let digested: HashSet<Oid> = changes
         .iter()
         .filter(|c| matches!(derived(&c.path), Derived::Ebuild(_) | Derived::Eclass(_)))
-        .filter_map(|c| c.new.map(|i| i.oid))
+        .filter_map(|c| c.new.filter(|i| i.mode != MODE_LINK).map(|i| i.oid))
         .collect();
     let (encoded, _) = crate::entries::par_map(
         objects.into_iter().collect(),
@@ -406,6 +411,9 @@ fn blob_digest(
 /// md5-cache entries an update changed: `cat/PF` and the new entry's blob, `None` when removed
 type CacheChanges = Vec<(String, Option<Oid>)>;
 
+/// The versions of each `cat/PN` an update `[added, removed, modified]`
+type Touched = BTreeMap<String, [BTreeSet<Cpv>; 3]>;
+
 /// Indices into a package's `[added, removed, modified]` versions
 const ADDED: usize = 0;
 const REMOVED: usize = 1;
@@ -419,13 +427,15 @@ fn apply_tree(
 ) -> io::Result<(UpdateSummary, CacheChanges)> {
     let mut summary = UpdateSummary::default();
     let mut cache_changes = Vec::new();
-    let mut touched: BTreeMap<String, [BTreeSet<Cpv>; 3]> = BTreeMap::new();
+    let mut touched = Touched::new();
     {
         let mut objects = txn.open_table(OBJECTS).map_err(db_err)?;
         let mut refcount = txn.open_table(REFCOUNT).map_err(db_err)?;
         let mut paths = txn.open_table(PATHS).map_err(db_err)?;
         let mut ebuilds = txn.open_table(EBUILDS).map_err(db_err)?;
         let mut eclasses = txn.open_table(ECLASSES).map_err(db_err)?;
+        let mut links = txn.open_table(LINKS).map_err(db_err)?;
+        let mut linked = txn.open_table(LINKED).map_err(db_err)?;
 
         // The root tree and the commit hold one reference each.
         let mut incs = vec![update.tree, update.commit];
@@ -435,6 +445,7 @@ fn apply_tree(
         }
         // Applied in key order afterwards: git tree order is not the byte order of full paths.
         let mut path_rows: BTreeMap<&str, Option<[u8; 22]>> = BTreeMap::new();
+        let mut link_rows: BTreeMap<&str, bool> = BTreeMap::new();
         for change in &update.changes {
             let counted = |item: &Option<TreeItem>| item.filter(|i| i.mode != MODE_GITLINK);
             if counted(&change.old).map(|i| i.oid) != counted(&change.new).map(|i| i.oid) {
@@ -458,45 +469,45 @@ fn apply_tree(
                     row
                 }),
             );
-            match derived(&change.path) {
-                Derived::CacheEntry(key) => {
-                    cache_changes.push((key.to_string(), new.map(|i| i.oid)));
-                }
-                // Read before the object table changes, so a blob that only moved is still found.
-                Derived::Eclass(name) => match new {
-                    Some(item) => {
-                        let digest = format!("{:x}", blob_digest(prepared, &objects, &item.oid)?);
-                        eclasses.insert(name, digest.as_bytes()).map_err(db_err)?;
-                    }
-                    None => {
-                        eclasses.remove(name).map_err(db_err)?;
-                    }
-                },
-                Derived::Ebuild(cpv) => {
-                    let key = ebuild_key(&cpv);
-                    let slot = match new {
-                        Some(item) => {
-                            let digest = blob_digest(prepared, &objects, &item.oid)?;
-                            ebuilds
-                                .insert(key.as_str(), &digest.0[..])
-                                .map_err(db_err)?;
-                            if old.is_some() { MODIFIED } else { ADDED }
-                        }
-                        None => {
-                            ebuilds.remove(key.as_str()).map_err(db_err)?;
-                            REMOVED
-                        }
-                    };
-                    let cpn = format!("{}/{}", cpv.cpn.category, cpv.cpn.package);
-                    touched.entry(cpn).or_default()[slot].insert(cpv);
-                }
-                Derived::Other => {}
+            let is_link = |item: Option<TreeItem>| item.is_some_and(|i| i.mode == MODE_LINK);
+            if is_link(new) || is_link(old) {
+                link_rows.insert(change.path.as_str(), is_link(new));
             }
+            // A link derives nothing itself: the pass over `links` below handles what it reaches.
+            let content = |item: Option<TreeItem>| item.filter(|i| i.mode != MODE_LINK);
+            let (old, new) = (content(old), content(new));
+            if old.is_none() && new.is_none() {
+                continue;
+            }
+            if let Derived::CacheEntry(key) = derived(&change.path) {
+                cache_changes.push((key.to_string(), new.map(|i| i.oid)));
+                continue;
+            }
+            // Read before the object table changes, so a blob that only moved is still found.
+            let digest = match new {
+                Some(item) if !matches!(derived(&change.path), Derived::Other) => {
+                    Some(blob_digest(prepared, &objects, &item.oid)?)
+                }
+                _ => None,
+            };
+            let mut tables = DerivedTables {
+                ebuilds: &mut ebuilds,
+                eclasses: &mut eclasses,
+                touched: &mut touched,
+            };
+            tables.set(&change.path, digest)?;
         }
         for (path, row) in &path_rows {
             match row {
                 Some(row) => paths.insert(*path, &row[..]).map(drop),
                 None => paths.remove(*path).map(drop),
+            }
+            .map_err(db_err)?;
+        }
+        for (path, is_link) in &link_rows {
+            match is_link {
+                true => links.insert(*path, ()).map(drop),
+                false => links.remove(*path).map(drop),
             }
             .map_err(db_err)?;
         }
@@ -535,6 +546,38 @@ fn apply_tree(
                 refcount.insert(&oid[..], count - 1).map_err(db_err)?;
             }
         }
+
+        // After the objects: links resolve in the new tree.
+        let now = linked_files(&objects, &links, &update.tree)?;
+        let mut before = BTreeMap::new();
+        for row in linked.iter().map_err(db_err)? {
+            let (path, digest) = row.map_err(db_err)?;
+            before.insert(path.value().to_string(), digest.value().to_vec());
+        }
+        let mut tables = DerivedTables {
+            ebuilds: &mut ebuilds,
+            eclasses: &mut eclasses,
+            touched: &mut touched,
+        };
+        for path in before.keys().filter(|p| !now.contains_key(*p)) {
+            // A file may have replaced the link in this update, and set its rows already.
+            let replaced = paths
+                .get(path.as_str())
+                .map_err(db_err)?
+                .is_some_and(|row| !row_is_link(row.value()));
+            if !replaced {
+                tables.set(path, None)?;
+            }
+            linked.remove(path.as_str()).map_err(db_err)?;
+        }
+        for (path, digest) in &now {
+            if before.get(path).map(Vec::as_slice) != Some(&digest.0[..]) {
+                tables.set(path, Some(*digest))?;
+                linked
+                    .insert(path.as_str(), &digest.0[..])
+                    .map_err(db_err)?;
+            }
+        }
     }
     update_packages(txn, &touched, &mut summary)?;
     write_log(txn, update, &summary)?;
@@ -549,6 +592,93 @@ fn apply_tree(
         meta.insert(key, value.as_bytes()).map_err(db_err)?;
     }
     Ok((summary, cache_changes))
+}
+
+/// The `ebuilds` and `eclasses` tables, and the versions an update touched
+struct DerivedTables<'t, 'txn> {
+    ebuilds: &'t mut redb::Table<'txn, &'static str, &'static [u8]>,
+    eclasses: &'t mut redb::Table<'txn, &'static str, &'static [u8]>,
+    touched: &'t mut Touched,
+}
+
+impl DerivedTables<'_, '_> {
+    /// Record the ebuild or eclass at `path` with the md5 of its text, or as gone
+    fn set(&mut self, path: &str, digest: Option<md5::Digest>) -> io::Result<()> {
+        match derived(path) {
+            Derived::Eclass(name) => match digest {
+                Some(digest) => self
+                    .eclasses
+                    .insert(name, format!("{digest:x}").as_bytes())
+                    .map(drop),
+                None => self.eclasses.remove(name).map(drop),
+            }
+            .map_err(db_err),
+            Derived::Ebuild(cpv) => {
+                let key = ebuild_key(&cpv);
+                let slot = match digest {
+                    Some(digest) => {
+                        let existed = self
+                            .ebuilds
+                            .insert(key.as_str(), &digest.0[..])
+                            .map_err(db_err)?
+                            .is_some();
+                        if existed { MODIFIED } else { ADDED }
+                    }
+                    None => {
+                        self.ebuilds.remove(key.as_str()).map_err(db_err)?;
+                        REMOVED
+                    }
+                };
+                let cpn = format!("{}/{}", cpv.cpn.category, cpv.cpn.package);
+                self.touched.entry(cpn).or_default()[slot].insert(cpv);
+                Ok(())
+            }
+            Derived::CacheEntry(_) | Derived::Other => Ok(()),
+        }
+    }
+}
+
+/// Every ebuild and eclass reached through a symlink in the tree `root`, by the path that
+/// reaches it, with the md5 of its text
+fn linked_files(
+    objects: &redb::Table<&[u8], &[u8]>,
+    links: &redb::Table<&str, ()>,
+    root: &Oid,
+) -> io::Result<BTreeMap<String, md5::Digest>> {
+    let object = |oid: &Oid| -> io::Result<Option<(u8, Vec<u8>)>> {
+        match objects.get(&oid[..]).map_err(db_err)? {
+            Some(stored) => Ok(Some(decode(stored.value())?)),
+            None => Ok(None),
+        }
+    };
+    let mut pending = Vec::new();
+    for row in links.iter().map_err(db_err)? {
+        pending.push(row.map_err(db_err)?.0.value().to_string());
+    }
+    let mut out = BTreeMap::new();
+    while let Some(path) = pending.pop() {
+        // A broken link or a loop derives nothing; reading through it fails the same way.
+        let Ok(Some((mode, oid))) = resolve(root, &path, true, object) else {
+            continue;
+        };
+        if mode == MODE_DIR {
+            // Ebuilds are three levels deep and eclasses two: nothing deeper derives a row.
+            if path.matches('/').count() < 2
+                && let Some((KIND_TREE, data)) = object(&oid)?
+            {
+                pending.extend(
+                    tree_entries(&data)
+                        .filter_map(|e| std::str::from_utf8(e.name).ok())
+                        .map(|name| format!("{path}/{name}")),
+                );
+            }
+        } else if matches!(derived(&path), Derived::Ebuild(_) | Derived::Eclass(_))
+            && let Some((KIND_BLOB, text)) = object(&oid)?
+        {
+            out.insert(path, md5::compute(&text));
+        }
+    }
+    Ok(out)
 }
 
 /// The root tree recorded in `meta`, read inside the write transaction
@@ -570,6 +700,8 @@ fn update_packages(
 ) -> io::Result<()> {
     let mut packages = txn.open_table(PACKAGES).map_err(db_err)?;
     for (cpn, [added, removed, modified]) in touched {
+        // Removed and added in one update, as when a link replaces a file: changed.
+        let moved: BTreeSet<Cpv> = added.intersection(removed).cloned().collect();
         let before: BTreeSet<String> = packages
             .get(cpn.as_str())
             .map_err(db_err)?
@@ -595,9 +727,15 @@ fn update_packages(
                 _ => {}
             }
         }
-        summary.versions_added.extend(added.iter().cloned());
-        summary.versions_removed.extend(removed.iter().cloned());
-        summary.versions_modified.extend(modified.iter().cloned());
+        summary
+            .versions_added
+            .extend(added.difference(&moved).cloned());
+        summary
+            .versions_removed
+            .extend(removed.difference(&moved).cloned());
+        summary
+            .versions_modified
+            .extend(modified.union(&moved).cloned());
     }
     Ok(())
 }
@@ -656,7 +794,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::tree::TreeSource;
+    use crate::tree::{EntryKind, TreeSource};
 
     /// Content-addressed, like git: equal bodies share one object
     fn oid(kind: ObjectKind, body: &[u8]) -> Oid {
@@ -681,14 +819,19 @@ mod tests {
                 match path.split_once('/') {
                     Some((dir, rest)) => children.entry(dir).or_default().push((rest, text)),
                     None => {
+                        // `-> target` is a symlink.
+                        let (mode, text) = match text.strip_prefix("-> ") {
+                            Some(target) => (MODE_LINK, target),
+                            None => (0o100644, *text),
+                        };
                         let item = TreeItem {
-                            mode: 0o100644,
+                            mode,
                             oid: oid(ObjectKind::Blob, text.as_bytes()),
                         };
                         out.objects
                             .insert(item.oid, (ObjectKind::Blob, text.as_bytes().to_vec()));
                         out.entries.insert(format!("{prefix}{path}"), item);
-                        body.extend_from_slice(format!("100644 {path}\0").as_bytes());
+                        body.extend_from_slice(format!("{mode:o} {path}\0").as_bytes());
                         body.extend_from_slice(&item.oid);
                     }
                 }
@@ -1004,5 +1147,138 @@ mod tests {
         assert!(TreeWriter::open(&location).is_err());
         drop(reader);
         assert!(TreeWriter::open(&location).unwrap().is_some());
+    }
+
+    /// Every row of a `&str`-keyed table of the tree database, read with nothing else open
+    fn rows(
+        location: &Utf8Path,
+        table: redb::TableDefinition<&str, &[u8]>,
+    ) -> BTreeMap<String, Vec<u8>> {
+        let db = redb::ReadOnlyDatabase::open(super::super::tree_file(location)).unwrap();
+        let txn = db.begin_read().unwrap();
+        let table = txn.open_table(table).unwrap();
+        table
+            .iter()
+            .unwrap()
+            .map(|row| {
+                let (k, v) = row.unwrap();
+                (k.value().to_string(), v.value().to_vec())
+            })
+            .collect()
+    }
+
+    fn sorted(cpvs: &[Cpv]) -> Vec<String> {
+        let mut out: Vec<String> = cpvs.iter().map(Cpv::to_string).collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn symlinks_read_and_derive_as_what_they_point_to() {
+        let (dir, location) = location();
+        let v1 = fixture(&[
+            ("app-misc/foo/foo-1.ebuild", "foo 1"),
+            ("app-misc/foo/foo-2.ebuild", "-> foo-1.ebuild"),
+            ("app-misc/foo/files/p.patch", "-> ../../bar/files/p.patch"),
+            ("app-misc/bar/bar-1.ebuild", "bar 1"),
+            ("app-misc/bar/files/p.patch", "patch"),
+            ("app-misc/out", "-> ../../elsewhere"),
+            ("app-misc/loop", "-> loop"),
+            ("cross-x/foo", "-> ../app-misc/foo"),
+            ("eclass/e.eclass", "e v1"),
+            ("eclass/f.eclass", "-> e.eclass"),
+        ]);
+        TreeWriter::import(&location, update(None, &v1, [1; 20])).unwrap();
+        let md5 = |text: &str| md5::compute(text).0.to_vec();
+        let ebuilds = rows(&location, EBUILDS);
+        assert_eq!(ebuilds["app-misc/foo-2"], md5("foo 1"));
+        assert_eq!(ebuilds["cross-x/foo-1"], md5("foo 1"));
+        assert_eq!(
+            rows(&location, ECLASSES)["f"],
+            format!("{:x}", md5::compute("e v1")).into_bytes()
+        );
+
+        let storage = super::super::storage_at(&location).unwrap().unwrap();
+        let tree = &*storage.tree;
+        assert_eq!(read(tree, "app-misc/foo/foo-2.ebuild").unwrap(), "foo 1");
+        assert_eq!(read(tree, "cross-x/foo/foo-2.ebuild").unwrap(), "foo 1");
+        assert_eq!(read(tree, "app-misc/foo/files/p.patch").unwrap(), "patch");
+        assert_eq!(read(tree, "eclass/f.eclass").unwrap(), "e v1");
+        assert_eq!(read(tree, "app-misc/out"), None, "nothing outside the tree");
+        assert!(tree.read(Utf8Path::new("app-misc/loop")).is_err());
+        assert_eq!(
+            tree.kind(Utf8Path::new("cross-x/foo")).unwrap(),
+            Some(EntryKind::Dir)
+        );
+        let mut names = tree.list(Utf8Path::new("app-misc")).unwrap().unwrap();
+        names.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            names,
+            [
+                ("bar".into(), EntryKind::Dir),
+                ("foo".into(), EntryKind::Dir)
+            ],
+            "broken links and loops are left out"
+        );
+        assert_eq!(
+            tree.ebuild_index().unwrap().unwrap(),
+            [
+                "app-misc/bar/bar-1.ebuild",
+                "app-misc/foo/foo-1.ebuild",
+                "app-misc/foo/foo-2.ebuild",
+                "cross-x/foo/foo-1.ebuild",
+                "cross-x/foo/foo-2.ebuild",
+            ]
+            .map(Utf8PathBuf::from)
+        );
+        let copies = Utf8Path::from_path(dir.path()).unwrap().join("copies");
+        let copy = tree
+            .checkout(&[Utf8Path::new("app-misc/foo")], Some(&copies))
+            .unwrap();
+        let patch = copy.join("app-misc/foo/files/p.patch");
+        assert!(!patch.symlink_metadata().unwrap().is_symlink());
+        assert_eq!(std::fs::read_to_string(patch).unwrap(), "patch");
+        drop(storage);
+
+        // The link's target changes, a link becomes a file, a file becomes a link, a link goes.
+        let v2 = fixture(&[
+            ("app-misc/foo/foo-1.ebuild", "foo 1 edited"),
+            ("app-misc/foo/foo-2.ebuild", "foo 2"),
+            ("app-misc/foo/files/p.patch", "-> ../../bar/files/p.patch"),
+            ("app-misc/bar/bar-1.ebuild", "-> ../foo/foo-1.ebuild"),
+            ("app-misc/bar/files/p.patch", "patch"),
+            ("eclass/e.eclass", "e v2"),
+            ("eclass/f.eclass", "-> e.eclass"),
+        ]);
+        let mut writer = TreeWriter::open(&location).unwrap().unwrap();
+        let summary = writer
+            .apply(update(Some((&v1, [1; 20])), &v2, [2; 20]))
+            .unwrap();
+        drop(writer);
+        assert_eq!(
+            sorted(&summary.versions_modified),
+            ["app-misc/bar-1", "app-misc/foo-1", "app-misc/foo-2"]
+        );
+        assert_eq!(
+            sorted(&summary.versions_removed),
+            ["cross-x/foo-1", "cross-x/foo-2"]
+        );
+        assert!(summary.versions_added.is_empty());
+        assert_eq!(
+            summary.packages_removed,
+            [Cpn::parse("cross-x/foo").unwrap()]
+        );
+        let ebuilds = rows(&location, EBUILDS);
+        assert_eq!(ebuilds["app-misc/bar-1"], md5("foo 1 edited"));
+        assert_eq!(ebuilds["app-misc/foo-2"], md5("foo 2"));
+        assert!(!ebuilds.contains_key("cross-x/foo-1"));
+        assert_eq!(
+            rows(&location, ECLASSES)["f"],
+            format!("{:x}", md5::compute("e v2")).into_bytes()
+        );
+        assert_eq!(
+            rows(&location, LINKED).into_keys().collect::<Vec<_>>(),
+            ["app-misc/bar/bar-1.ebuild", "eclass/f.eclass"]
+        );
     }
 }

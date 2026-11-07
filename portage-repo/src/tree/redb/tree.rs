@@ -7,8 +7,8 @@ use portage_atom::Cpv;
 use redb::{ReadOnlyDatabase, ReadableDatabase, ReadableTable};
 
 use super::schema::{
-    EBUILDS, KIND_BLOB, KIND_TREE, META, OBJECTS, Oid, PATHS, TREE_SCHEMA, check_schema, db_err,
-    decode, tree_entries,
+    EBUILDS, KIND_BLOB, KIND_TREE, META, MODE_DIR, MODE_LINK, OBJECTS, Oid, PATHS, TREE_SCHEMA,
+    check_schema, db_err, decode, resolve, row_is_link, tree_entries,
 };
 use crate::tree::{EntryKind, TreeSource};
 
@@ -48,21 +48,13 @@ impl RedbTree {
         Ok(Some(decode(stored.value())?))
     }
 
-    /// The object at `rel`, walking tree objects from the root
-    fn lookup(&self, rel: &Utf8Path) -> io::Result<Option<(u8, Vec<u8>)>> {
-        let txn = self.db.begin_read().map_err(db_err)?;
-        let objects = txn.open_table(OBJECTS).map_err(db_err)?;
-        let mut current = Self::object(&objects, &self.root)?;
-        for part in rel.components() {
-            let Some((KIND_TREE, data)) = current else {
-                return Ok(None);
-            };
-            let Some(oid) = tree_entries(&data).find(|e| e.name == part.as_str().as_bytes()) else {
-                return Ok(None);
-            };
-            current = Self::object(&objects, oid.oid)?;
-        }
-        Ok(current)
+    /// The git mode and oid at `rel`, following symlinks
+    fn resolve(
+        &self,
+        objects: &redb::ReadOnlyTable<&[u8], &[u8]>,
+        rel: &str,
+    ) -> io::Result<Option<(Vec<u8>, Oid)>> {
+        resolve(&self.root, rel, true, |oid| Self::object(objects, oid))
     }
 }
 
@@ -71,13 +63,40 @@ impl TreeSource for RedbTree {
         // `paths` holds files only, as `[mode u16][oid]`: one lookup instead of a tree walk.
         let txn = self.db.begin_read().map_err(db_err)?;
         let paths = txn.open_table(PATHS).map_err(db_err)?;
-        let Some(row) = paths.get(rel.as_str()).map_err(db_err)? else {
-            return Ok(None);
-        };
-        let Some(oid) = row.value().get(2..22).and_then(|o| Oid::try_from(o).ok()) else {
-            return Err(db_err("malformed path entry"));
+        let row = paths.get(rel.as_str()).map_err(db_err)?;
+        let direct = match &row {
+            Some(row) if !row_is_link(row.value()) => Some(row.value()),
+            Some(_) => None,
+            // Only a symlinked directory on the way can make a path `paths` lacks exist.
+            None => {
+                let mut via_link = false;
+                for dir in rel.ancestors().skip(1).filter(|d| !d.as_str().is_empty()) {
+                    if paths
+                        .get(dir.as_str())
+                        .map_err(db_err)?
+                        .is_some_and(|r| row_is_link(r.value()))
+                    {
+                        via_link = true;
+                        break;
+                    }
+                }
+                if !via_link {
+                    return Ok(None);
+                }
+                None
+            }
         };
         let objects = txn.open_table(OBJECTS).map_err(db_err)?;
+        let oid = match direct {
+            Some(row) => row
+                .get(2..22)
+                .and_then(|o| Oid::try_from(o).ok())
+                .ok_or_else(|| db_err("malformed path entry"))?,
+            None => match self.resolve(&objects, rel.as_str())? {
+                Some((mode, oid)) if mode != MODE_DIR => oid,
+                _ => return Ok(None),
+            },
+        };
         Ok(match Self::object(&objects, &oid)? {
             Some((KIND_BLOB, data)) => Some(data),
             _ => None,
@@ -85,41 +104,39 @@ impl TreeSource for RedbTree {
     }
 
     fn list(&self, rel: &Utf8Path) -> io::Result<Option<Vec<(String, EntryKind)>>> {
-        let Some((KIND_TREE, data)) = self.lookup(rel)? else {
+        let txn = self.db.begin_read().map_err(db_err)?;
+        let objects = txn.open_table(OBJECTS).map_err(db_err)?;
+        let Some((_, oid)) = self.resolve(&objects, rel.as_str())? else {
             return Ok(None);
         };
-        Ok(Some(
-            tree_entries(&data)
-                .filter_map(|e| {
-                    let name = String::from_utf8(e.name.to_vec()).ok()?;
-                    let kind = if e.mode == b"40000" {
-                        EntryKind::Dir
-                    } else {
-                        EntryKind::File
-                    };
-                    Some((name, kind))
-                })
-                .collect(),
-        ))
+        let Some((KIND_TREE, data)) = Self::object(&objects, &oid)? else {
+            return Ok(None);
+        };
+        let mut out = Vec::new();
+        for e in tree_entries(&data) {
+            let Ok(name) = String::from_utf8(e.name.to_vec()) else {
+                continue;
+            };
+            // A link is what it points to; a broken one or a loop is left out, as `FsTree` does.
+            let mode = if e.mode == MODE_LINK {
+                match self.resolve(&objects, rel.join(&name).as_str()) {
+                    Ok(Some((mode, _))) => mode,
+                    Ok(None) | Err(_) => continue,
+                }
+            } else {
+                e.mode.to_vec()
+            };
+            out.push((name, kind_of(&mode)));
+        }
+        Ok(Some(out))
     }
 
     fn kind(&self, rel: &Utf8Path) -> io::Result<Option<EntryKind>> {
-        // The parent tree's entry mode answers without decoding the object itself.
-        let (Some(parent), Some(name)) = (rel.parent(), rel.file_name()) else {
-            return Ok(Some(EntryKind::Dir));
-        };
-        let Some((KIND_TREE, data)) = self.lookup(parent)? else {
-            return Ok(None);
-        };
-        Ok(tree_entries(&data)
-            .find(|e| e.name == name.as_bytes())
-            .map(|e| {
-                if e.mode == b"40000" {
-                    EntryKind::Dir
-                } else {
-                    EntryKind::File
-                }
-            }))
+        let txn = self.db.begin_read().map_err(db_err)?;
+        let objects = txn.open_table(OBJECTS).map_err(db_err)?;
+        Ok(self
+            .resolve(&objects, rel.as_str())?
+            .map(|(mode, _)| kind_of(&mode)))
     }
 
     fn display(&self, rel: &Utf8Path) -> String {
@@ -145,7 +162,7 @@ impl TreeSource for RedbTree {
             if dest.symlink_metadata().is_ok() {
                 continue;
             }
-            let Some((mode, oid)) = self.entry(&objects, rel)? else {
+            let Some((mode, oid)) = self.resolve(&objects, rel.as_str())? else {
                 continue;
             };
             // Each path appears whole or not at all, so a concurrent em never sees half of it.
@@ -156,7 +173,11 @@ impl TreeSource for RedbTree {
             let tmp = Utf8Path::from_path(staging.path())
                 .ok_or_else(|| db_err("non-UTF-8 staging directory"))?
                 .join("x");
-            write_object(&objects, &mode, &oid, &tmp)?;
+            let source = Source {
+                objects: &objects,
+                root: &self.root,
+            };
+            source.write(rel.as_str(), &mode, &oid, &tmp, 0)?;
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -200,65 +221,75 @@ fn prune_copies(copies: &Utf8Path, keep: &Utf8Path) {
     }
 }
 
-/// Write the object `oid` with git mode `mode` to `dest`
-fn write_object(
-    objects: &redb::ReadOnlyTable<&[u8], &[u8]>,
-    mode: &[u8],
-    oid: &Oid,
-    dest: &Utf8Path,
-) -> io::Result<()> {
-    let missing = || db_err(format!("object {} missing for {dest}", hex::encode(oid)));
-    if mode == b"160000" {
-        return std::fs::create_dir(dest);
+/// What `kind` reports for a tree entry's git mode
+fn kind_of(mode: &[u8]) -> EntryKind {
+    if mode == MODE_DIR {
+        EntryKind::Dir
+    } else {
+        EntryKind::File
     }
-    let (kind, data) = RedbTree::object(objects, oid)?.ok_or_else(missing)?;
-    match (mode, kind) {
-        (b"40000", KIND_TREE) => {
-            std::fs::create_dir(dest)?;
-            for e in tree_entries(&data) {
-                let Ok(name) = std::str::from_utf8(e.name) else {
-                    continue;
-                };
-                write_object(objects, e.mode, e.oid, &dest.join(name))?;
+}
+
+/// How deep a copied package directory may nest, symlinked directories included
+const MAX_COPY_DEPTH: usize = 32;
+
+/// The tree a package directory is copied from
+struct Source<'t> {
+    objects: &'t redb::ReadOnlyTable<&'static [u8], &'static [u8]>,
+    root: &'t Oid,
+}
+
+impl Source<'_> {
+    /// Write the object `oid`, at `rel` in the tree with git mode `mode`, to `dest`; a symlink is
+    /// written as what it points to, which may be outside the copied directory
+    fn write(
+        &self,
+        rel: &str,
+        mode: &[u8],
+        oid: &Oid,
+        dest: &Utf8Path,
+        depth: usize,
+    ) -> io::Result<()> {
+        if depth > MAX_COPY_DEPTH {
+            return Err(db_err(format!("{rel}: nested too deep, a symlink loop?")));
+        }
+        let missing = || db_err(format!("object {} missing for {dest}", hex::encode(oid)));
+        if mode == b"160000" {
+            return std::fs::create_dir(dest);
+        }
+        if mode == MODE_LINK {
+            return match resolve(self.root, rel, true, |o| RedbTree::object(self.objects, o))? {
+                Some((mode, oid)) => self.write(rel, &mode, &oid, dest, depth + 1),
+                None => Ok(()),
+            };
+        }
+        let (kind, data) = RedbTree::object(self.objects, oid)?.ok_or_else(missing)?;
+        match (mode, kind) {
+            (MODE_DIR, KIND_TREE) => {
+                std::fs::create_dir(dest)?;
+                for e in tree_entries(&data) {
+                    let Ok(name) = std::str::from_utf8(e.name) else {
+                        continue;
+                    };
+                    let child = format!("{rel}/{name}");
+                    self.write(&child, e.mode, e.oid, &dest.join(name), depth + 1)?;
+                }
+                Ok(())
             }
-            Ok(())
-        }
-        (b"120000", KIND_BLOB) => {
-            let target = String::from_utf8(data).map_err(db_err)?;
-            std::os::unix::fs::symlink(target, dest)
-        }
-        (_, KIND_BLOB) => {
-            std::fs::write(dest, data)?;
-            if mode == b"100755" {
-                use std::os::unix::fs::PermissionsExt as _;
-                std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
+            (_, KIND_BLOB) => {
+                std::fs::write(dest, data)?;
+                if mode == b"100755" {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o755))?;
+                }
+                Ok(())
             }
-            Ok(())
+            _ => Err(db_err(format!("unexpected object for {dest}"))),
         }
-        _ => Err(db_err(format!("unexpected object for {dest}"))),
     }
 }
 
 impl RedbTree {
-    /// The git mode and oid of the tree entry at `rel`
-    fn entry(
-        &self,
-        objects: &redb::ReadOnlyTable<&[u8], &[u8]>,
-        rel: &Utf8Path,
-    ) -> io::Result<Option<(Vec<u8>, Oid)>> {
-        let mut found = (b"40000".to_vec(), self.root);
-        for part in rel.components() {
-            let Some((KIND_TREE, data)) = Self::object(objects, &found.1)? else {
-                return Ok(None);
-            };
-            let Some(e) = tree_entries(&data).find(|e| e.name == part.as_str().as_bytes()) else {
-                return Ok(None);
-            };
-            found = (e.mode.to_vec(), *e.oid);
-        }
-        Ok(Some(found))
-    }
-
     /// `cat/pkg/pkg-ver.ebuild` for every key of the `ebuilds` table (`cat/pkg-ver`)
     fn ebuild_paths(&self) -> io::Result<Vec<Utf8PathBuf>> {
         Ok(self
@@ -391,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn checkout_copies_modes_and_links_and_prunes_only_unused_copies() {
+    fn checkout_copies_modes_and_link_targets_and_prunes_only_unused_copies() {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().unwrap();
         let dir = Utf8Path::from_path(dir.path()).unwrap();
@@ -443,11 +474,12 @@ mod tests {
             "inherited"
         );
         assert!(
-            eclass
+            !eclass
                 .join("b.eclass")
                 .symlink_metadata()
                 .unwrap()
-                .is_symlink()
+                .is_symlink(),
+            "a link is copied as what it points to"
         );
         let mode = |p: &Utf8Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&eclass.join("run")), 0o755);

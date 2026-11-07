@@ -427,7 +427,7 @@ path:
 |---|---|---|
 | Read the content | md5 of the ebuild (`entries::check`), `em grep` text, `metadata.xml` next to it (`query/uses.rs`), the Manifest for `em ebuild fetch` | `Ebuild::read()`, `Package::metadata_xml()`, `Package::manifest()` through `TreeSource` |
 | Identity | "already sourced this phase?" memo (`EbuildShell::mark_phase_sourced`) | `(repo, cpv)` |
-| Symlinked ebuilds (crossdev symlink overlays) | `canonicalize` to find the master's entry (`entries::master_cache_entry`, `search.rs`) | directory backend only; a redb tree has no symlinks into other repos |
+| Symlinked ebuilds (crossdev symlink overlays) | `canonicalize` to find the master's entry (`entries::master_cache_entry`, `search.rs`) | directory backend only; a redb tree follows its links inside itself, and one leaving it reads as missing |
 | Build environment | `EBUILD` (PMS 11.1 asks for an absolute path), `FILESDIR` = ebuild dir + `files`, the Manifest, copying the ebuild into the binpkg and the VDB | `EbuildFile::checkout`: a real package directory, the repo's own for the directory backend |
 | Shown to the user | `em query which` prints it, `em grep` path labels, error messages | the location path `repos.conf` gives; see below |
 
@@ -449,7 +449,7 @@ md5-cache have separate lifecycles:
 
 | file | written by | tables |
 |---|---|---|
-| `<location>.redb` | `em sync` (`TreeWriter`) | `objects` (git objects by oid), `paths`, `ebuilds` (`cat/PF` → md5), `eclasses` (name → md5), `packages`, `meta`, `sync_log` |
+| `<location>.redb` | `em sync` (`TreeWriter`) | `objects` (git objects by oid), `paths`, `ebuilds` (`cat/PF` → md5), `eclasses` (name → md5), `packages`, `links`, `linked` (what links reach → md5), `meta`, `sync_log` |
 | `<location>.md5-cache.redb` | `em sync`, copied from the tree's md5-cache; `em regen` or sourcing later | `entries` (`cat/PF` → entry text), `meta` (the tree commit it was copied from) |
 
 An entry is valid when its `_md5_` and `_eclasses_` match the tree's `ebuilds` and `eclasses`
@@ -538,6 +538,9 @@ transport: the paths added, changed and removed, the objects they name, the new 
 - **Schema.** `tree/redb/schema.rs`; each database records its `schema` in `meta` and one em does
   not read is refused at open. A database that exists but cannot be opened (locked, corrupt, another
   schema) is an error, never a fallback to the checkout next to it.
+- **Symlinks.** Reads, listings and build copies follow links inside the tree, as a checkout would;
+  a copy holds what a link points to. The writer derives `ebuilds` and `eclasses` rows for the paths
+  links reach and keeps them in `linked`, recomputed from `links` after every update.
 - **Writer.** `TreeWriter::apply` writes objects and refcounts, `paths`, `ebuilds`, `eclasses`,
   `packages`, `meta` and a `sync_log` record in one transaction, in key order, then compacts; the
   md5-cache database follows, with only the changed entries when it was at the old commit.
