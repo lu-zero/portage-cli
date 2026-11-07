@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Steps 1–7 done. Experimental redb backend behind the `redb` feature. Decisions recorded 2026-11-05 |
+| Status | Steps 1–7 done; em writes and syncs the redb databases (`sync-type = git-redb`). Experimental, behind the `redb` feature. Decisions recorded 2026-11-05 and 2026-11-07 |
 | Date | 2026-11-05 |
 | Scope | `portage-repo`'s `Repository`, and the callers in `portage-resolve` and `portage-cli` that reach into the tree by path |
 | Non-scope | Host configuration (`/etc/portage`), the installed-package database, binpkgs |
@@ -24,7 +24,8 @@ A `::gentoo` checkout is 132,574 files. em reads it in three ways, each with its
 | Entries, first run after a sync | 415 ms: stat 34k ebuilds, re-digest ~5k whose mtime moved | same as the unchanged case: the tree came from one verified commit |
 | `em -p @world`, cold page cache | 1.32–1.42 s, 124 MiB read | 1.19–1.25 s, 119 MiB read |
 
-The spike lives on the `spike/redb-storage` branch (`spikes/tree-redb`).
+The spike lives on the `spike/redb-storage` branch (`spikes/tree-redb`); its sync and schema now
+live in em, see [Schema and sync in em](#schema-and-sync-in-em).
 
 ## Today
 
@@ -201,10 +202,10 @@ flowchart LR
 
 ## Sync and interop
 
-- A redb repository syncs itself: protocol-v2 fetch of a thin pack, signature check of the tip,
-  one write transaction, so the tree is the old one or the new one, never a mix. In redb's
-  default mode a reader and the sync's writer lock the file against each other at open: an em
-  running keeps a sync from starting, and the other way round.
+- `em sync` syncs a `sync-type = git-redb` repository itself: protocol-v2 fetch of a thin pack,
+  signature check of the tip, one write transaction, so the tree is the old one or the new one,
+  never a mix. In redb's default mode a reader and the sync's writer lock the file against each
+  other at open: an em running keeps a sync from starting, and the other way round.
 - Portage still needs a checkout. A Portage sync module (`sync-type`) can call em to sync the
   database, then write only that sync's changed files into the checkout. That keeps one fetch
   and one source of truth; it does not save the checkout's disk space.
@@ -214,10 +215,10 @@ flowchart LR
 - `/etc/portage` (`make.conf`, `package.*`, `repos.conf`), the installed-package database,
   binpkgs.
 - Writers: `em regen` filling the in-tree md5-cache, `em select repos` and `em setup` creating
-  repositories, `regen_use` writing `use.local.desc`, `em sync`. On a redb repository `em regen`
-  writes em's secondary cache instead and `regen_use` asks for `-o`. The others do not check:
-  `em sync` would fetch a checkout at the location that the database then hides, and `em setup`
-  looks for a host repository by its `profiles/repo_name` on disk.
+  repositories, `regen_use` writing `use.local.desc`. On a redb repository `em regen` writes em's
+  secondary cache instead and `regen_use` asks for `-o`; `em sync` writes the databases of a
+  `git-redb` repository and never a checkout. A database next to a repository synced any other way
+  is warned about when `repos.conf` is loaded, since it is read in place of the checkout sync updates.
 
 ## Migration
 
@@ -265,7 +266,7 @@ explanations name files with `redb://` URIs.
 | Identity from the directory name | `mirrordist.rs` keys its default deletion database on it | switching to `repo.name()` could orphan an existing database |
 | Raw `repos.conf` walks | `clean.rs` `declared_categories` (falls back to hyphenated directory names without `profiles/categories`) | moving it to `Repository` changes behaviour |
 | Profile paths written out | crossdev builds profile paths into crossdev's config | paths are what the config holds |
-| Writers | `setup/repo.rs`, `select/repos.rs`, `regen_use.rs`, `em regen`, sync | directory backend only; `em regen` and `regen_use` check `stored_elsewhere()` |
+| Writers | `setup/repo.rs`, `select/repos.rs`, `regen_use.rs`, `em regen` | directory backend only; `em regen` and `regen_use` check `stored_elsewhere()`, `em sync` writes redb itself |
 | Configuration | `repo_open.rs` compares locations, `info.rs` `resolve_volatile` | sync owns the checkout |
 
 ## Decisions
@@ -314,8 +315,8 @@ md5-cache have separate lifecycles:
 
 | file | written by | tables |
 |---|---|---|
-| `<location>.redb` | sync | `objects` (git objects by oid), `paths`, `ebuilds` (`cat/PF` → md5), `eclasses` (name → md5), `packages`, `meta`, `sync_log` |
-| `<location>.md5-cache.redb` | sync now; `em regen` or sourcing later | `entries` (`cat/PF` → entry text), `meta` (the tree commit it was copied from) |
+| `<location>.redb` | `em sync` (`TreeWriter`) | `objects` (git objects by oid), `paths`, `ebuilds` (`cat/PF` → md5), `eclasses` (name → md5), `packages`, `meta`, `sync_log` |
+| `<location>.md5-cache.redb` | `em sync`, copied from the tree's md5-cache; `em regen` or sourcing later | `entries` (`cat/PF` → entry text), `meta` (the tree commit it was copied from) |
 
 An entry is valid when its `_md5_` and `_eclasses_` match the tree's `ebuilds` and `eclasses`
 tables, so the cache may lag behind or run ahead of the tree. Loading the entries merges the two
@@ -351,6 +352,63 @@ commit, are in [`tree-storage-experiment.md`](./tree-storage-experiment.md).
   and in the cache file, 31 MiB each.
 - Incremental cache update over a 12-day sync: 2564 entries written, 1565 removed, 267 ms including
   compaction; the result matches a full rebuild.
+
+## Schema and sync in em
+
+The writer moved into em from the spike, so staleness, locking and the doubled md5-cache are
+decided where the writes happen.
+
+```mermaid
+flowchart LR
+  subgraph cli["portage-cli: em sync (sync-gix)"]
+    fetch["protocol v2 fetch: thin pack, deepen 1"] --> pack["complete + resolve the pack in memory"]
+    pack --> verify["verify the tip (verify.rs)"] --> diff["diff old and new root trees"]
+  end
+  subgraph repo["portage-repo: tree::redb"]
+    schema["schema: tables, codec, version"]
+    read["RedbTree / RedbCache"]
+    write["TreeWriter: one write txn, derived tables, refcounts, sync_log"]
+  end
+  diff --> write
+  pack -->|"thin bases, old trees"| write
+  write --> schema
+  read --> schema
+```
+
+`portage-repo` owns every table and writes them through `TreeUpdate`, which knows nothing about git
+transport: the paths added, changed and removed, the objects they name, the new head. gix stays in
+`portage-cli`, behind `sync-gix`; `portage-repo` has no network code.
+
+- **Schema.** `tree/redb/schema.rs`; each database records its `schema` in `meta` and one em does
+  not read is refused at open.
+- **Writer.** `TreeWriter::apply` writes objects and refcounts, `paths`, `ebuilds`, `eclasses`,
+  `packages`, `meta` and a `sync_log` record in one transaction, in key order, then compacts; the
+  md5-cache database follows, with only the changed entries when it was at the old commit.
+  `TreeWriter::import` builds both files under a staging name and renames them into place.
+- **First sync.** With no database, `em sync` imports the checkout's `HEAD` from its git objects,
+  or without a checkout fetches the whole tip.
+- **Later syncs.** A thin pack against the stored commit (`shallow` and `have`), completed with
+  bases from the database and resolved in memory, then the tree diff. The tip's signature is
+  checked with `CommitVerifier` before anything is written.
+- **Configuration** (decided 2026-11-07): `sync-type = git-redb` in `repos.conf`. emerge does not
+  know the sync type, so only em syncs such a repository. Readers still find `<location>.redb` by
+  its file, since many open a repository by location alone; loading `repos.conf` warns about any
+  disagreement and names the fix. `git-redb` without a database reads the checkout until `em sync`
+  creates one; a database under any other sync type is read, though nothing updates it. Either way
+  the tree read is one consistent tree, so a warning is enough.
+
+Measured on ::gentoo (2026-11-07), each result compared table by table, refcounts included:
+
+| | time | peak RSS | compared with |
+|---|---|---|---|
+| Import from the checkout's git objects | 2.0 s (spike: 1.9 s) | 384 MiB – 1.1 GiB | the spike's import of the same commit |
+| Sync, two days behind | 1.9 s | 144 MiB | an import of the tip |
+| Sync at the tip | 0.53 s | | |
+| First sync without a checkout (GitHub, ~80 MB) | 18.8 s | 191 MiB | an import of the tip |
+
+Left open: redb's multi-process modes (a sync waiting on, or refusing, a running em), storing the
+md5-cache once, a vacuum policy, `em search -S` decoding, and the import's peak memory, which
+varies between runs of the same input.
 
 ## Open questions
 

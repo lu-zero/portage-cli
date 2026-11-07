@@ -144,11 +144,12 @@ measurable.
 
 ## Open
 
-- **Staleness:** nothing warns when the redb files fall behind the configured sync.
+- **Staleness:** a database next to a repository synced another way is warned about when
+  `repos.conf` is loaded; nothing yet warns when a `git-redb` repository goes unsynced for long.
 - **`em search -S`:** 25% slower from redb, because every entry is decompressed.
-- **Storage:** the md5-cache is stored twice, as tree objects and in the cache database; the
-  schema is owned by the spike, not by em.
-- **Sync in em:** the spike's sync is not on the branch; peak memory (200–460 MiB), compaction
-  policy and one repository per file remain as the spike left them.
+- **Storage:** the md5-cache is stored twice, as tree objects and in the cache database.
+- **Sync in em:** done since, see [Schema and sync in em](./tree-storage.md#schema-and-sync-in-em):
+  em owns the schema and `sync-type = git-redb` imports and syncs. Compaction policy, one
+  repository per file and the import's peak memory remain as the spike left them.
 - **Locking:** em and a sync cannot have the same database open; redb's multi-process modes are
   untried.
