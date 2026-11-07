@@ -47,6 +47,12 @@ work moved there.
   touch the incoming files and fails only on a conflict. gix's `ResetGuard::RefuseIfDirty` refuses
   any uncommitted change. So gix refuses some syncs that `git` would complete; it never overwrites
   anything `git` would keep.
+- **A clone whose tip fails verification.** gix drops the clone, so the next sync clones again.
+  `git_cmd` clones with `--no-checkout` and leaves the `.git` behind. Both backends skip the
+  reset on an unchanged tip only when an index exists, so that clone, or one interrupted before
+  its checkout, is checked out by the next accepted sync rather than reported up to date with
+  no files. On a volatile repository gix refuses that reset, as it takes the missing files for
+  uncommitted work; `git reset --merge` checks them out.
 - **Repository maintenance.** Only `git_cmd` runs `git gc --auto` (see the table).
 
 ## Performance

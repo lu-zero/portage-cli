@@ -207,7 +207,10 @@ fn git_update(
         verify.check(&commit_object(&repo, tip)?, &tip.to_string(), quiet)?;
     }
 
-    if head == Some(tip) {
+    // `HEAD` at the tip with no index is a clone that never got its checkout (a `git_cmd` clone
+    // rejected by `verify`, or one interrupted): the reset below still has to write the files.
+    let checked_out = repo.index_path().exists();
+    if head == Some(tip) && checked_out {
         if !quiet {
             let why = match &fetch_status {
                 gix::remote::fetch::Status::NoPackReceived { .. } => "no pack received",
@@ -252,7 +255,7 @@ fn git_update(
     drop(progress);
 
     let after = head_id(&repo);
-    Ok(before != after)
+    Ok(before != after || !checked_out)
 }
 
 /// The raw object of commit `id`
@@ -646,6 +649,51 @@ mod tests {
             std::fs::read_to_string(f.overlay.join("a.txt")).unwrap(),
             "one\n"
         );
+    }
+
+    // `HEAD` already at the tip but never checked out (what a rejected `git_cmd` clone leaves):
+    // the sync writes the files instead of calling the empty worktree up to date. A volatile
+    // repository is refused instead, as `RefuseIfDirty` takes the missing files for local work.
+    #[test]
+    fn a_clone_without_a_checkout_is_checked_out() {
+        let _path = crate::test_support::path_lock();
+        let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
+        let no_checkout = |f: &Fixture| {
+            git(
+                f._tmp.path(),
+                &[
+                    "clone",
+                    "-q",
+                    "--depth",
+                    "1",
+                    "--no-checkout",
+                    &f.remote_uri,
+                    f.overlay.as_str(),
+                ],
+            );
+        };
+        let f = fixture();
+        no_checkout(&f);
+        let changed = GixBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
+            .unwrap();
+        assert!(changed);
+        assert_eq!(
+            std::fs::read_to_string(f.overlay.join("a.txt")).unwrap(),
+            "one\n"
+        );
+        let changed = GixBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
+            .unwrap();
+        assert!(!changed, "checked out now: the fast path applies again");
+
+        let f = fixture();
+        no_checkout(&f);
+        let err = GixBackend
+            .sync(&f.overlay, &f.remote_uri, true, true, None)
+            .unwrap_err();
+        assert!(err.to_string().contains("uncommitted changes"), "{err:#}");
     }
 
     // A clone of an unsigned remote writes no worktree files.

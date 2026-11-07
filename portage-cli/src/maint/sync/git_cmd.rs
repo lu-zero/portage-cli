@@ -92,12 +92,13 @@ fn git_clone(
     if !status.success() {
         bail!("git clone failed with {status}");
     }
+    let head = rev_parse(path.as_std_path(), "HEAD").context("resolving HEAD after clone")?;
     if let Some(verify) = verify {
-        let head = rev_parse(path.as_std_path(), "HEAD").context("resolving HEAD after clone")?;
         verify.check(&commit_object(path.as_std_path(), &head)?, &head, quiet)?;
     }
+    // The commit just verified, by id: a symbolic `HEAD` could name something else by now.
     let st = git_stdio(quiet, path.as_std_path())
-        .args(["-C", path.as_str(), "reset", "--hard", "HEAD"])
+        .args(["-C", path.as_str(), "reset", "--hard", &head])
         .status()
         .context("spawning git reset --hard")?;
     if !st.success() {
@@ -207,7 +208,10 @@ fn git_update(
         verify.check(&commit_object(path, &tip)?, &tip, quiet)?;
     }
 
-    if head == tip {
+    // A clone rejected by `verify` (or interrupted before its checkout) already has `HEAD` at the
+    // tip but no index and no files: skipping the reset would leave it empty for good.
+    let checked_out = path.join(".git").join("index").exists();
+    if head == tip && checked_out {
         if !quiet {
             info_line("already up to date (skip reset)");
         }
@@ -261,7 +265,7 @@ fn git_update(
     }
 
     let after = rev_parse(path, "HEAD").ok();
-    Ok(before != after)
+    Ok(before != after || !checked_out)
 }
 
 fn rev_parse(cwd: &Path, rev: &str) -> Result<String> {
@@ -576,6 +580,65 @@ mod tests {
             .sync(&f.overlay, &f.remote_uri, false, true, Some(&verifier))
             .unwrap_err();
         assert!(err.to_string().contains("no signature"), "{err:#}");
+        assert_eq!(
+            std::fs::read_to_string(f.overlay.join("a.txt")).unwrap(),
+            "one\n"
+        );
+    }
+
+    // The rejected clone keeps its `.git` with `HEAD` at the tip; a later sync must still check the
+    // tip out rather than call an empty worktree up to date.
+    #[test]
+    fn a_rejected_clone_is_checked_out_by_the_next_accepted_sync() {
+        let _path = crate::test_support::path_lock();
+        let f = fixture();
+        let verifier = CommitVerifier::gentoo_for_tests();
+        GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, Some(&verifier))
+            .unwrap_err();
+        assert!(f.overlay.join(".git").is_dir());
+        // Still rejected while verification is on: the unchanged tip is checked again.
+        let err = GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, Some(&verifier))
+            .unwrap_err();
+        assert!(err.to_string().contains("no signature"), "{err:#}");
+        assert!(!f.overlay.join("a.txt").exists());
+
+        let changed = GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
+            .unwrap();
+        assert!(changed, "files were written: the sync changed the tree");
+        assert_eq!(
+            std::fs::read_to_string(f.overlay.join("a.txt")).unwrap(),
+            "one\n"
+        );
+        let changed = GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
+            .unwrap();
+        assert!(!changed, "checked out now: the fast path applies again");
+    }
+
+    // The same state reached by a volatile repository is restored by `reset --merge`.
+    #[test]
+    fn a_volatile_clone_without_a_checkout_is_checked_out() {
+        let _path = crate::test_support::path_lock();
+        let f = fixture();
+        git(
+            f._tmp.path(),
+            &[
+                "clone",
+                "-q",
+                "--depth",
+                "1",
+                "--no-checkout",
+                &f.remote_uri,
+                f.overlay.as_str(),
+            ],
+        );
+        let changed = GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, true, true, None)
+            .unwrap();
+        assert!(changed);
         assert_eq!(
             std::fs::read_to_string(f.overlay.join("a.txt")).unwrap(),
             "one\n"
