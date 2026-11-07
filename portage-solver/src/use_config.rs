@@ -180,6 +180,8 @@ impl UseFlagLookup for UseConfig {
 /// A prefix glob still standing after a layer or a whole fold
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glob {
+    /// A prefix cleared after a broader in-place glob; suppress its deferred IUSE values
+    Clear,
     /// `<prefix>*` as a USE token, already expanded where it stood: IUSE values nothing set since
     /// are on
     Expand,
@@ -241,6 +243,7 @@ impl UseLayer {
                     let p = prefix.as_str();
                     state.retain(|f, _| !f.as_str().starts_with(p));
                     globs.retain(|(g, _)| !g.as_str().starts_with(p));
+                    add_glob(&mut globs, prefix, Glob::Clear);
                     clears.push(prefix);
                 }
                 UseToken::ExpandPrefix(prefix) => {
@@ -296,11 +299,16 @@ impl UseLayer {
 
 /// A literal glob outlives an in-place one of the same prefix, as Portage's literal `l10n_*` does
 fn add_glob(globs: &mut Vec<(Flag, Glob)>, prefix: Flag, glob: Glob) {
-    match globs.iter_mut().find(|(p, _)| *p == prefix) {
-        Some(standing) if standing.1 == Glob::Literal => {}
-        Some(standing) => standing.1 = glob,
-        None => globs.push((prefix, glob)),
+    // A literal assignment wildcard stays literal, but an in-place rule must move to the end:
+    // a broader glob can re-enable values a narrower clear disabled earlier.
+    if globs
+        .iter()
+        .any(|(p, g)| *p == prefix && *g == Glob::Literal)
+    {
+        return;
     }
+    globs.retain(|(p, _)| *p != prefix);
+    globs.push((prefix, glob));
 }
 
 /// One profile-chain node in Portage's `defaults` layer (`setcpv` interleave).
@@ -475,12 +483,15 @@ impl Fold<'_> {
         let p = prefix.as_str();
         self.set_prefixed(p, UseFlagState::Disabled, &|_| false);
         self.globs.retain(|(g, _)| !g.as_str().starts_with(p));
+        add_glob(&mut self.globs, prefix, Glob::Clear);
     }
 
     /// Stand a glob; an in-place one turns on the prefix's flags set so far
     fn expand(&mut self, prefix: Flag, glob: Glob, skip: &impl Fn(Flag) -> bool) {
-        if glob == Glob::Expand {
-            self.set_prefixed(prefix.as_str(), UseFlagState::Enabled, skip);
+        match glob {
+            Glob::Expand => self.set_prefixed(prefix.as_str(), UseFlagState::Enabled, skip),
+            Glob::Clear => self.set_prefixed(prefix.as_str(), UseFlagState::Disabled, skip),
+            Glob::Literal => {}
         }
         add_glob(&mut self.globs, prefix, glob);
     }

@@ -72,12 +72,22 @@ pub(crate) fn enabled_iuse_defaults_from_metadata(
 
 /// Expand the prefix globs the fold left standing over the package's IUSE; force/mask apply after
 fn expand_globs(cfg: &mut UseConfig, iuse: &HashSet<Interned<DefaultInterner>>) {
-    for (prefix, glob) in cfg.globs().to_vec() {
-        for &flag in iuse {
-            if flag.as_str().starts_with(prefix.as_str())
-                && (glob == Glob::Literal || cfg.get_opt(flag).is_none())
-            {
-                cfg.enable(flag);
+    let globs = cfg.globs().to_vec();
+    for &flag in iuse {
+        let matching = || {
+            globs
+                .iter()
+                .filter(|(p, _)| flag.as_str().starts_with(p.as_str()))
+        };
+        // A USE_EXPAND assignment's literal '*' is expanded after the whole USE fold, as Portage
+        // does. Otherwise use the last matching prefix rule only for a flag not set explicitly.
+        if matching().any(|(_, g)| *g == Glob::Literal) {
+            cfg.enable(flag);
+        } else if cfg.get_opt(flag).is_none() {
+            match matching().next_back().map(|(_, g)| *g) {
+                Some(Glob::Expand) => cfg.enable(flag),
+                Some(Glob::Clear) => cfg.disable(flag),
+                _ => {}
             }
         }
     }
@@ -508,5 +518,143 @@ mod tests {
             cfg.get(Interned::intern("multilib")),
             UseFlagState::Enabled
         ));
+    }
+
+    // All prefixes ending in '_' are accepted user globs, not just whole USE_EXPAND groups.
+    #[test]
+    fn nested_prefix_globs_obey_token_order() {
+        use portage_atom_pubgrub::UseLayer;
+        let cpv = Cpv::parse("app-misc/test-1").unwrap();
+        let flags: HashSet<_> = ["cpu_flags_x", "cpu_other"]
+            .into_iter()
+            .map(Interned::intern)
+            .collect();
+        for (tokens, want) in [
+            ("cpu_* -cpu_flags_*", false),
+            ("cpu_* -cpu_flags_* cpu_*", true),
+            ("cpu_* -cpu_flags_* cpu_flags_x", true),
+            ("cpu_* -cpu_flags_* cpu_flags_* -cpu_flags_x", false),
+        ] {
+            for which in 0..3 {
+                let empty = UseLayer::empty();
+                let layer = UseLayer::parse(tokens);
+                let pkg = vec![(
+                    portage_atom::Dep::parse("app-misc/test").unwrap(),
+                    tokens
+                        .split_whitespace()
+                        .filter_map(gentoo_core::UseToken::user)
+                        .collect(),
+                )];
+                let mut cfg = portage_atom_pubgrub::resolve_effective_use(
+                    &HashMap::new(),
+                    &empty,
+                    &cpv,
+                    None,
+                    if which == 2 { &pkg } else { &[] },
+                    if which == 1 { &layer } else { &empty },
+                    &[],
+                    if which == 0 { &layer } else { &empty },
+                );
+                expand_globs(&mut cfg, &flags);
+                assert_eq!(
+                    cfg.get(Interned::intern("cpu_flags_x")),
+                    if want {
+                        UseFlagState::Enabled
+                    } else {
+                        UseFlagState::Disabled
+                    },
+                    "{tokens}, layer {which}"
+                );
+                assert_eq!(
+                    cfg.get(Interned::intern("cpu_other")),
+                    UseFlagState::Enabled
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deferred_prefix_fold_matches_an_eager_iuse_fold() {
+        use gentoo_core::UseToken;
+        use portage_atom_pubgrub::UseLayer;
+        let flags: HashSet<_> = ["cpu_flags_x", "cpu_other", "ssl"]
+            .into_iter()
+            .map(Interned::intern)
+            .collect();
+        let cpv = Cpv::parse("app-misc/test-1").unwrap();
+        let vocab = [
+            "cpu_*",
+            "cpu_flags_*",
+            "-cpu_*",
+            "-cpu_flags_*",
+            "-*",
+            "cpu_flags_x",
+            "-cpu_flags_x",
+            "cpu_other",
+            "-cpu_other",
+            "ssl",
+            "-ssl",
+        ];
+        let mut seed = 7u64;
+        for _ in 0..1000 {
+            let mut layers = Vec::new();
+            for _ in 0..3 {
+                let mut tokens = Vec::new();
+                for _ in 0..6 {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    tokens
+                        .push(UseToken::user(vocab[(seed >> 32) as usize % vocab.len()]).unwrap());
+                }
+                layers.push(tokens);
+            }
+            let mut expected: HashMap<_, _> =
+                flags.iter().map(|&f| (f, f.as_str() == "ssl")).collect();
+            for &token in layers.iter().flatten() {
+                match token {
+                    UseToken::Flag { flag, enable } => {
+                        expected.insert(flag, enable);
+                    }
+                    UseToken::ClearAll => expected.values_mut().for_each(|v| *v = false),
+                    UseToken::ClearPrefix(prefix) | UseToken::ExpandPrefix(prefix) => {
+                        let on = matches!(token, UseToken::ExpandPrefix(_));
+                        for (flag, value) in &mut expected {
+                            if flag.as_str().starts_with(prefix.as_str()) {
+                                *value = on;
+                            }
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            let conf = UseLayer::new(layers[0].iter().copied());
+            let env = UseLayer::new(layers[2].iter().copied());
+            let pu = [(
+                portage_atom::Dep::parse("app-misc/test").unwrap(),
+                layers[1].clone(),
+            )];
+            let defaults = HashMap::from([(Interned::intern("ssl"), IUseDefault::Enabled)]);
+            let mut cfg = portage_atom_pubgrub::resolve_effective_use(
+                &defaults,
+                &UseLayer::empty(),
+                &cpv,
+                None,
+                &pu,
+                &env,
+                &[],
+                &conf,
+            );
+            expand_globs(&mut cfg, &flags);
+            for (&flag, &on) in &expected {
+                assert_eq!(
+                    cfg.get(flag),
+                    if on {
+                        UseFlagState::Enabled
+                    } else {
+                        UseFlagState::Disabled
+                    },
+                    "flag {flag}, layers {layers:?}"
+                );
+            }
+        }
     }
 }
