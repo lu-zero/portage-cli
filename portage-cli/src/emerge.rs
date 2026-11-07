@@ -406,9 +406,6 @@ async fn emerge_atoms_inner(
     let merge_flags = &merge_flags;
     let resolved = cli.repo_path();
     let repo_path = camino::Utf8Path::new(&resolved);
-    if !repo_path.is_dir() {
-        bail!("repo not found at {resolved}");
-    }
     let repo = crate::repo_open::open(repo_path.as_std_path())?;
     let vdb = open_cli_vdb(cli).ok();
     // `-a` takes precedence over `-u`: explicitly asking to be asked beats a
