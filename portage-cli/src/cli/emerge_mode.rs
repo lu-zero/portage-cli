@@ -27,6 +27,10 @@ pub struct EmergeModeArgs {
     #[arg(short = 'S', long)]
     pub searchdesc: bool,
 
+    /// `n`: match descriptions from the md5-cache, not `metadata/pkg_desc_index`
+    #[arg(long, value_name = "y|n")]
+    pub search_index: Option<super::YesNo>,
+
     /// Skip dependency resolution and only merge specified packages
     #[arg(short = 'O', long)]
     pub nodeps: bool,

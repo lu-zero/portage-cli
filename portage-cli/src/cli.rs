@@ -3016,6 +3016,9 @@ pub struct SearchArgs {
     /// Show homepage instead of description
     #[arg(short = 'H', long)]
     pub homepage: bool,
+    /// `n`: match descriptions from the md5-cache, not `metadata/pkg_desc_index`
+    #[arg(long, value_name = "y|n")]
+    pub search_index: Option<YesNo>,
     /// Pattern to search (required unless --all)
     #[arg(positional, required_unless = "all")]
     pub pattern: Option<String>,

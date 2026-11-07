@@ -993,7 +993,8 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
     }
     // emerge -s / -S: the arguments are search patterns, not atoms.
     if mode.search || mode.searchdesc {
-        return search::run_emerge_style(&cli.search_repos(), &atoms, mode.searchdesc).await;
+        let index = mode.search_index != Some(cli::YesNo::N);
+        return search::run_emerge_style(&cli.search_repos(), &atoms, mode.searchdesc, index).await;
     }
     if atoms.is_empty() {
         crate::style::error_line!("no atoms or applet specified. Use --help for usage.");

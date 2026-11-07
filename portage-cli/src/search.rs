@@ -34,12 +34,15 @@ pub async fn run(
     search_desc: bool,
     name_only: bool,
     homepage: bool,
+    search_index: bool,
 ) -> Result<()> {
     let repos = open_repos(repo_paths)?;
     let pat = pattern.unwrap_or("");
 
     if search_desc {
-        run_desc(&repos, pat, all, name_only, homepage).await
+        // The index holds descriptions only.
+        let (indexed, rest) = split_indexed(&repos, search_index && !homepage);
+        run_desc(&indexed, &rest, pat, all, name_only, homepage).await
     } else {
         run_name(&repos, pat, all, name_only, homepage);
         Ok(())
@@ -119,49 +122,130 @@ fn latest_entry_info(repo: &Repository, cpn: &Cpn, homepage: bool) -> String {
     }
 }
 
+/// The newest version of each package in a repository's `metadata/pkg_desc_index`, with its
+/// description
+type DescIndex = Vec<(Cpv, String)>;
+
+/// The repository's [`DescIndex`]; `None` when it has none
+fn desc_index(repo: &Repository) -> Option<DescIndex> {
+    let text = std::fs::read_to_string(repo.path().join("metadata/pkg_desc_index")).ok()?;
+    Some(
+        text.lines()
+            .filter_map(|line| {
+                // `cat/pkg ver ver...: description`, versions in ascending order
+                let (head, desc) = line.split_once(':')?;
+                let mut words = head.split_whitespace();
+                let name = words.next()?;
+                let cpv = Cpv::parse(&format!("{name}-{}", words.next_back()?)).ok()?;
+                Some((cpv, desc.trim_start().to_string()))
+            })
+            .collect(),
+    )
+}
+
+/// One package's newest version across the repositories, with what a description search shows
+struct Described {
+    cpv: Cpv,
+    /// Its repository's position, for an index; the first repository for an md5-cache entry
+    repo: usize,
+    description: String,
+    homepage: Option<String>,
+}
+
+/// The newest version of every package, from the indexes and the md5-caches of `rest`; on equal
+/// versions the earlier repository wins
+async fn described(
+    indexed: &[(usize, DescIndex)],
+    rest: &[Repository],
+    homepage: bool,
+) -> Result<Vec<Described>> {
+    let opts = CacheReadOpts {
+        latest_per_cpn: true,
+        ..Default::default()
+    };
+    let cached = cache_entries_parallel(rest, &opts, move |text| {
+        let raw = RawCacheEntry::new(text);
+        let description = raw.field("DESCRIPTION").unwrap_or("").to_string();
+        let page = homepage.then(|| raw.field("HOMEPAGE").unwrap_or("").to_string());
+        Ok::<_, portage_repo::Error>((description, page))
+    })
+    .await?;
+    let from_index = indexed.iter().flat_map(|(repo, index)| {
+        index.iter().map(|(cpv, description)| Described {
+            cpv: cpv.clone(),
+            repo: *repo,
+            description: description.clone(),
+            homepage: None,
+        })
+    });
+    let from_cache = cached.into_iter().filter_map(|(cpv, r)| {
+        let (description, homepage) = r.ok()?;
+        Some(Described {
+            cpv,
+            repo: 0,
+            description,
+            homepage,
+        })
+    });
+    let mut best: std::collections::HashMap<Cpn, Described> = std::collections::HashMap::new();
+    for d in from_index.chain(from_cache) {
+        match best.get(&d.cpv.cpn) {
+            Some(prev) if prev.cpv.version >= d.cpv.version => {}
+            _ => {
+                best.insert(d.cpv.cpn, d);
+            }
+        }
+    }
+    Ok(best.into_values().collect())
+}
+
+/// The descriptions of the repositories with an index, by position in `repos`, and the
+/// repositories whose md5-cache has to be read instead
+fn split_indexed(
+    repos: &[Repository],
+    use_index: bool,
+) -> (Vec<(usize, DescIndex)>, Vec<Repository>) {
+    let mut indexed = Vec::new();
+    let mut rest = Vec::new();
+    for (idx, repo) in repos.iter().enumerate() {
+        match use_index.then(|| desc_index(repo)).flatten() {
+            Some(index) => indexed.push((idx, index)),
+            None => rest.push(repo.clone()),
+        }
+    }
+    (indexed, rest)
+}
+
 async fn run_desc(
+    indexed: &[(usize, DescIndex)],
     repos: &[Repository],
     pat: &str,
     all: bool,
     name_only: bool,
     homepage: bool,
 ) -> Result<()> {
-    let opts = CacheReadOpts {
-        latest_per_cpn: true,
-        ..Default::default()
-    };
-
-    let pat_owned = pat.to_string();
-    let mut entries: Vec<(Cpv, Option<String>)> =
-        cache_entries_parallel(repos, &opts, move |text| {
-            let raw = RawCacheEntry::new(text);
-            let desc = raw.field("DESCRIPTION").unwrap_or("");
-            if !all && !contains_ci(desc, &pat_owned) {
-                return Ok(None);
-            }
-            let info = if name_only {
-                None
-            } else if homepage {
-                Some(raw.field("HOMEPAGE").unwrap_or("").to_string())
-            } else {
-                Some(desc.to_string())
-            };
-            Ok::<_, portage_repo::Error>(Some(info))
-        })
+    let mut entries: Vec<(Cpn, Option<String>)> = described(indexed, repos, homepage)
         .await?
         .into_iter()
-        .filter_map(|(cpv, r)| r.ok().flatten().map(|info| (cpv, info)))
+        .filter(|d| all || contains_ci(&d.description, pat))
+        .map(|d| {
+            let info = if name_only {
+                None
+            } else {
+                Some(d.homepage.unwrap_or(d.description))
+            };
+            (d.cpv.cpn, info)
+        })
         .collect();
 
     // By name: interned values order by interning sequence, which the parallel read makes vary.
     entries.sort_by(|(a, _), (b, _)| {
-        (a.cpn.category.as_str(), a.cpn.package.as_str())
-            .cmp(&(b.cpn.category.as_str(), b.cpn.package.as_str()))
+        (a.category.as_str(), a.package.as_str()).cmp(&(b.category.as_str(), b.package.as_str()))
     });
 
     let mut out = anstream::stdout();
-    for (cpv, info) in &entries {
-        let key = format!("{}/{}", cpv.cpn.category, cpv.cpn.package);
+    for (cpn, info) in &entries {
+        let key = format!("{}/{}", cpn.category, cpn.package);
         match info {
             None => writeln!(out, "{C_PKG}{key}{C_PKG:#}").ok(),
             Some(s) => writeln!(out, "{C_PKG}{key}{C_PKG:#}: {s}").ok(),
@@ -181,8 +265,15 @@ pub async fn run_emerge_style(
     repo_paths: &[std::path::PathBuf],
     patterns: &[String],
     search_desc: bool,
+    search_index: bool,
 ) -> Result<()> {
     let repos = open_repos(repo_paths)?;
+    let descs = if search_desc {
+        let (indexed, rest) = split_indexed(&repos, search_index);
+        described(&indexed, &rest, false).await?
+    } else {
+        Vec::new()
+    };
 
     // Installed versions (best per cpn) from the VDB.
     let mut installed: BTreeMap<Cpn, portage_atom::Version> = BTreeMap::new();
@@ -238,26 +329,12 @@ pub async fn run_emerge_style(
             }
         }
 
-        // -S: also match descriptions (md5-cache pass over all repos).
+        // -S: also match the descriptions, read once above from the indexes and md5-caches.
         if search_desc {
-            let opts = CacheReadOpts {
-                latest_per_cpn: true,
-                ..Default::default()
-            };
-            let pat_owned = pat.to_string();
-            let desc_hits = cache_entries_parallel(&repos, &opts, move |text| {
-                let raw = RawCacheEntry::new(text);
-                Ok::<_, portage_repo::Error>(contains_ci(
-                    raw.field("DESCRIPTION").unwrap_or(""),
-                    &pat_owned,
-                ))
-            })
-            .await?;
-            for (cpv, hit) in desc_hits {
-                if hit.unwrap_or(false) {
-                    let key = format!("{}/{}", cpv.cpn.category, cpv.cpn.package);
-                    matched.entry(key).or_insert((cpv.cpn, 0));
-                }
+            for d in descs.iter().filter(|d| contains_ci(&d.description, pat)) {
+                let cpn = d.cpv.cpn;
+                let key = format!("{}/{}", cpn.category, cpn.package);
+                matched.entry(key).or_insert((cpn, d.repo));
             }
         }
 
@@ -435,4 +512,75 @@ fn distfiles_size(repo: &Repository, cpn: &Cpn, meta: &portage_metadata::EbuildM
         .into_iter()
         .filter_map(|f| sizes.get(&f).copied())
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo_with_index(dir: &std::path::Path, name: &str, index: &str) -> Repository {
+        let root = dir.join(name);
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        std::fs::write(root.join("profiles/repo_name"), format!("{name}\n")).unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        std::fs::write(root.join("metadata/pkg_desc_index"), index).unwrap();
+        Repository::builder().in_memory_cache().open(root).unwrap()
+    }
+
+    #[test]
+    fn the_index_gives_the_newest_version_and_its_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = repo_with_index(
+            dir.path(),
+            "a",
+            "app-misc/foo 1 2: Foo: the tool\nnot an entry\napp-misc/bar 1-r1:\n",
+        );
+        let index: Vec<(String, String)> = desc_index(&repo)
+            .unwrap()
+            .into_iter()
+            .map(|(cpv, d)| (cpv.to_string(), d))
+            .collect();
+        assert_eq!(
+            index,
+            [
+                ("app-misc/foo-2".to_string(), "Foo: the tool".to_string()),
+                ("app-misc/bar-1-r1".to_string(), String::new()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_newest_version_across_repositories_decides_the_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let repos = [
+            repo_with_index(
+                dir.path(),
+                "a",
+                "app-misc/foo 1 2: Old\napp-misc/bar 1: Bar in a\n",
+            ),
+            repo_with_index(
+                dir.path(),
+                "b",
+                "app-misc/foo 3: New\napp-misc/bar 1: Bar in b\n",
+            ),
+        ];
+        assert!(split_indexed(&repos, false).0.is_empty());
+        let (indexed, rest) = split_indexed(&repos, true);
+        assert!(rest.is_empty());
+        let mut found: Vec<(String, usize, String)> = described(&indexed, &rest, false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.cpv.to_string(), d.repo, d.description))
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                ("app-misc/bar-1".to_string(), 0, "Bar in a".to_string()),
+                ("app-misc/foo-3".to_string(), 1, "New".to_string()),
+            ]
+        );
+    }
 }

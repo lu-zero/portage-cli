@@ -340,6 +340,7 @@ impl RunAsync<&cli::Cli> for SearchArgs {
             self.desc,
             self.name_only,
             self.homepage,
+            self.search_index != Some(cli::YesNo::N),
         )
         .await
     }
