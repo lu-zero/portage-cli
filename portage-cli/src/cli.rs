@@ -719,6 +719,7 @@ mod tests {
 
     #[test]
     fn cross_targets_sysroot_under_eroot() {
+        let (_active, _guard) = crate::test_support::isolate_active_state();
         // A bare `--root R` alongside `--target T` (no `--prefix`/`--local`)
         // is a board-root override: config/base stay at the toolchain's own
         // bare `/usr/<tuple>` (so `build_sysroot()` keeps returning it —
@@ -743,6 +744,7 @@ mod tests {
 
     #[test]
     fn an_explicit_config_root_overrides_the_sysroot_config_under_target() {
+        let (_active, _guard) = crate::test_support::isolate_active_state();
         let cli = emerge([
             "--config-root",
             "/srv/cfg",
@@ -758,6 +760,7 @@ mod tests {
 
     #[test]
     fn target_takes_a_spec_file_and_reads_its_tuple() {
+        let (_active, _guard) = crate::test_support::isolate_active_state();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("board.toml");
         let target =
