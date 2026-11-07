@@ -89,6 +89,18 @@ fn fetch_update(
 ) -> Result<Option<TreeUpdate>> {
     let fetched = fetch::fetch(uri, from.map(|((head, _), _)| gix::ObjectId::from(head)))?;
     if fetched.pack.is_empty() {
+        // An unchanged remote is not evidence that its stored tip satisfies today's policy:
+        // verification may have been enabled, the keyring replaced, or a key expired since import.
+        if let Some(verifier) = verify {
+            let ((head, _), stored) = from.context("an empty pack without a stored tip")?;
+            let Some((ObjectKind::Commit, commit)) = stored.get(&head)? else {
+                bail!(
+                    "the database does not hold its tip commit {}",
+                    hex::encode(head)
+                );
+            };
+            verifier.check(&commit, &hex::encode(head), quiet)?;
+        }
         return Ok(None);
     }
     let tip = oid(&fetched.tip)?;
@@ -540,5 +552,26 @@ mod tests {
             0o111,
             "the executable bit survives the import"
         );
+    }
+
+    #[test]
+    fn an_unchanged_tip_still_has_to_pass_the_current_verifier() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let origin = root.join("origin");
+        write_files(&origin, &[("profiles/repo_name", "test\n")]);
+        git(&origin, &["init", "-q"]);
+        git(&origin, &["add", "."]);
+        git(&origin, &["commit", "-q", "-m", "unsigned"]);
+        let url = format!("file://{origin}");
+        let location = root.join("repo");
+        assert!(sync(&location, &url, true, None).unwrap());
+        let verifier = CommitVerifier::gentoo_for_tests();
+        let result = sync(&location, &url, true, Some(&verifier));
+        assert!(
+            result.is_err(),
+            "enabling verification must reject the unsigned tip: {result:?}"
+        );
+        assert!(!sync(&location, &url, true, None).unwrap());
     }
 }
