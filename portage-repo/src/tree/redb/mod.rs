@@ -14,13 +14,21 @@ use super::TreeSource;
 mod cache;
 mod schema;
 mod tree;
+mod write;
 
 pub use cache::RedbCache;
+pub use schema::{ObjectKind, Oid};
 pub use tree::RedbTree;
+pub use write::{ObjectReader, PathChange, TreeItem, TreeUpdate, TreeWriter, UpdateSummary};
 
 /// `<location>.redb`
 pub(crate) fn tree_file(location: &Utf8Path) -> Utf8PathBuf {
     Utf8PathBuf::from(format!("{location}.redb"))
+}
+
+/// `<location>.md5-cache.redb`
+pub(crate) fn cache_file(location: &Utf8Path) -> Utf8PathBuf {
+    Utf8PathBuf::from(format!("{location}.md5-cache.redb"))
 }
 
 /// The tree in `<location>.redb`; `None` when there is none or it cannot be opened
@@ -47,7 +55,7 @@ pub(crate) fn tree_at(location: &Utf8Path) -> Option<Arc<dyn TreeSource>> {
 /// (the checkout's otherwise); `None` when there is no tree database or it cannot be opened
 pub(crate) fn storage_at(location: &Utf8Path) -> Option<super::Storage> {
     let tree = open_tree(location)?;
-    let cache_db = tree_file(location).with_extension("md5-cache.redb");
+    let cache_db = cache_file(location);
     let mut storage = super::Storage::checkout(location);
     let cache = if cache_db.is_file() {
         match RedbCache::open(cache_db.clone(), Arc::clone(&tree)) {

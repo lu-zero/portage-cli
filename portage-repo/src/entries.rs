@@ -530,7 +530,7 @@ enum Store<'a> {
 const ITEMS_PER_THREAD: usize = 256;
 
 /// `f` over `items` on scoped threads, in order, each thread starting from its own `init()`
-fn par_map<T: Send, S: Send, R: Send>(
+pub(crate) fn par_map<T: Send, S: Send, R: Send>(
     items: Vec<T>,
     init: impl Fn() -> S + Sync,
     f: impl Fn(&mut S, T) -> R + Sync,

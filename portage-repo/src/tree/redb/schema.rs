@@ -10,6 +10,9 @@ pub(super) const META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta
 pub(super) const ECLASSES: TableDefinition<&str, &[u8]> = TableDefinition::new("eclasses");
 pub(super) const EBUILDS: TableDefinition<&str, &[u8]> = TableDefinition::new("ebuilds");
 pub(super) const CACHE_ENTRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("entries");
+pub(super) const REFCOUNT: TableDefinition<&[u8], u32> = TableDefinition::new("refcount");
+pub(super) const PACKAGES: TableDefinition<&str, &str> = TableDefinition::new("packages");
+pub(super) const SYNC_LOG: TableDefinition<u64, &[u8]> = TableDefinition::new("sync_log");
 
 /// `meta.schema` of the tree database
 pub(super) const TREE_SCHEMA: &str = "2";
@@ -21,7 +24,69 @@ pub(super) const CODEC_ZSTD: u8 = 1;
 pub(super) const KIND_TREE: u8 = 2;
 pub(super) const KIND_BLOB: u8 = 3;
 
-pub(super) type Oid = [u8; 20];
+/// A git object id (SHA-1)
+pub type Oid = [u8; 20];
+
+/// The kind of a git object
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectKind {
+    /// A commit
+    Commit,
+    /// A tree
+    Tree,
+    /// A blob: a file's content, or a symlink's target
+    Blob,
+    /// An annotated tag
+    Tag,
+}
+
+impl ObjectKind {
+    pub(super) fn byte(self) -> u8 {
+        match self {
+            ObjectKind::Commit => 1,
+            ObjectKind::Tree => KIND_TREE,
+            ObjectKind::Blob => KIND_BLOB,
+            ObjectKind::Tag => 4,
+        }
+    }
+
+    pub(super) fn from_byte(byte: u8) -> io::Result<Self> {
+        match byte {
+            1 => Ok(ObjectKind::Commit),
+            KIND_TREE => Ok(ObjectKind::Tree),
+            KIND_BLOB => Ok(ObjectKind::Blob),
+            4 => Ok(ObjectKind::Tag),
+            _ => Err(db_err(format!("unknown object kind {byte}"))),
+        }
+    }
+}
+
+/// Bodies at least this long are compressed; below it zstd's frame costs more than it saves
+const COMPRESS_FROM: usize = 64;
+
+/// `body` as stored: kind, codec, and the body raw or zstd-compressed (trees stay raw, as diffs
+/// read them often)
+pub(super) fn encode(kind: ObjectKind, body: &[u8]) -> Vec<u8> {
+    if kind != ObjectKind::Tree
+        && body.len() >= COMPRESS_FROM
+        && let Ok(len) = u32::try_from(body.len())
+        && let Ok(packed) = zstd::bulk::compress(body, 3)
+        && packed.len() + 4 < body.len()
+    {
+        return [&[kind.byte(), CODEC_ZSTD][..], &len.to_le_bytes(), &packed].concat();
+    }
+    [&[kind.byte(), CODEC_RAW][..], body].concat()
+}
+
+/// Where the md5-cache files are in the tree
+pub(super) const MD5_CACHE_DIR: &str = "metadata/md5-cache/";
+
+/// `cat/PF` of an md5-cache entry's path; `None` for anything else, Manifests included
+pub(super) fn md5_cache_key(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix(MD5_CACHE_DIR)?;
+    let (_, name) = rest.split_once('/')?;
+    (!name.contains('/') && !name.starts_with("Manifest")).then_some(rest)
+}
 
 pub(super) fn db_err(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
