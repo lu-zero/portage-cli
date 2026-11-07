@@ -645,6 +645,28 @@ mod tests {
         );
     }
 
+    // An unchanged tip is checked too: a repository cloned with verification off, or before the
+    // keyring changed, fails once the current policy rejects its tip, and nothing moves.
+    #[test]
+    fn an_unchanged_unsigned_tip_fails_once_verification_is_on() {
+        let _path = crate::test_support::path_lock();
+        let f = fixture();
+        GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, false, true, None)
+            .unwrap();
+        let verifier = CommitVerifier::gentoo_for_tests();
+        for volatile in [false, true] {
+            let err = GitCmdBackend
+                .sync(&f.overlay, &f.remote_uri, volatile, true, Some(&verifier))
+                .unwrap_err();
+            assert!(err.to_string().contains("no signature"), "{err:#}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(f.overlay.join("a.txt")).unwrap(),
+            "one\n"
+        );
+    }
+
     // A clone of an unsigned remote writes no worktree files.
     #[test]
     fn an_unverified_clone_is_not_checked_out() {
