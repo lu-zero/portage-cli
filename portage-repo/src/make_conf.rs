@@ -537,7 +537,7 @@ fn parse_program(src: &str) -> Result<brush_parser::ast::Program> {
 /// statement span past any trailing inline comment before the final `\n`.
 fn build_entries(src: &str, program: &brush_parser::ast::Program) -> Vec<Entry> {
     // Sorted comment end-positions for fast lookup.
-    let mut comment_ends: Vec<usize> = program.comments.iter().map(|s| s.end.index).collect();
+    let mut comment_ends: Vec<usize> = program.comments.iter().map(|s| s.end.byte_offset).collect();
     comment_ends.sort_unstable();
 
     // Collect (logical-line-span, vars) for each pure-assignment statement.
@@ -549,9 +549,10 @@ fn build_entries(src: &str, program: &brush_parser::ast::Program) -> Vec<Entry> 
                 continue;
             };
 
-            let start = loc.start.index;
+            let start = loc.start.byte_offset;
             // Extend past any trailing comment on this line, then to the `\n`.
-            let end = extend_to_newline(src, extend_past_comment(loc.end.index, &comment_ends));
+            let end =
+                extend_to_newline(src, extend_past_comment(loc.end.byte_offset, &comment_ends));
 
             // Only handle the simple case: single pipeline (no `&&` / `||`).
             if !item.0.additional.is_empty() {
@@ -649,8 +650,8 @@ fn var_from_assignment(src: &str, a: &brush_parser::ast::Assignment) -> Option<V
     };
 
     // a.loc spans the entire `NAME=VALUE` (or `NAME+=VALUE`) token.
-    let token_start = a.loc.start.index;
-    let token_end = a.loc.end.index;
+    let token_start = a.loc.start.byte_offset;
+    let token_end = a.loc.end.byte_offset;
 
     // Bytes consumed by the name and the `=` (plus `+` for append).
     let prefix_len = name.len() + if a.append { 2 } else { 1 };
