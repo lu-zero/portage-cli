@@ -288,15 +288,29 @@ impl MakeConf {
     /// the file is never left half-edited.
     pub fn set(&mut self, name: &str, value: &str) {
         let saved = self.src.clone();
-        self.set_encoded(name, value, encode_raw);
+        self.set_encoded(name, value, encode_raw, false);
         if !self.assigns(name) {
             self.src = saved.clone();
             self.rebuild();
-            self.set_encoded(name, value, encode_literal);
+            self.set_encoded(name, value, encode_literal, false);
             if !self.assigns(name) {
                 self.src = saved;
                 self.rebuild();
             }
+        }
+    }
+
+    /// Set `name` to `value` taken as literal text: `$`, `` ` `` and `\` in it do not expand
+    ///
+    /// For values that are data rather than shell text, such as mirror URLs; otherwise as
+    /// [`Self::set`].
+    pub fn set_literal(&mut self, name: &str, value: &str) {
+        let saved = self.src.clone();
+        // Portage expands `$` even inside single quotes, so the word is rewritten double-quoted.
+        self.set_encoded(name, value, encode_literal, true);
+        if !self.assigns(name) {
+            self.src = saved;
+            self.rebuild();
         }
     }
 
@@ -306,7 +320,15 @@ impl MakeConf {
         parse_program(&self.src).is_ok() && self.get(name).is_some()
     }
 
-    fn set_encoded(&mut self, name: &str, value: &str, encode: fn(&str, Quote) -> String) {
+    /// Write `value` for `name` with `encode`; `whole_word` replaces the whole value word, quotes
+    /// included, rather than only what is inside them
+    fn set_encoded(
+        &mut self,
+        name: &str,
+        value: &str,
+        encode: fn(&str, Quote) -> String,
+        whole_word: bool,
+    ) {
         // Collect all statement indices that touch `name`, in source order.
         let positions: Vec<usize> = self
             .entries
@@ -363,8 +385,10 @@ impl MakeConf {
                 // it preserves the original quoting style; a mixed or plain
                 // word is replaced whole.
                 let (range, text) = match var.quote {
-                    Quote::Single | Quote::Double => (var.value.clone(), encode(value, var.quote)),
-                    Quote::None => (var.word.clone(), encode(value, Quote::None)),
+                    Quote::Single | Quote::Double if !whole_word => {
+                        (var.value.clone(), encode(value, var.quote))
+                    }
+                    _ => (var.word.clone(), encode(value, Quote::None)),
                 };
                 self.src.replace_range(range, &text);
                 self.rebuild();
@@ -379,8 +403,7 @@ impl MakeConf {
     /// `em useflags`'s own single-string USE editor. Returns the new
     /// `USE` value for the caller to report.
     pub fn apply_use_changes(&mut self, add: &[String], remove: &[String]) -> String {
-        let current = self.get("USE").unwrap_or("").to_string();
-        let mut flags: Vec<String> = current.split_whitespace().map(str::to_string).collect();
+        let mut flags = flag_words(self.get("USE").unwrap_or(""));
 
         for flag in remove {
             let flag = flag.trim_start_matches('+');
@@ -419,12 +442,7 @@ impl MakeConf {
         // Effective value for the edit is the full directory/file fold.
         let current_fold =
             Self::load(path).unwrap_or_else(|_| Self::parse(String::new()).expect("empty parse"));
-        let current_flags: Vec<String> = current_fold
-            .get(var)
-            .unwrap_or("")
-            .split_whitespace()
-            .map(str::to_string)
-            .collect();
+        let current_flags = flag_words(current_fold.get(var).unwrap_or(""));
         let old_value = current_flags.join(" ");
         let new_flags = apply_use_flag_ops(current_flags, add, subtract, drop);
         Ok((old_value, new_flags.join(" ")))
@@ -543,6 +561,30 @@ impl MakeConf {
     }
 }
 
+/// The whitespace-separated words of a raw flag-list value
+///
+/// A backslash-newline continues the line in a double-quoted or plain word, so it is dropped
+/// rather than read as a `\` flag.
+fn flag_words(raw: &str) -> Vec<String> {
+    let mut joined = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('\n') => continue,
+                Some(next) => {
+                    joined.push(c);
+                    joined.push(next);
+                    continue;
+                }
+                None => {}
+            }
+        }
+        joined.push(c);
+    }
+    joined.split_whitespace().map(str::to_string).collect()
+}
+
 /// Apply the `add`/`subtract`/`drop` trichotomy to a flat USE token list
 ///
 /// The same rule `em pkg use` already applies to `package.use` entries,
@@ -615,19 +657,31 @@ fn build_entries(src: &str, program: &brush_parser::ast::Program) -> Vec<Entry> 
             let Command::Simple(simple) = &pipeline.seq[0] else {
                 continue;
             };
-            // Pure assignment: no command name.
-            if simple.word_or_name.is_some() {
-                continue;
-            }
+            // Pure assignment (no command name), or `export NAME=VALUE…`, which Portage's
+            // getconfig reads as the same assignment.
+            let items = match &simple.word_or_name {
+                None => simple.prefix.as_ref().map(|p| &p.0),
+                Some(word) if word.value == "export" && simple.prefix.is_none() => {
+                    match &simple.suffix {
+                        Some(suffix)
+                            if suffix.0.iter().all(|i| {
+                                matches!(i, CommandPrefixOrSuffixItem::AssignmentWord(..))
+                            }) =>
+                        {
+                            Some(&suffix.0)
+                        }
+                        _ => None,
+                    }
+                }
+                Some(_) => continue,
+            };
 
             let mut vars = Vec::new();
-            if let Some(prefix) = &simple.prefix {
-                for item in &prefix.0 {
-                    if let CommandPrefixOrSuffixItem::AssignmentWord(assignment, _) = item
-                        && let Some(v) = var_from_assignment(src, assignment)
-                    {
-                        vars.push(v);
-                    }
+            for item in items.into_iter().flatten() {
+                if let CommandPrefixOrSuffixItem::AssignmentWord(assignment, _) = item
+                    && let Some(v) = var_from_assignment(src, assignment)
+                {
+                    vars.push(v);
                 }
             }
 
@@ -795,7 +849,9 @@ fn encode_raw(value: &str, quote: Quote) -> String {
                 && !value
                     .chars()
                     .any(|c| c.is_whitespace() || "'\"\\`;&|<>()#".contains(c));
-            if plain || value.is_empty() {
+            // An empty plain word would make Portage's getconfig take the next token as the
+            // value (`USE=` then `FEATURES=…` on the next line), so it is written `""`.
+            if plain {
                 value.to_owned()
             } else {
                 format!("\"{}\"", encode_raw(value, Quote::Double))
@@ -811,10 +867,16 @@ fn encode_literal(value: &str, quote: Quote) -> String {
         Quote::Double => {
             let mut out = String::with_capacity(value.len());
             for c in value.chars() {
-                if matches!(c, '\\' | '"' | '$' | '`') {
-                    out.push('\\');
+                match c {
+                    // Portage's getconfig keeps `\`` as two characters, so a backquote is
+                    // spelled in a single-quoted run, literal to both it and bash.
+                    '`' => out.push_str("\"'`'\""),
+                    '\\' | '"' | '$' => {
+                        out.push('\\');
+                        out.push(c);
+                    }
+                    _ => out.push(c),
                 }
-                out.push(c);
             }
             out
         }
@@ -1007,8 +1069,9 @@ mod tests {
         let mut mc = parse("MAKEOPTS=-j8\n");
         mc.set("MAKEOPTS", "-j4");
         assert_eq!(mc.to_string(), "MAKEOPTS=-j4\n");
+        // Emptied, it is quoted: Portage reads a bare `NAME=` as taking the next token.
         mc.set("MAKEOPTS", "");
-        assert_eq!(mc.to_string(), "MAKEOPTS=\n");
+        assert_eq!(mc.to_string(), "MAKEOPTS=\"\"\n");
     }
 
     #[test]
@@ -1076,6 +1139,60 @@ mod tests {
             "# José Müller — 編集\nNAME=\"Größe\" # ü\nGENTOO_MIRRORS=\"https://new/\" # é\nUSE=\"x\"\n"
         );
         assert_eq!(mc.get("NAME"), Some("Größe"));
+    }
+
+    #[test]
+    fn set_writes_an_emptied_plain_value_as_empty_quotes() {
+        // Portage's getconfig reads `USE=` followed by a newline as taking the next token.
+        let mut mc = parse("USE=ssl\nFEATURES=\"y\"\n");
+        mc.apply_use_changes(&[], &["ssl".to_string()]);
+        assert_eq!(mc.to_string(), "USE=\"\"\nFEATURES=\"y\"\n");
+        assert_eq!(
+            bash_value(&mc.to_string(), "FEATURES").as_deref(),
+            Some("y")
+        );
+    }
+
+    #[test]
+    fn export_assignment_is_edited_in_place() {
+        let mut mc = parse("export USE=\"a\"\nFEATURES=\"y\"\n");
+        assert_eq!(mc.get("USE"), Some("a"));
+        mc.apply_use_changes(&["c".to_string()], &[]);
+        assert_eq!(mc.to_string(), "export USE=\"a c\"\nFEATURES=\"y\"\n");
+    }
+
+    #[test]
+    fn export_of_a_name_alone_is_not_an_assignment() {
+        let mc = parse("export USE\n");
+        assert_eq!(mc.get("USE"), None);
+    }
+
+    #[test]
+    fn flag_words_drop_line_continuations() {
+        let mut mc = parse("USE=\"a \\\n b\"\nFEATURES=\"y\"\n");
+        assert_eq!(mc.apply_use_changes(&["c".to_string()], &[]), "a b c");
+        assert_eq!(bash_value(&mc.to_string(), "USE").as_deref(), Some("a b c"));
+        assert_eq!(flag_words("x\\\\ y"), vec!["x\\\\", "y"]);
+    }
+
+    #[test]
+    fn set_literal_keeps_dollar_and_backslash() {
+        let url = "https://a.example/$x/`id`/\\";
+        for src in [
+            "",
+            "GENTOO_MIRRORS=old\n",
+            "GENTOO_MIRRORS='old'\n",
+            "GENTOO_MIRRORS=\"old\"\n",
+        ] {
+            let mut mc = parse(src);
+            mc.set_literal("GENTOO_MIRRORS", url);
+            assert_eq!(
+                bash_value(&mc.to_string(), "GENTOO_MIRRORS").as_deref(),
+                Some(url),
+                "from {src:?}: {}",
+                mc
+            );
+        }
     }
 
     #[test]

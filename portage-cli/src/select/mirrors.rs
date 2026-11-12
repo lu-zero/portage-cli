@@ -131,7 +131,8 @@ async fn set_mirrors(
     } else {
         MakeConf::parse(String::new())?
     };
-    mc.set("GENTOO_MIRRORS", &value);
+    // URLs are data: `$` or `\` in one must not expand when make.conf is sourced.
+    mc.set_literal("GENTOO_MIRRORS", &value);
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("creating directory {parent}"))?;
