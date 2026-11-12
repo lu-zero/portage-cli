@@ -11,7 +11,8 @@ Related: [`docs/design/testing.md`](./testing.md) (how correctness is establishe
 [`docs/design/benchmarks.md`](./benchmarks.md) (how performance is measured),
 [`usage-rs.md`](./usage-rs.md) (the grammar decisions behind `em`'s CLI, which now parses with winnow-args),
 [`cross-sysroot-spec.md`](./cross-sysroot-spec.md) (how a cross target's spec becomes Portage config),
-[`sync-backends.md`](./sync-backends.md) (`em sync`'s git and gix backends, and what gix still lacks).
+[`sync-backends.md`](./sync-backends.md) (`em sync`'s git and gix backends, and what gix still lacks),
+[`tree-storage.md`](./tree-storage.md) (where a repository's files and metadata entries come from: a checkout, or redb).
 
 ## Crate layering
 
