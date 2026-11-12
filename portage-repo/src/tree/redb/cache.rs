@@ -111,8 +111,22 @@ impl crate::metadata_cache::MetadataCache for RedbCache {
     }
 
     fn is_populated(&self) -> bool {
-        self.db.is_some()
+        // As a checkout's md5-cache directory counts only when it holds entries: a tree with no
+        // `metadata/md5-cache` still gets a cache database, and readers that scan the cache
+        // (emerge-style `-S`) must then fall back to the ebuilds.
+        self.db.as_ref().is_some_and(holds_entries)
     }
+}
+
+/// Whether the cache database has at least one entry
+fn holds_entries(db: &ReadOnlyDatabase) -> bool {
+    let Ok(txn) = db.begin_read() else {
+        return false;
+    };
+    let Ok(table) = txn.open_table(CACHE_ENTRIES) else {
+        return false;
+    };
+    matches!(table.first(), Ok(Some(_)))
 }
 
 impl RedbCache {
@@ -363,6 +377,27 @@ impl RedbCache {
 mod tests {
     use super::super::schema::CODEC_RAW;
     use super::*;
+
+    #[test]
+    fn a_cache_database_without_entries_is_not_populated() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = Utf8Path::from_path(dir.path()).unwrap().join("c.redb");
+        let write = |entry: Option<&str>| {
+            let db = redb::Database::create(&file).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let mut cache = txn.open_table(CACHE_ENTRIES).unwrap();
+                if let Some(key) = entry {
+                    cache.insert(key, &[KIND_BLOB, CODEC_RAW][..]).unwrap();
+                }
+            }
+            txn.commit().unwrap();
+        };
+        write(None);
+        assert!(!holds_entries(&ReadOnlyDatabase::open(&file).unwrap()));
+        write(Some("a/b-1"));
+        assert!(holds_entries(&ReadOnlyDatabase::open(&file).unwrap()));
+    }
 
     #[test]
     fn entries_without_a_valid_stored_entry_are_gaps() {
