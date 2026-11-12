@@ -49,6 +49,25 @@ pub async fn run(
     }
 }
 
+/// The categories of `repo` to walk: every category any configured repository lists, as
+/// Portage searches the union, so an overlay may keep a package in a category only its master
+/// lists in `profiles/categories`
+fn walk_categories<'a>(
+    repo: &'a Repository,
+    names: &'a [String],
+) -> impl Iterator<Item = portage_repo::Category> + 'a {
+    names.iter().filter_map(|name| repo.category(name))
+}
+
+/// Every category name any of `repos` lists in `profiles/categories`, sorted
+fn category_names(repos: &[Repository]) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for repo in repos {
+        names.extend(repo.categories().into_iter().map(|c| c.name().to_string()));
+    }
+    names.into_iter().collect()
+}
+
 fn contains_ci(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
@@ -63,9 +82,10 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
 
 fn run_name(repos: &[Repository], pat: &str, all: bool, name_only: bool, homepage: bool) {
     let pat_has_slash = pat.contains('/');
+    let names = category_names(repos);
     let mut matched: BTreeMap<String, (Cpn, usize)> = BTreeMap::new();
     for (idx, repo) in repos.iter().enumerate() {
-        for cat in repo.categories() {
+        for cat in walk_categories(repo, &names) {
             for pkg in cat.packages() {
                 let hit = if all {
                     true
@@ -333,6 +353,7 @@ pub async fn run_emerge_style(
 
     let arch = gentoo_core::Arch::current();
     let arch_str = arch.as_str().to_string();
+    let names = category_names(&repos);
 
     for pat in patterns {
         let mut out = anstream::stdout();
@@ -349,7 +370,7 @@ pub async fn run_emerge_style(
         let mut matched: BTreeMap<String, (Cpn, usize)> = BTreeMap::new();
         for (idx, repo) in repos.iter().enumerate() {
             let has_cache = repo.has_primary_cache();
-            for cat in repo.categories() {
+            for cat in walk_categories(repo, &names) {
                 for pkg in cat.packages() {
                     let mut hit = if pat.contains('/') {
                         contains_ci(&format!("{}/{}", cat.name(), pkg.name()), pat)
@@ -646,6 +667,29 @@ mod tests {
                 ("app-misc/bar-1-r1".to_string(), String::new()),
             ]
         );
+    }
+
+    #[test]
+    fn an_overlay_package_in_a_category_only_its_master_lists_is_walked() {
+        let dir = tempfile::tempdir().unwrap();
+        let master = repo_with_index(dir.path(), "a", "");
+        std::fs::write(
+            master.path().join("profiles/categories"),
+            "app-misc\nsys-apps\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(master.path().join("sys-apps/which")).unwrap();
+        let ov = repo_with_index(dir.path(), "b", "");
+        std::fs::create_dir_all(ov.path().join("app-misc/ovpkg")).unwrap();
+        // The overlay lists no categories of its own.
+        let repos = [master, ov];
+        let names = category_names(&repos);
+        assert_eq!(names, ["app-misc", "sys-apps"]);
+        let walked: Vec<String> = walk_categories(&repos[1], &names)
+            .map(|c| c.name().to_string())
+            .collect();
+        assert_eq!(walked, ["app-misc"]);
+        assert_eq!(repos[1].categories().into_iter().count(), 0);
     }
 
     #[tokio::test(flavor = "multi_thread")]
