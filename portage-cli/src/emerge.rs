@@ -639,8 +639,14 @@ async fn emerge_atoms_inner(
             std::collections::HashSet::new()
         },
         complete_graph: merge_flags.repair_broken_installed(),
-        // A real run lists the plan only with -v; the banners (or candy's bars) show the progress.
-        quiet: !(cli.pretend() || merge_flags.ask || cli.verbose() > 0),
+        // A real run lists the plan only with -v (or --tree, as emerge does; --json is output a
+        // caller asked for); the banners (or candy's bars) show the progress. A plan that cannot
+        // be merged is shown regardless, ahead of its problems.
+        quiet: !(cli.pretend()
+            || merge_flags.ask
+            || cli.verbose() > 0
+            || merge_flags.tree
+            || merge_flags.json),
     })
     .await?;
 

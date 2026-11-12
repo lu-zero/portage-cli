@@ -687,6 +687,10 @@ fn a_target_use_requirement_picks_a_version_with_the_flag_and_asks_for_it() {
         outcome.exit_code, 1,
         "foo is off, so a USE change is required"
     );
+    assert!(
+        outcome.plan_listed,
+        "a quiet run still lists a plan that needs config changes, as emerge does"
+    );
 }
 
 #[test]
@@ -696,6 +700,10 @@ fn a_target_use_requirement_already_met_needs_no_change() {
     let outcome = solve(&fix, Solve::new(&atoms));
     assert_eq!(names(&outcome), ["app-misc/defaulted-1"]);
     assert_eq!(outcome.exit_code, 0);
+    assert!(
+        !outcome.plan_listed,
+        "a quiet run with nothing to fix lists no plan"
+    );
 }
 
 #[test]

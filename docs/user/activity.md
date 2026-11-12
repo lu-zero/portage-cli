@@ -46,8 +46,9 @@ phase loop. At session end the worker threads are joined, so the final
 The terminal is itself an activity sink (`HumanStdoutSink`) — the `>>> Emerging
 (N of M) cpv` and `=== (N of M) <Phase> cpv` banners are *projections* of the
 same `PkgStart` / `PhaseEnter` events that `--activity-fd` and `em log current`
-consume, not parallel ad-hoc prints. A real run prints the plan only with `-v`; `-p` and `-a` always
-show it. Verbosity is decided in one place:
+consume, not parallel ad-hoc prints. A real run prints the plan only with `-v` or `--tree`; `-p` and `-a`
+always show it, and so does a run whose plan cannot be merged as it stands (USE, keyword, mask or
+license changes, blockers, slot conflicts, REQUIRED_USE), ahead of its problems, as emerge does. Verbosity is decided in one place:
 
 | Flags | Console | Build/phase output |
 |-------|---------|--------------------|

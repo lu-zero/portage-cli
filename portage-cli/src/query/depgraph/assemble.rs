@@ -236,7 +236,22 @@ pub(super) fn assemble(
         requested: &root_cpns,
     };
 
-    if !quiet {
+    // Computed before the plan prints so a plan that cannot be merged as it stands is always shown:
+    // emerge's display_problems() lists the merge list ahead of blockers, slot conflicts and the
+    // needed config changes even on a run that would otherwise not print it.
+    let installed_solved = super::installed_as_solved(&target_installed, &provider, &data);
+    let hits = provider.check_blockers_detailed(&solution);
+    let classified = conflicts::classify_blockers(&hits, &installed_solved, &proposed);
+    let ru_violations = required_use::find_violations(&data, &order, &final_policy, &ceded);
+    let not_installable = !use_change_entries.is_empty()
+        || !use_conflicts.is_empty()
+        || !dropped_autounmask.is_empty()
+        || !dep_conflicts.is_empty()
+        || conflicts::is_hard_conflict(&classified)
+        || !ru_violations.is_empty();
+
+    let plan_listed = !quiet || not_installable;
+    if plan_listed {
         match format {
             DepgraphFormat::Pretty => {
                 output::print_pretty_rooted(&pretty_ctx, &plan_entries, &cross)
@@ -290,12 +305,6 @@ pub(super) fn assemble(
         }
         output::report_repairs(&repair_pulled_in, &repair_held_back, &repair_incomplete);
 
-        let hits = provider.check_blockers_detailed(&solution);
-        let classified = conflicts::classify_blockers(
-            &hits,
-            &super::installed_as_solved(&target_installed, &provider, &data),
-            &proposed,
-        );
         output::report_blockers(&classified);
         let hard_conflict = conflicts::is_hard_conflict(&classified);
         let unmerges = conflicts::planned_unmerges(&classified);
@@ -322,7 +331,6 @@ pub(super) fn assemble(
             output::report_masked_installed(&masked);
         }
 
-        let ru_violations = required_use::find_violations(&data, &order, &final_policy, &ceded);
         if !ru_violations.is_empty() {
             output::report_required_use(&ru_violations);
         }
@@ -418,6 +426,8 @@ pub(super) fn assemble(
     // Retained on the outcome for tests. The report above is the user-facing copy.
     #[cfg(not(test))]
     let _ = masked_installed;
+    #[cfg(not(test))]
+    let _ = plan_listed;
 
     // `Total:`/`Size of downloads:` print *after* the advisories above (not
     // right after the merge list, as it used to): the caller's `--eta`
@@ -573,6 +583,8 @@ pub(super) fn assemble(
         unmerges,
         #[cfg(test)]
         masked_installed,
+        #[cfg(test)]
+        plan_listed,
     };
     // Freeing the loaded tree and the solver's package table takes ~0.1 s on ::gentoo, and em
     // usually exits right after: free them off the caller's path.
