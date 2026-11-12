@@ -24,9 +24,9 @@ pub(crate) fn profile_stack(
     config_root: &Utf8Path,
     config_overlay: Option<&Utf8Path>,
 ) -> Result<Option<ProfileStack>> {
-    let Ok(profile_path) =
-        std::fs::canonicalize(config_root.join("etc/portage/make.profile").as_std_path())
-    else {
+    let Ok(profile_path) = portage_repo::resolve_profile_path(
+        config_root.join("etc/portage/make.profile").as_std_path(),
+    ) else {
         return Ok(None);
     };
     let mut stack = ProfileStack::build_in(profile_path, config_root)

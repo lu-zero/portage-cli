@@ -232,19 +232,7 @@ fn referenced_distfiles(globals: &Cli, deep: bool) -> Result<std::collections::H
         let Ok(repo) = Utf8PathBuf::from_path_buf(repo) else {
             continue;
         };
-        for manifest in package_manifests(&repo, installed.as_ref(), &mut unmanifested) {
-            let Ok(text) = std::fs::read_to_string(manifest.as_std_path()) else {
-                continue;
-            };
-            let Ok(parsed) = portage_repo::Manifest::parse(&text) else {
-                continue;
-            };
-            for e in parsed.dist_entries() {
-                if let portage_repo::ManifestEntry::Dist { filename, .. } = e {
-                    wanted.insert(filename.clone());
-                }
-            }
-        }
+        repo_distfiles(&repo, installed.as_ref(), &mut wanted, &mut unmanifested)?;
     }
     if unmanifested > 0 {
         // Warn rather than refuse: on a stock ::gentoo this is dominated by
@@ -260,6 +248,97 @@ fn referenced_distfiles(globals: &Cli, deep: bool) -> Result<std::collections::H
         );
     }
     Ok(wanted)
+}
+
+/// Add the distfiles the repository at `repo` references to `wanted`
+fn repo_distfiles(
+    repo: &Utf8Path,
+    only: Option<&std::collections::HashSet<(String, String)>>,
+    wanted: &mut std::collections::HashSet<String>,
+    unmanifested: &mut usize,
+) -> Result<()> {
+    if let Some(stored) = stored_repository(repo)? {
+        return stored_distfiles(&stored, only, wanted, unmanifested);
+    }
+    for manifest in package_manifests(repo, only, unmanifested) {
+        let Ok(text) = std::fs::read_to_string(manifest.as_std_path()) else {
+            continue;
+        };
+        let Ok(parsed) = portage_repo::Manifest::parse(&text) else {
+            continue;
+        };
+        for e in parsed.dist_entries() {
+            if let portage_repo::ManifestEntry::Dist { filename, .. } = e {
+                wanted.insert(filename.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The repository at `location` when it is read from a database rather than its checkout
+///
+/// Its location holds no package directories, or only a stale checkout left from before the
+/// conversion; walking either would call every distfile and binary package of the repository
+/// unreferenced. One that cannot be opened stops the sweep rather than narrowing the keep set.
+fn stored_repository(location: &Utf8Path) -> Result<Option<portage_repo::Repository>> {
+    if !portage_repo::tree::stored_elsewhere(location) {
+        return Ok(None);
+    }
+    let repo = crate::repo_open::open(location.as_std_path()).with_context(|| {
+        format!("opening the repository stored next to {location} — refusing to decide what is unreferenced")
+    })?;
+    Ok(Some(repo))
+}
+
+/// [`referenced_distfiles`] for a repository read through [`portage_repo::Repository`]: the
+/// `DIST` lines of each package's Manifest, counting a package with ebuilds that declare a
+/// `SRC_URI` but no Manifest as unmanifested
+fn stored_distfiles(
+    repo: &portage_repo::Repository,
+    only: Option<&std::collections::HashSet<(String, String)>>,
+    wanted: &mut std::collections::HashSet<String>,
+    unmanifested: &mut usize,
+) -> Result<()> {
+    let mut packages: std::collections::BTreeMap<portage_atom::Cpn, Vec<portage_repo::Ebuild>> =
+        std::collections::BTreeMap::new();
+    for ebuild in repo.ebuilds_in_categories(repo.listed_or_present_categories()?)? {
+        let cpn = ebuild.cpv().cpn;
+        let key = (
+            cpn.category.as_str().to_string(),
+            cpn.package.as_str().to_string(),
+        );
+        if only.is_some_and(|set| !set.contains(&key)) {
+            continue;
+        }
+        packages.entry(cpn).or_default().push(ebuild);
+    }
+    for (cpn, ebuilds) in packages {
+        let Some(pkg) = repo.package(&cpn) else {
+            continue;
+        };
+        match pkg
+            .manifest()
+            .with_context(|| format!("reading the Manifest of {cpn} in {}", repo.path()))?
+        {
+            Some(manifest) => {
+                for e in manifest.dist_entries() {
+                    if let portage_repo::ManifestEntry::Dist { filename, .. } = e {
+                        wanted.insert(filename.clone());
+                    }
+                }
+            }
+            None => {
+                if ebuilds
+                    .iter()
+                    .any(|e| e.read_raw().is_ok_and(|text| text_declares_src_uri(&text)))
+                {
+                    *unmanifested += 1;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `<repo>/<cat>/<pn>` for every package directory, or only the installed
@@ -346,15 +425,16 @@ fn declares_src_uri(dir: &std::path::Path) -> bool {
         .flatten()
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().ends_with(".ebuild"))
-        .any(|e| {
-            std::fs::read_to_string(e.path()).is_ok_and(|t| {
-                t.lines().any(|l| {
-                    let l = l.trim_start();
-                    l.starts_with("SRC_URI=")
-                        && !matches!(l.trim_end(), "SRC_URI=\"\"" | "SRC_URI=''" | "SRC_URI=")
-                })
-            })
-        })
+        .any(|e| std::fs::read_to_string(e.path()).is_ok_and(|t| text_declares_src_uri(&t)))
+}
+
+/// Whether an ebuild's text assigns a non-empty `SRC_URI` (see [`declares_src_uri`])
+fn text_declares_src_uri(text: &str) -> bool {
+    text.lines().any(|l| {
+        let l = l.trim_start();
+        l.starts_with("SRC_URI=")
+            && !matches!(l.trim_end(), "SRC_URI=\"\"" | "SRC_URI=''" | "SRC_URI=")
+    })
 }
 
 /// A repo's `profiles/categories`, or every hyphenated directory name plus
@@ -595,9 +675,21 @@ fn tree_cpvs(globals: &Cli) -> Result<std::collections::HashSet<String>> {
         let Ok(repo) = Utf8PathBuf::from_path_buf(repo) else {
             continue;
         };
-        out.extend(tree_cpvs_in(&repo));
+        out.extend(repo_cpvs(&repo)?);
     }
     Ok(out)
+}
+
+/// Every cpv with an ebuild in the repository at `repo`, read from its database when it has one
+fn repo_cpvs(repo: &Utf8Path) -> Result<std::collections::HashSet<String>> {
+    Ok(match stored_repository(repo)? {
+        Some(stored) => stored
+            .ebuilds_in_categories(stored.listed_or_present_categories()?)?
+            .into_iter()
+            .map(|e| e.cpv().to_string())
+            .collect(),
+        None => tree_cpvs_in(repo),
+    })
 }
 
 /// Keep set for one repo: every `*.ebuild`, Manifest or not

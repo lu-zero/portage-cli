@@ -15,9 +15,9 @@ use crate::config_plan::{self, ConfigEntry};
 const DEFAULT_SYNC_URI: &str = "https://github.com/gentoo-mirror/gentoo.git";
 
 /// A repo tree is usable once it has a `profiles/repo_name` — the same
-/// on-disk marker Portage itself requires for a valid repository.
+/// on-disk marker Portage itself requires for a valid repository — or is read from a database.
 fn repo_has_profiles(path: &Utf8Path) -> bool {
-    path.join("profiles/repo_name").is_file()
+    path.join("profiles/repo_name").is_file() || portage_repo::tree::stored_elsewhere(path)
 }
 
 /// A host `::gentoo` this prefix can piggy-back on without cloning anything:

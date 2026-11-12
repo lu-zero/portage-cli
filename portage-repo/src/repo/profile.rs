@@ -15,7 +15,7 @@ use super::layout::LayoutConf;
 use super::repos_conf::ReposConf;
 use super::util;
 use crate::error::{Error, Result};
-use crate::tree::{FsTree, TreeSource, content_lines, read_text, tree_lines};
+use crate::tree::{EntryKind, FsTree, TreeSource, content_lines, read_text, tree_lines};
 
 /// Stability status of a profile
 ///
@@ -1007,6 +1007,60 @@ pub(crate) fn merge_accept_lists<'a>(iter: impl Iterator<Item = &'a str>) -> Vec
     kept.iter().map(|t| t.to_string()).collect()
 }
 
+/// A profile directory, or a link to one, as an absolute path without symlinks or `..`
+///
+/// Canonicalizes. A path that does not exist on disk is resolved by hand (link targets, `..`,
+/// the longest existing prefix canonicalized) and accepted only inside a repository stored
+/// somewhere other than its checkout, whose profiles have no directory there.
+pub fn resolve_profile_path(path: &Path) -> std::io::Result<PathBuf> {
+    let err = match path.canonicalize() {
+        Ok(p) => return Ok(p),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => e,
+        Err(e) => return Err(e),
+    };
+    let mut target = path.to_path_buf();
+    // Bounded like the kernel's own symlink limit.
+    for _ in 0..40 {
+        let Ok(link) = std::fs::read_link(&target) else {
+            break;
+        };
+        target = match target.parent() {
+            Some(dir) => dir.join(link),
+            None => link,
+        };
+    }
+    let mut lexical = PathBuf::new();
+    for part in target.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                lexical.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => lexical.push(other),
+        }
+    }
+    let Some(existing) = lexical.ancestors().find(|a| a.exists()) else {
+        return Err(err);
+    };
+    let rest = lexical
+        .strip_prefix(existing)
+        .unwrap_or(&lexical)
+        .to_path_buf();
+    let resolved = existing.canonicalize()?.join(rest);
+    let Ok(utf8) = Utf8PathBuf::from_path_buf(resolved.clone()) else {
+        return Err(err);
+    };
+    let inside_stored_repo = utf8
+        .ancestors()
+        .find(|d| crate::tree::is_repository(d))
+        .is_some_and(crate::tree::stored_elsewhere);
+    if inside_stored_repo {
+        Ok(resolved)
+    } else {
+        Err(err)
+    }
+}
+
 /// Recursively collect profiles depth-first, ancestors before self
 ///
 /// `visited` is a set of canonicalized paths already added; a profile seen a
@@ -1017,7 +1071,7 @@ fn collect_stack(
     trees: &mut RepoTrees,
     repos: Option<&ReposConf>,
 ) -> Result<Vec<Profile>> {
-    let canonical = path.canonicalize().map_err(|e| Error::Io {
+    let canonical = resolve_profile_path(path).map_err(|e| Error::Io {
         path: path.to_path_buf(),
         source: e,
     })?;
@@ -1025,6 +1079,16 @@ fn collect_stack(
         return Ok(vec![]);
     }
     let profile = Profile::open_with(canonical, trees)?;
+    // A profile of a repository stored elsewhere has no directory to canonicalize: it has to
+    // exist in that repository's tree instead.
+    if !profile.path.exists()
+        && !matches!(profile.tree.kind(&profile.rel), Ok(Some(EntryKind::Dir)))
+    {
+        return Err(Error::Io {
+            path: path.to_path_buf(),
+            source: std::io::ErrorKind::NotFound.into(),
+        });
+    }
     let mut result = Vec::new();
     for parent in profile.parents(repos)? {
         result.extend(collect_stack(&parent, visited, trees, repos)?);

@@ -463,7 +463,7 @@ pub(crate) fn resolve_set(
     }
     let config_root = config_root.unwrap_or(Utf8Path::new("/"));
     let profile_link = config_root.join("etc/portage/make.profile");
-    let canon = std::fs::canonicalize(profile_link.as_std_path())
+    let canon = portage_repo::resolve_profile_path(profile_link.as_std_path())
         .with_context(|| format!("cannot resolve {profile_link}"))?;
     let stack = portage_repo::ProfileStack::build_in(canon, config_root)
         .context("failed to build profile stack")?
