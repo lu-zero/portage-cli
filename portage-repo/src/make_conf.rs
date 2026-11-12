@@ -109,6 +109,22 @@ struct Var {
     ///
     /// Empty range for `FOO=` (no value).
     value: Range<usize>,
+    /// Byte range of the whole value word in `src`, quotes included
+    word: Range<usize>,
+    /// How `value` is quoted, which decides how [`MakeConf::set`] writes a new one
+    quote: Quote,
+}
+
+/// How an assignment's value word is quoted
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Quote {
+    /// One plain word, or a mix of quoted and unquoted parts: a new value
+    /// replaces the whole word, double-quoted when it needs quoting
+    None,
+    /// `'…'` with no `'` inside
+    Single,
+    /// `"…"` with no unescaped `"` inside
+    Double,
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +282,31 @@ impl MakeConf {
     /// (first occurrence wins after the edit).
     ///
     /// If `name` is not present, appends `NAME="value"\n` at the end.
+    ///
+    /// `value` is raw shell text, like what [`Self::get`] returns, and is quoted so the file still parses
+    /// and the assignment stays one word. If that would not parse, it is written as an escaped literal;
+    /// the file is never left half-edited.
     pub fn set(&mut self, name: &str, value: &str) {
+        let saved = self.src.clone();
+        self.set_encoded(name, value, encode_raw);
+        if !self.assigns(name) {
+            self.src = saved.clone();
+            self.rebuild();
+            self.set_encoded(name, value, encode_literal);
+            if !self.assigns(name) {
+                self.src = saved;
+                self.rebuild();
+            }
+        }
+    }
+
+    /// Whether the source parses and its last plain assignment to `name` is
+    /// one word (so a later edit can find it again)
+    fn assigns(&self, name: &str) -> bool {
+        parse_program(&self.src).is_ok() && self.get(name).is_some()
+    }
+
+    fn set_encoded(&mut self, name: &str, value: &str, encode: fn(&str, Quote) -> String) {
         // Collect all statement indices that touch `name`, in source order.
         let positions: Vec<usize> = self
             .entries
@@ -288,7 +328,10 @@ impl MakeConf {
         match positions.as_slice() {
             [] => {
                 // Name not found — append a new assignment.
-                let append = format!("{}=\"{}\"\n", name, value);
+                if !self.src.is_empty() && !self.src.ends_with('\n') {
+                    self.src.push('\n');
+                }
+                let append = format!("{}=\"{}\"\n", name, encode(value, Quote::Double));
                 self.src.push_str(&append);
                 // Rebuild entries from scratch (spans have shifted).
                 self.rebuild();
@@ -317,8 +360,13 @@ impl MakeConf {
                     .find(|v| v.name == name && !v.append)
                     .expect("inconsistent state: entry matched in filter but variable not found");
                 // The value span excludes any surrounding quotes, so replacing
-                // it preserves the original quoting style untouched.
-                self.src.replace_range(var.value.clone(), value);
+                // it preserves the original quoting style; a mixed or plain
+                // word is replaced whole.
+                let (range, text) = match var.quote {
+                    Quote::Single | Quote::Double => (var.value.clone(), encode(value, var.quote)),
+                    Quote::None => (var.word.clone(), encode(value, Quote::None)),
+                };
+                self.src.replace_range(range, &text);
                 self.rebuild();
             }
         }
@@ -486,11 +534,12 @@ impl MakeConf {
         })
     }
 
-    /// Reparse `self.src` after an in-place mutation
+    /// Reparse `self.src` after an in-place mutation; text that no longer parses becomes one opaque entry
     fn rebuild(&mut self) {
-        if let Ok(program) = parse_program(&self.src) {
-            self.entries = build_entries(&self.src, &program);
-        }
+        self.entries = match parse_program(&self.src) {
+            Ok(program) => build_entries(&self.src, &program),
+            Err(_) => vec![Entry::Opaque(0..self.src.len())],
+        };
     }
 }
 
@@ -662,6 +711,8 @@ fn var_from_assignment(src: &str, a: &brush_parser::ast::Assignment) -> Option<V
             name,
             append: a.append,
             value: value_start..value_start,
+            word: value_start..value_start,
+            quote: Quote::None,
         });
     }
 
@@ -676,11 +727,99 @@ fn var_from_assignment(src: &str, a: &brush_parser::ast::Assignment) -> Option<V
         (value_start, token_end)
     };
 
+    let inner = &src[inner_start..inner_end];
+    let quote = if inner_start == value_start {
+        Quote::None
+    } else if raw.starts_with('\'') {
+        if inner.contains('\'') {
+            Quote::None
+        } else {
+            Quote::Single
+        }
+    } else if has_unescaped_dquote(inner) || ends_in_lone_backslash(inner) {
+        Quote::None
+    } else {
+        Quote::Double
+    };
+
     Some(Var {
         name,
         append: a.append,
         value: inner_start..inner_end,
+        word: value_start..token_end,
+        quote,
     })
+}
+
+/// Whether `s` has a `"` not preceded by an odd run of backslashes
+fn has_unescaped_dquote(s: &str) -> bool {
+    let mut escaped = false;
+    for c in s.chars() {
+        match c {
+            '\\' => escaped = !escaped,
+            '"' if !escaped => return true,
+            _ => escaped = false,
+        }
+    }
+    false
+}
+
+/// Whether `s` ends in an odd run of backslashes (which would escape a closing `"`)
+fn ends_in_lone_backslash(s: &str) -> bool {
+    s.chars().rev().take_while(|&c| c == '\\').count() % 2 == 1
+}
+
+/// Spell raw shell text `value` for a value word quoted as `quote`, keeping
+/// `$` expansions: only what would end the quoting or split the word changes
+fn encode_raw(value: &str, quote: Quote) -> String {
+    match quote {
+        Quote::Single => value.replace('\'', "'\\''"),
+        Quote::Double => {
+            let mut out = String::with_capacity(value.len());
+            let mut escaped = false;
+            for c in value.chars() {
+                match c {
+                    '\\' => escaped = !escaped,
+                    '"' if !escaped => out.push('\\'),
+                    _ => escaped = false,
+                }
+                out.push(c);
+            }
+            if ends_in_lone_backslash(&out) {
+                out.push('\\');
+            }
+            out
+        }
+        Quote::None => {
+            let plain = !value.is_empty()
+                && !value
+                    .chars()
+                    .any(|c| c.is_whitespace() || "'\"\\`;&|<>()#".contains(c));
+            if plain || value.is_empty() {
+                value.to_owned()
+            } else {
+                format!("\"{}\"", encode_raw(value, Quote::Double))
+            }
+        }
+    }
+}
+
+/// Spell `value` as literal text for a value word quoted as `quote`: nothing in it expands
+fn encode_literal(value: &str, quote: Quote) -> String {
+    match quote {
+        Quote::Single => value.replace('\'', "'\\''"),
+        Quote::Double => {
+            let mut out = String::with_capacity(value.len());
+            for c in value.chars() {
+                if matches!(c, '\\' | '"' | '$' | '`') {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+            out
+        }
+        Quote::None => format!("\"{}\"", encode_literal(value, Quote::Double)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -830,6 +969,113 @@ mod tests {
         let out = mc.to_string();
         assert!(out.contains("CFLAGS=\"-O3\""));
         assert!(out.contains("# was -O2"));
+    }
+
+    /// Sources `src` with bash and returns `name`'s value, or `None` if bash
+    /// reports any error (as Portage's `getconfig` would refuse the file).
+    fn bash_value(src: &str, name: &str) -> Option<String> {
+        let out = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!(
+                "set -e; eval \"$1\" 2>&1 >/dev/null; printf %s \"${{{name}}}\""
+            ))
+            .arg("make.conf")
+            .arg(src)
+            .env_clear()
+            .output()
+            .ok()?;
+        (out.status.success() && out.stderr.is_empty())
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    #[test]
+    fn set_quotes_a_plain_value_that_gains_a_space() {
+        // `em use -a gtk` on `USE=ssl` must not write `USE=ssl gtk`, which runs
+        // `gtk` and makes Portage reject make.conf ("Invalid token").
+        let mut mc = parse("USE=ssl\nFEATURES=\"y\"\n");
+        mc.apply_use_changes(&["gtk".to_string()], &[]);
+        assert_eq!(mc.to_string(), "USE=\"ssl gtk\"\nFEATURES=\"y\"\n");
+        assert_eq!(mc.get("USE"), Some("ssl gtk"));
+        assert_eq!(mc.get("FEATURES"), Some("y"));
+        // A second edit still finds the assignment instead of appending a new one.
+        mc.apply_use_changes(&["qt".to_string()], &[]);
+        assert_eq!(mc.to_string(), "USE=\"ssl gtk qt\"\nFEATURES=\"y\"\n");
+    }
+
+    #[test]
+    fn set_keeps_a_plain_value_plain() {
+        let mut mc = parse("MAKEOPTS=-j8\n");
+        mc.set("MAKEOPTS", "-j4");
+        assert_eq!(mc.to_string(), "MAKEOPTS=-j4\n");
+        mc.set("MAKEOPTS", "");
+        assert_eq!(mc.to_string(), "MAKEOPTS=\n");
+    }
+
+    #[test]
+    fn set_escapes_the_quote_of_the_value_word() {
+        // A single quote inside single quotes, a double quote inside double
+        // quotes: the file used to be cut short and stop parsing.
+        let mut mc = parse("GENTOO_MIRRORS='https://old/'\nUSE=\"x\"\nFEATURES=\"y\"\n");
+        mc.set("GENTOO_MIRRORS", "https://ex/it's/");
+        let out = mc.to_string();
+        assert!(out.ends_with("USE=\"x\"\nFEATURES=\"y\"\n"), "{out}");
+        assert_eq!(
+            bash_value(&out, "GENTOO_MIRRORS").as_deref(),
+            Some("https://ex/it's/")
+        );
+        assert_eq!(bash_value(&out, "FEATURES").as_deref(), Some("y"));
+
+        let mut mc = parse("A=\"old\"\nB=\"y\"\n");
+        mc.set("A", "say \"hi\"");
+        let out = mc.to_string();
+        assert_eq!(bash_value(&out, "A").as_deref(), Some("say \"hi\""));
+        assert_eq!(bash_value(&out, "B").as_deref(), Some("y"));
+        // A trailing backslash would escape the closing quote.
+        mc.set("A", "dir\\");
+        let out = mc.to_string();
+        assert_eq!(bash_value(&out, "B").as_deref(), Some("y"), "{out}");
+    }
+
+    #[test]
+    fn set_keeps_references_in_a_raw_value() {
+        let mut mc = parse("CFLAGS=${COMMON_FLAGS}\n");
+        mc.set("CFLAGS", "${COMMON_FLAGS} -g");
+        assert_eq!(mc.to_string(), "CFLAGS=\"${COMMON_FLAGS} -g\"\n");
+        let mut mc = parse("CFLAGS=\"${COMMON_FLAGS}\"\n");
+        mc.set("CFLAGS", "${COMMON_FLAGS} -g");
+        assert_eq!(mc.to_string(), "CFLAGS=\"${COMMON_FLAGS} -g\"\n");
+    }
+
+    #[test]
+    fn set_writes_an_unparseable_raw_value_as_a_literal() {
+        let mut mc = parse("A=\"x\"\nB=\"y\"\n");
+        mc.set("A", "$(oops");
+        let out = mc.to_string();
+        assert_eq!(bash_value(&out, "A").as_deref(), Some("$(oops"), "{out}");
+        assert_eq!(bash_value(&out, "B").as_deref(), Some("y"));
+    }
+
+    #[test]
+    fn set_appends_on_a_new_line_after_a_file_without_one() {
+        let mut mc = parse("FOO=\"bar\"");
+        mc.set("NEW_VAR", "a b");
+        assert_eq!(mc.to_string(), "FOO=\"bar\"\nNEW_VAR=\"a b\"\n");
+        assert_eq!(mc.get("FOO"), Some("bar"));
+    }
+
+    #[test]
+    fn set_after_multibyte_text_edits_the_right_bytes() {
+        // Source positions are byte offsets; text before the edit that is not
+        // ASCII must not shift it.
+        let src = "# José Müller — 編集\nNAME=\"Größe\" # ü\nGENTOO_MIRRORS=\"https://old/\" # é\nUSE=\"x\"\n";
+        let mut mc = parse(src);
+        assert_eq!(mc.to_string(), src);
+        mc.set("GENTOO_MIRRORS", "https://new/");
+        assert_eq!(
+            mc.to_string(),
+            "# José Müller — 編集\nNAME=\"Größe\" # ü\nGENTOO_MIRRORS=\"https://new/\" # é\nUSE=\"x\"\n"
+        );
+        assert_eq!(mc.get("NAME"), Some("Größe"));
     }
 
     #[test]
