@@ -590,6 +590,19 @@ mod hakoniwa {
         for repo in cli.search_repos() {
             if let Some(path) = repo.to_str() {
                 bind_ro(container, path);
+                // A repository stored in a database has no directory at its location.
+                #[cfg(feature = "redb")]
+                for db in [format!("{path}.redb"), format!("{path}.md5-cache.redb")] {
+                    bind_ro(container, &db);
+                }
+            }
+        }
+        // Builds from a database read their package directory from a copy made here.
+        #[cfg(feature = "redb")]
+        {
+            let copies = crate::xdg::checkout_root();
+            if std::fs::create_dir_all(&copies).is_ok() {
+                bind_rw(container, copies.as_str());
             }
         }
         bind_rw(container, &super::distdir(cli));

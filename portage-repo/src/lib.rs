@@ -111,6 +111,7 @@ pub use repo::{Maintainer, MaintainerKind, PkgMetadata};
 pub use repo::{Manifest, ManifestEntry};
 pub use repo::{
     Profile, ProfileDesc, ProfileEnv, ProfileEnvLayer, ProfileStack, ProfileStatus, UseFlags,
+    resolve_profile_path,
 };
 pub use source::{SourceContext, SourceItem, SourceOpts, source_parallel, source_single};
 

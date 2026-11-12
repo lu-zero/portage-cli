@@ -18,9 +18,12 @@ use crate::config_plan::{self, ConfigEntry};
 /// of the prefix's. `host_root` is `/` in production; tests pass a fixture
 /// dir so both branches (mirror vs. ARCH-default) are exercised.
 fn host_profile_under_repo(repo: &Repository, host_root: &Utf8Path) -> Option<String> {
-    let target = std::fs::canonicalize(host_root.join("etc/portage/make.profile")).ok()?;
-    let target = Utf8PathBuf::from_path_buf(target).ok()?;
-    let profiles = repo.path().join("profiles").canonicalize_utf8().ok()?;
+    let resolve = |p: Utf8PathBuf| {
+        let resolved = portage_repo::resolve_profile_path(p.as_std_path()).ok()?;
+        Utf8PathBuf::from_path_buf(resolved).ok()
+    };
+    let target = resolve(host_root.join("etc/portage/make.profile"))?;
+    let profiles = resolve(repo.path().join("profiles"))?;
     target.strip_prefix(&profiles).ok().map(Utf8Path::to_string)
 }
 

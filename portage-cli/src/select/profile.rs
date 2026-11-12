@@ -11,7 +11,7 @@
 use std::io::Write as _;
 
 use anyhow::{Context, Result, bail};
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use portage_repo::{MakeConf, ProfileDesc, Repository};
 
 use super::config_portage_dir;
@@ -93,9 +93,11 @@ pub(crate) fn current_profile(globals: &Cli, repo: &Repository) -> Option<String
     let link = make_profile_link(globals);
     // Canonicalize the link itself so a relative symlink (`../../var/db/…`, as
     // eselect writes) resolves against its own directory, not the CWD.
-    let target = link.canonicalize_utf8().ok()?;
-    let profiles = repo.path().join("profiles").canonicalize_utf8().ok()?;
-    target.strip_prefix(&profiles).ok().map(Utf8Path::to_string)
+    let target = portage_repo::resolve_profile_path(link.as_std_path()).ok()?;
+    let profiles =
+        portage_repo::resolve_profile_path(repo.path().join("profiles").as_std_path()).ok()?;
+    let rel = target.strip_prefix(&profiles).ok()?;
+    rel.to_str().map(str::to_string)
 }
 
 fn list(globals: &Cli) -> Result<()> {

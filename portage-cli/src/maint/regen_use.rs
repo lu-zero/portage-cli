@@ -26,6 +26,9 @@ pub fn run(repo_path: &Utf8Path, output: Option<&str>) -> Result<()> {
             tracing::info!("wrote {flag_count} use flags ({pkg_count} packages) to {path}");
         }
         None => {
+            if repo.stored_elsewhere() {
+                anyhow::bail!("{repo_path} is stored in a database, not a checkout: pass -o FILE");
+            }
             let out_path = repo.path().join("profiles/use.local.desc");
             use_db
                 .write_use_local_desc(&out_path)

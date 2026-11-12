@@ -97,7 +97,7 @@ pub(crate) fn expand_sets(raw: &[String], roots: &portage_resolve::Roots) -> Vec
             let config_root = config_root.unwrap_or(Utf8Path::new("/"));
             let portage_dir = config_root.join("etc/portage");
             let profile_link = portage_dir.join("make.profile");
-            match std::fs::canonicalize(profile_link.as_std_path())
+            match portage_repo::resolve_profile_path(profile_link.as_std_path())
                 .map_err(|e| anyhow::anyhow!("cannot resolve make.profile for @set expansion: {e}"))
                 .and_then(|p| {
                     portage_repo::ProfileStack::build_in(p, config_root)
@@ -406,9 +406,6 @@ async fn emerge_atoms_inner(
     let merge_flags = &merge_flags;
     let resolved = cli.repo_path();
     let repo_path = camino::Utf8Path::new(&resolved);
-    if !repo_path.is_dir() {
-        bail!("repo not found at {resolved}");
-    }
     let repo = crate::repo_open::open(repo_path.as_std_path())?;
     let vdb = open_cli_vdb(cli).ok();
     // `-a` takes precedence over `-u`: explicitly asking to be asked beats a
