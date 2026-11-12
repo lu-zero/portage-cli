@@ -200,6 +200,8 @@ pub fn install_wrap_backend() -> Option<Backend> {
 /// `build_and_merge`'s args that cross the process boundary.
 pub struct WorkerArgs<'a> {
     pub ebuild_path: &'a str,
+    /// The repository's location, which the worker opens
+    pub repo: &'a str,
     /// The resolved plan entry's authoritative `Cpv` (e.g
     /// `cross-riscv64-unknown-linux-gnu/gcc-16.1.1`) — carried across the
     /// process boundary explicitly so the worker never re-derives it from
@@ -362,6 +364,8 @@ fn build_worker_command(
     cmd.arg("__worker")
         .arg("--ebuild")
         .arg(args.ebuild_path)
+        .arg("--repo")
+        .arg(args.repo)
         .arg("--cpv")
         .arg(args.cpv)
         .arg("--use-flags")
@@ -783,6 +787,7 @@ mod worker_argv_tests {
     fn sample_args(quiet: bool, config_root: Option<&'static str>) -> WorkerArgs<'static> {
         WorkerArgs {
             ebuild_path: "/tmp/cat/pkg/pkg-1.ebuild",
+            repo: "/tmp",
             cpv: "cat/pkg-1",
             use_flags: "",
             work_base: "/tmp/work",

@@ -83,6 +83,7 @@ impl RunAsync<&cli::Cli> for WorkerArgs {
             .collect();
         ebuild::run_install_worker(ebuild::InstallWorker {
             ebuild_path: &self.ebuild,
+            repo: &self.repo,
             cpv_str: &self.cpv,
             use_flags_str: &self.use_flags,
             work_base: &self.work_base,
@@ -550,9 +551,6 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
         } => {
             let resolved = globals.repo_path();
             let repo_path = camino::Utf8Path::new(&resolved);
-            if !repo_path.is_dir() {
-                bail!("repo not found at {resolved}");
-            }
             let repo = crate::repo_open::open(repo_path.as_std_path())?;
             let vdb = open_cli_vdb(globals).ok();
             let roots = globals.roots();

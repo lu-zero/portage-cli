@@ -2005,6 +2005,8 @@ mod tests {
             "__worker",
             "--ebuild",
             "/tmp/pkg.ebuild",
+            "--repo",
+            "/tmp",
             "--cpv",
             "cat/pkg-1",
             "--use-flags",
@@ -2198,6 +2200,9 @@ pub struct WorkerArgs {
     pub quiet: bool,
     #[arg(long)]
     pub ebuild: String,
+    /// The repository's location, opened by name rather than found above `--ebuild`
+    #[arg(long)]
+    pub repo: String,
     /// The resolved plan entry's authoritative cpv — see
     /// `privilege::WorkerArgs::cpv`.
     #[arg(long)]

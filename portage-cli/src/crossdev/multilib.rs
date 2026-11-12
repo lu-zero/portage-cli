@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use camino::Utf8Path;
 
 /// The per-ABI multilib variables multilib.eclass computes for one tuple
 pub struct MultilibEnv {
@@ -46,12 +45,9 @@ impl MultilibEnv {
 
 /// Run multilib.eclass's `multilib_env` for `tuple` (crossdev's
 /// `load_multilib_env`), returning the per-ABI tables it computes. Shells out to
-/// bash exactly as crossdev does — the eclass owns each arch's ABI definitions.
-pub fn query(tuple: &str, eclass_dir: &Utf8Path) -> Result<MultilibEnv> {
-    let eclass = eclass_dir.join("multilib.eclass");
-    if !eclass.is_file() {
-        bail!("multilib.eclass not found at {eclass}");
-    }
+/// bash exactly as crossdev does — the eclass owns each arch's ABI definitions. `eclass` is
+/// multilib.eclass's text, fed on stdin.
+pub fn query(tuple: &str, eclass: &str) -> Result<MultilibEnv> {
     // Mirrors crossdev's load_multilib_env subshell: stub `inherit`, source the
     // eclass, then run `multilib_env`. The `single_abi` dance collapses the
     // "default" sentinel to the concrete DEFAULT_ABI. CTARGET must be set as a
@@ -67,7 +63,7 @@ CTARGET={tuple}
 unset ${{!CFLAGS_*}} ${{!CHOST_*}} ${{!CTARGET_*}} ${{!LDFLAGS_*}} ${{!LIBDIR_*}}
 inherit() {{ :; }}
 die() {{ echo "die: $*" >&2; exit 1; }}
-EAPI=7 . "{eclass}" || exit 1
+EAPI=7 . /dev/stdin || exit 1
 unset DEFAULT_ABI
 if [[ ${{MULTILIB_ABIS}} == default ]]; then unset MULTILIB_ABIS; single_abi=true; else single_abi=false; fi
 multilib_env "{tuple}"
@@ -89,10 +85,23 @@ printf 'MULTILIB_ABIS=%s\n' "${{MULTILIB_ABIS}}"
 printf 'DEFAULT_ABI=%s\n' "${{DEFAULT_ABI}}"
 "#
     );
-    let out = Command::new("bash")
+    let mut child = Command::new("bash")
         .arg("-c")
         .arg(&snippet)
-        .output()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("running bash to evaluate multilib_env")?;
+    // bash may exit before reading it all (a `die`); its stderr below says why.
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(e) = std::io::Write::write_all(&mut stdin, eclass.as_bytes())
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        return Err(e).context("feeding multilib.eclass to bash");
+    }
+    let out = child
+        .wait_with_output()
         .context("running bash to evaluate multilib_env")?;
     if !out.status.success() {
         bail!(

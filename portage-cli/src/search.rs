@@ -128,7 +128,11 @@ type DescIndex = Vec<(Cpv, String)>;
 
 /// The repository's [`DescIndex`]; `None` when it has none
 fn desc_index(repo: &Repository) -> Option<DescIndex> {
-    let text = std::fs::read_to_string(repo.path().join("metadata/pkg_desc_index")).ok()?;
+    let (_, text) = repo
+        .file("metadata/pkg_desc_index")
+        .texts()
+        .into_iter()
+        .next()?;
     Some(
         text.lines()
             .filter_map(|line| {

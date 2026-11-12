@@ -76,7 +76,7 @@ fn affected<'a>(
 /// The typed parser answers "no moves" for both a missing directory and an
 /// empty one, and the two cases report differently.
 pub(crate) fn has_updates_dir(repo: &Repository) -> bool {
-    repo.path().join("profiles").join("updates").is_dir()
+    repo.file("profiles/updates").is_dir()
 }
 
 #[cfg(test)]

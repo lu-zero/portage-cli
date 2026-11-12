@@ -304,7 +304,7 @@ pub struct EbuildShell {
     /// the first phase sources it; reset when a different ebuild runs.
     phase_sourced_ebuild: Option<Utf8PathBuf>,
     repo_path: Utf8PathBuf,
-    eclass_dirs: Vec<Utf8PathBuf>,
+    repo_name: portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
     /// Active USE flags for this shell session
     /// Used by the `use()`, `usev()`, `usex()` functions.
     use_flags: HashSet<String>,
@@ -511,13 +511,6 @@ impl EbuildShell {
             .await
             .map_err(|e| Error::Shell(e.to_string()))?;
 
-        let eclass_dir: Utf8PathBuf = repo.path().join("eclass");
-        let eclass_dirs: Vec<Utf8PathBuf> = if eclass_dir.is_dir() {
-            vec![eclass_dir]
-        } else {
-            Vec::new()
-        };
-
         // Register Portage-specific shell functions (die, EXPORT_FUNCTIONS, etc.)
         stubs::register(&mut shell).await?;
 
@@ -529,6 +522,7 @@ impl EbuildShell {
         shell.set_builtin_state(inherit::InheritState {
             inherited: Vec::new(),
             cache: eclass_cache,
+            trees: repo.eclass_tree().into_iter().collect(),
         });
 
         // Register PMS utility and phase-body-only builtins — always real,
@@ -744,7 +738,7 @@ impl EbuildShell {
         let terminal = terminal::TerminalState::default();
         shell.set_builtin_state(terminal.clone());
 
-        let mut ebuild_shell = EbuildShell {
+        let ebuild_shell = EbuildShell {
             shell,
             distdir_override: None,
             resolved_distdir_cache: None,
@@ -766,10 +760,9 @@ impl EbuildShell {
             profile_shell: None,
             phase_sourced_ebuild: None,
             repo_path: repo.path().to_path_buf(),
-            eclass_dirs,
+            repo_name: repo.name(),
             use_flags: HashSet::new(),
         };
-        ebuild_shell.sync_eclass_dirs_var();
 
         Ok(ebuild_shell)
     }
@@ -1272,24 +1265,19 @@ impl EbuildShell {
         self.phase_sourced_ebuild = Some(ebuild.path().to_path_buf());
     }
 
-    /// Append an eclass directory (searched after existing dirs)
-    pub fn add_eclass_dir(&mut self, dir: Utf8PathBuf) {
+    /// Search `repo`'s eclasses after those already searched
+    pub fn add_eclass_repo(&mut self, repo: &Repository) {
+        let Some(tree) = repo.eclass_tree() else {
+            return;
+        };
         self.invalidate_baseline();
-        self.eclass_dirs.push(dir);
-        self.sync_eclass_dirs_var();
-    }
-
-    /// Update the `__PORTAGE_ECLASS_DIRS` shell variable to reflect the
-    /// current set of eclass directories.  Called after any mutation of
-    /// [`Self::eclass_dirs`].
-    fn sync_eclass_dirs_var(&mut self) {
-        let value: String = self
-            .eclass_dirs
-            .iter()
-            .map(|p| p.as_str())
-            .collect::<Vec<_>>()
-            .join(":");
-        self.set_var("__PORTAGE_ECLASS_DIRS", &value);
+        let mut state = self
+            .shell
+            .builtin_state::<inherit::InheritState>()
+            .cloned()
+            .unwrap_or_default();
+        state.trees.push(tree);
+        self.shell.set_builtin_state(state);
     }
 
     /// Set the PMS mandatory name/version variables (`CATEGORY`, `PN`, `PV`,
@@ -1540,9 +1528,7 @@ impl EbuildShell {
 
         // CacheEntry::parse derives `inherited` from `_eclasses_`, which doesn't
         // exist yet during regen. Read the transitive list directly from the
-        // `inherit` builtin's Rust state — no bash-string parsing needed. The
-        // resolved file paths come along too so the cache writer can md5 each
-        // eclass without re-resolving the name (which would miss masters).
+        // `inherit` builtin's Rust state, with the md5 of each text sourced.
         let inherited = self
             .shell
             .builtin_state::<inherit::InheritState>()
@@ -1552,7 +1538,7 @@ impl EbuildShell {
             .iter()
             .map(|e| portage_atom::interner::Interned::intern(&e.name))
             .collect();
-        let eclasses = inherited.into_iter().map(|e| (e.name, e.path)).collect();
+        let eclasses = inherited.into_iter().map(|e| (e.name, e.md5)).collect();
 
         Ok(crate::source::SourcedEbuild {
             metadata,
@@ -2281,6 +2267,23 @@ impl EbuildShell {
         )
     }
 
+    /// [`Self::source_make_defaults`] for a `make.defaults` read into memory, named `shown`
+    pub(crate) async fn source_make_defaults_text(
+        &mut self,
+        text: &str,
+        shown: &str,
+    ) -> Result<()> {
+        self.invalidate_baseline();
+        let params = self.shell.default_exec_params();
+        let source_info = SourceInfo::from(shown);
+        let result = self
+            .shell
+            .run_string(text, &source_info, &params)
+            .await
+            .map_err(|e| Error::Shell(format!("sourcing make.defaults {shown}: {e}")))?;
+        require_completed(&format!("sourcing make.defaults {shown}"), result)
+    }
+
     /// Evaluate conf-layer content held in memory, as strictly as [`Self::source_make_defaults`].
     pub(crate) async fn source_conf_str(&mut self, content: &str) -> Result<()> {
         self.invalidate_baseline();
@@ -2339,15 +2342,6 @@ impl EbuildShell {
             }
         }
         Ok(())
-    }
-
-    /// Resolve the path of a named eclass by searching the configured eclass directories
-    pub fn eclass_path(&self, name: &str) -> Option<Utf8PathBuf> {
-        let filename = format!("{name}.eclass");
-        self.eclass_dirs
-            .iter()
-            .map(|dir| dir.join(&filename))
-            .find(|p| p.is_file())
     }
 
     /// The names of the variables the shell holds, bash's own internals left out
@@ -2499,13 +2493,7 @@ impl EbuildShell {
                 p.sort();
                 p
             },
-            // The repo name lives in `<repo>/profiles/repo_name`, not a shell var.
-            repository: std::fs::read_to_string(
-                self.repo_path.join("profiles/repo_name").as_std_path(),
-            )
-            .ok()
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty()),
+            repository: Some(self.repo_name),
             inherited: split("INHERITED"),
             features: get_opt("FEATURES"),
             chost: get_opt("CHOST"),
@@ -2791,10 +2779,7 @@ impl Repository {
     pub async fn shell_with_masters(&self, masters: &[&Repository]) -> Result<EbuildShell> {
         let mut shell = EbuildShell::new(self).await?;
         for master in masters.iter().rev() {
-            let dir = master.path().join("eclass");
-            if dir.is_dir() {
-                shell.add_eclass_dir(dir);
-            }
+            shell.add_eclass_repo(master);
         }
         Ok(shell)
     }
@@ -2808,10 +2793,7 @@ impl Repository {
     ) -> Result<EbuildShell> {
         let mut shell = EbuildShell::new_with_cache(self, ctx).await?;
         for master in masters.iter().rev() {
-            let dir = master.path().join("eclass");
-            if dir.is_dir() {
-                shell.add_eclass_dir(dir);
-            }
+            shell.add_eclass_repo(master);
         }
         Ok(shell)
     }

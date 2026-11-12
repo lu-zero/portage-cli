@@ -787,6 +787,8 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
         self_contained_bootstrap,
         ..
     } = *flags;
+    let ebuild_path = planned.ebuild.checkout()?;
+    let repo = planned.ebuild.location();
 
     let BinpkgReuse {
         local: reused,
@@ -823,7 +825,8 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
         }
         // Source: distfile fetch only.
         return ebuild::build_and_merge(ebuild::BuildAndMerge {
-            ebuild_path: &planned.ebuild_path,
+            ebuild_path: &ebuild_path,
+            repo,
             cpv: &planned.cpv,
             use_flags: &planned.use_flags,
             work_base,
@@ -847,7 +850,8 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
             .unwrap_or_else(|| camino::Utf8Path::new("/invalid-binpkg-path"));
         return ebuild::merge_binpkg(ebuild::MergeBinpkg {
             binpkg_path: path,
-            ebuild_path: &planned.ebuild_path,
+            ebuild_path: &ebuild_path,
+            repo,
             cpv: &planned.cpv,
             use_flags: &planned.use_flags,
             work_base,
@@ -867,7 +871,8 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
                 tracing::info!("Fetched binary package: {url}");
                 ebuild::merge_binpkg(ebuild::MergeBinpkg {
                     binpkg_path: &path,
-                    ebuild_path: &planned.ebuild_path,
+                    ebuild_path: &ebuild_path,
+                    repo,
                     cpv: &planned.cpv,
                     use_flags: &planned.use_flags,
                     work_base,
@@ -886,7 +891,8 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
                     "failed to fetch binpkg {url} — {e:#}; building from source"
                 );
                 ebuild::build_and_merge(ebuild::BuildAndMerge {
-                    ebuild_path: &planned.ebuild_path,
+                    ebuild_path: &ebuild_path,
+                    repo,
                     cpv: &planned.cpv,
                     use_flags: &planned.use_flags,
                     work_base,
@@ -908,7 +914,8 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
         bail!("no matching binpkg and source builds disabled (-K/--getbinpkgonly)");
     } else {
         ebuild::build_and_merge(ebuild::BuildAndMerge {
-            ebuild_path: &planned.ebuild_path,
+            ebuild_path: &ebuild_path,
+            repo,
             cpv: &planned.cpv,
             use_flags: &planned.use_flags,
             work_base,
@@ -1709,7 +1716,7 @@ mod entry_roots_tests {
             merge_root,
             cpv: portage_atom::Cpv::parse("dev-python/jinja2-3.1.6")?,
             slot: None,
-            ebuild_path: camino::Utf8PathBuf::new(),
+            ebuild: portage_repo::tree::EbuildFile::on_disk(camino::Utf8Path::new("")),
             use_flags: Vec::new(),
             depend: Vec::new(),
             bdepend: Vec::new(),
@@ -2025,7 +2032,7 @@ mod unmerge_scheduling_tests {
             merge_root: MergeRoot::Target,
             cpv: portage_atom::Cpv::parse(cpv).unwrap(),
             slot: None,
-            ebuild_path: camino::Utf8PathBuf::new(),
+            ebuild: portage_repo::tree::EbuildFile::on_disk(camino::Utf8Path::new("")),
             use_flags: Vec::new(),
             depend: Vec::new(),
             bdepend: Vec::new(),

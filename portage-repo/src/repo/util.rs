@@ -10,12 +10,6 @@ pub(crate) fn io_err(path: impl AsRef<Path>, source: std::io::Error) -> Error {
     }
 }
 
-/// Read a file to a string, mapping I/O errors to `Error::Io`
-pub(crate) fn read_to_string(path: impl AsRef<Path>) -> Result<String> {
-    let path = path.as_ref();
-    std::fs::read_to_string(path).map_err(|e| io_err(path, e))
-}
-
 /// How to expand a Portage-style config path that may be a file or a directory
 ///
 /// Portage accepts many `/etc/portage/*` (and profile) paths as either a

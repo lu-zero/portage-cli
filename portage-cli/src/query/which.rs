@@ -21,8 +21,8 @@ pub fn run(
     for raw in atoms {
         let dep = super::resolve_atom(set, vdb, mode, raw)?;
 
-        match best_ebuild_path(&ebuilds, &dep) {
-            Some(path) => println!("{path}"),
+        match best_ebuild(&ebuilds, &dep) {
+            Some(ebuild) => println!("{}", ebuild.display()),
             None => crate::style::warn_line!("no ebuild found for '{raw}'"),
         }
     }
@@ -30,15 +30,15 @@ pub fn run(
 }
 
 /// The highest-version ebuild among `ebuilds` matching `dep`
-fn best_ebuild_path<'a>(
+fn best_ebuild<'a>(
     ebuilds: &'a [portage_repo::EbuildIn<'a>],
     dep: &Dep,
-) -> Option<&'a camino::Utf8Path> {
+) -> Option<&'a portage_repo::Ebuild> {
     ebuilds
         .iter()
         .filter(|item| dep_matches_cpv(dep, item.ebuild.cpv()))
         .max_by(|a, b| a.ebuild.cpv().version.cmp(&b.ebuild.cpv().version))
-        .map(|item| item.ebuild.path())
+        .map(|item| &item.ebuild)
 }
 
 pub fn dep_matches_cpv(dep: &Dep, cpv: &Cpv) -> bool {
@@ -87,7 +87,9 @@ mod tests {
         let ebuilds: Vec<_> = set.ebuilds().unwrap().collect();
 
         let dep = Dep::from_str("app-misc/bar").unwrap();
-        let path = best_ebuild_path(&ebuilds, &dep).expect("overlay-only ebuild found");
+        let path = best_ebuild(&ebuilds, &dep)
+            .expect("overlay-only ebuild found")
+            .path();
         assert!(path.as_str().contains("bar-2.0.ebuild"));
     }
 
@@ -107,7 +109,7 @@ mod tests {
         let ebuilds: Vec<_> = set.ebuilds().unwrap().collect();
 
         let dep = Dep::from_str("sys-apps/foo").unwrap();
-        let path = best_ebuild_path(&ebuilds, &dep).expect("ebuild found");
+        let path = best_ebuild(&ebuilds, &dep).expect("ebuild found").path();
         assert!(path.starts_with(&overlay_path_prefix));
     }
 }

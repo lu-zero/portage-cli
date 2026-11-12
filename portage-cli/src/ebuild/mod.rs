@@ -587,6 +587,8 @@ async fn lock_merge_lock(work_base: &Utf8Path) -> Result<std::fs::File> {
 /// phase chain into `root`.
 pub struct BuildAndMerge<'a> {
     pub ebuild_path: &'a Utf8Path,
+    /// The repository's location: the build opens it, not the directory above `ebuild_path`
+    pub repo: &'a Utf8Path,
     pub cpv: &'a portage_atom::Cpv,
     pub use_flags:
         &'a [portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>],
@@ -625,6 +627,7 @@ pub struct BuildAndMerge<'a> {
 pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
     let BuildAndMerge {
         ebuild_path,
+        repo,
         cpv,
         use_flags,
         work_base,
@@ -656,7 +659,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
                 all_uri: fetch_all_uri,
             },
             work_dir: Some(&work_dir),
-            repo_override: None,
+            repo_override: Some(repo.as_str()),
             root,
             use_flags: Some(use_flags),
             distdir,
@@ -678,7 +681,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             cpv: Some(cpv),
             group: &PhaseGroup::BuildOnly,
             work_dir: Some(&work_dir),
-            repo_override: None,
+            repo_override: Some(repo.as_str()),
             root,
             use_flags: Some(use_flags),
             distdir,
@@ -703,7 +706,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             cpv: Some(cpv),
             group: &PhaseGroup::Compile,
             work_dir: Some(&work_dir),
-            repo_override: None,
+            repo_override: Some(repo.as_str()),
             root,
             use_flags: Some(use_flags),
             distdir,
@@ -722,6 +725,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             backend,
             WorkerStep {
                 ebuild_path,
+                repo,
                 cpv,
                 use_flags,
                 work_base,
@@ -744,7 +748,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             cpv: Some(cpv),
             group: &PhaseGroup::Full,
             work_dir: Some(&work_dir),
-            repo_override: None,
+            repo_override: Some(repo.as_str()),
             root,
             use_flags: Some(use_flags),
             distdir,
@@ -771,6 +775,8 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
 pub struct MergeBinpkg<'a> {
     pub binpkg_path: &'a Utf8Path,
     pub ebuild_path: &'a Utf8Path,
+    /// See [`BuildAndMerge::repo`]
+    pub repo: &'a Utf8Path,
     pub cpv: &'a portage_atom::Cpv,
     pub use_flags:
         &'a [portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>],
@@ -797,6 +803,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
     let MergeBinpkg {
         binpkg_path,
         ebuild_path,
+        repo,
         cpv,
         use_flags,
         work_base,
@@ -819,6 +826,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
             backend,
             WorkerStep {
                 ebuild_path,
+                repo,
                 cpv,
                 use_flags,
                 work_base,
@@ -843,7 +851,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
             cpv: Some(cpv),
             group: &PhaseGroup::BinpkgMerge,
             work_dir: Some(&work_dir),
-            repo_override: None,
+            repo_override: Some(repo.as_str()),
             root,
             use_flags: Some(use_flags),
             distdir: None,
@@ -868,6 +876,8 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
 /// Inputs for [`run_install_worker`] (the privilege-wrapped `__worker` child)
 pub struct InstallWorker<'a> {
     pub ebuild_path: &'a str,
+    /// See [`BuildAndMerge::repo`]
+    pub repo: &'a str,
     pub cpv_str: &'a str,
     pub use_flags_str: &'a str,
     pub work_base: &'a str,
@@ -921,6 +931,7 @@ fn worker_activity_cli(
 /// of the `WorkerArgs` is assembled from the shared context.
 struct WorkerStep<'a> {
     ebuild_path: &'a Utf8Path,
+    repo: &'a Utf8Path,
     cpv: &'a portage_atom::Cpv,
     use_flags: &'a [portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>],
     work_base: &'a Utf8Path,
@@ -965,6 +976,7 @@ async fn spawn_install_worker_step(
         backend,
         &crate::privilege::WorkerArgs {
             ebuild_path: step.ebuild_path.as_str(),
+            repo: step.repo.as_str(),
             cpv: &cpv_str,
             use_flags: &use_str,
             work_base: step.work_base.as_str(),
@@ -1036,6 +1048,7 @@ fn worker_activity_ctx(
 pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
     let InstallWorker {
         ebuild_path,
+        repo,
         cpv_str,
         use_flags_str,
         work_base,
@@ -1094,7 +1107,7 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         cpv: Some(&cpv),
         group: &group,
         work_dir: Some(&work_dir),
-        repo_override: None,
+        repo_override: Some(repo),
         root: Utf8Path::new(root),
         use_flags: Some(&use_flags),
         distdir: distdir.map(Utf8Path::new),

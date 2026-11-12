@@ -30,10 +30,9 @@ pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[Stri
             .ok_or_else(|| anyhow!("no cache entry for {cpv} — run `em regen`"))?;
 
         let xml_flags: BTreeMap<String, String> = best
-            .path()
-            .parent()
-            .and_then(|dir| std::fs::read_to_string(dir.join("metadata.xml")).ok())
-            .and_then(|xml| portage_repo::PkgMetadata::parse(&xml).ok())
+            .metadata_xml()
+            .ok()
+            .flatten()
             .map(|meta| meta.into_use_flags())
             .unwrap_or_default();
 

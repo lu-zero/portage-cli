@@ -51,7 +51,8 @@ pub struct MergeSpec {
     /// Phase functions defined by the ebuild (e.g. `["configure", "install"]`)
     pub defined_phases: Vec<String>,
     /// Repository name (e.g. `"gentoo"`)
-    pub repository: Option<String>,
+    pub repository:
+        Option<portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>>,
     /// Inherited eclasses (INHERITED)
     pub inherited: Vec<String>,
     /// FEATURES active for the build
@@ -383,7 +384,7 @@ mod tests {
             restrict: None,
             properties: None,
             defined_phases: vec!["configure".into(), "install".into()],
-            repository: Some("gentoo".into()),
+            repository: Some(portage_atom::interner::Interned::intern("gentoo")),
             inherited: vec![],
             features: None,
             chost: None,

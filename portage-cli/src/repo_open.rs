@@ -7,13 +7,18 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use portage_repo::{RepoSet, Repository, Result};
+use portage_repo::{RepoSet, Repository, RepositoryBuilder, Result};
+
+/// The builder every em repository starts from
+fn builder() -> RepositoryBuilder {
+    Repository::builder()
+        .user_cache_root(crate::xdg::md5_cache_root())
+        .checkout_root(crate::xdg::checkout_root())
+}
 
 /// Open a tree with secondary at `$XDG_CACHE_HOME/em/md5-cache/<repo-name>`
 pub fn open(path: impl Into<PathBuf>) -> Result<Repository> {
-    Repository::builder()
-        .user_cache_root(crate::xdg::md5_cache_root())
-        .open(path)
+    builder().open(path)
 }
 
 /// Open a tree and its masters (owned by the returned `Repository`, see
@@ -24,9 +29,7 @@ pub fn open_with_masters(
     masters_override: Option<&[String]>,
     default_master: Option<&str>,
 ) -> Result<Repository> {
-    Repository::builder()
-        .user_cache_root(crate::xdg::md5_cache_root())
-        .open_with_masters(path, repos_dir, masters_override, default_master)
+    builder().open_with_masters(path, repos_dir, masters_override, default_master)
 }
 
 /// The full priority-ordered [`RepoSet`] for this invocation: `main` plus

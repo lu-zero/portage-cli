@@ -47,14 +47,14 @@ pub struct PlannedMerge {
     /// The identity to build/register under (display + work-dir naming +
     /// VDB category) — for a cross-derived package this is the *virtual*
     /// cpv (`cross-<tuple>/gcc-...`), which may differ from the real cpn
-    /// `ebuild_path` was resolved through. Kept as a real `Cpv`, not a
+    /// `ebuild` was resolved through. Kept as a real `Cpv`, not a
     /// formatted string, so nothing downstream has to re-derive it by
     /// parsing a path or string.
     pub cpv: Cpv,
     /// The `SLOT` this entry is built in (`None` when the plan entry carries none)
     pub slot: Option<Interned<DefaultInterner>>,
-    /// Absolute path to the ebuild
-    pub ebuild_path: camino::Utf8PathBuf,
+    /// The ebuild in its repository's tree
+    pub ebuild: portage_repo::tree::EbuildFile,
     /// Effective enabled USE flags for this build: the global config and
     /// per-package overrides resolved per the displayed plan (including
     /// profile-injected implicit flags like `elibc_glibc`/`kernel_linux`,

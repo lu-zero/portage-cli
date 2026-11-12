@@ -27,12 +27,12 @@ pub struct UseDb {
 }
 
 impl UseDb {
-    /// Load from a repository root directory
-    pub fn load(repo_path: &Utf8Path) -> Result<Self> {
-        let profiles = repo_path.join("profiles");
-        let global = parse_use_desc(&profiles.join("use.desc"))?;
-        let local = parse_use_local_desc(&profiles.join("use.local.desc"))?;
-        Ok(Self { global, local })
+    /// Build from the text of `profiles/use.desc` and `profiles/use.local.desc`
+    pub(crate) fn parse(use_desc: &str, use_local_desc: &str) -> Self {
+        Self {
+            global: parse_use_desc(use_desc),
+            local: parse_use_local_desc(use_local_desc),
+        }
     }
 
     /// All global USE flags with their descriptions
@@ -73,7 +73,8 @@ impl UseDb {
     ///
     /// This is the source-of-truth pass used to regenerate `profiles/use.local.desc`.
     pub fn build_local_from_repo(repo: &Repository) -> Result<Self> {
-        let global = parse_use_desc(&repo.path().join("profiles/use.desc"))?;
+        let use_desc = crate::tree::read_text(repo.tree(), "profiles/use.desc")?;
+        let global = parse_use_desc(use_desc.as_deref().unwrap_or_default());
         let mut local: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
 
         for cat in repo.categories() {
@@ -126,15 +127,8 @@ impl UseDb {
 }
 
 /// Parse `profiles/use.desc`.  Each non-comment line is `flag - description`
-fn parse_use_desc(path: &Utf8Path) -> Result<BTreeMap<String, String>> {
+fn parse_use_desc(content: &str) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
-    if !path.exists() {
-        return Ok(map);
-    }
-    let content = std::fs::read_to_string(path).map_err(|e| Error::Io {
-        path: path.to_path_buf().into_std_path_buf(),
-        source: e,
-    })?;
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -144,21 +138,14 @@ fn parse_use_desc(path: &Utf8Path) -> Result<BTreeMap<String, String>> {
             map.insert(flag.trim().to_string(), desc.trim().to_string());
         }
     }
-    Ok(map)
+    map
 }
 
 /// Parse `profiles/use.local.desc`
 ///
 /// Each non-comment line is `cat/pkg:flag - description`.
-fn parse_use_local_desc(path: &Utf8Path) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
+fn parse_use_local_desc(content: &str) -> BTreeMap<String, BTreeMap<String, String>> {
     let mut map: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    if !path.exists() {
-        return Ok(map);
-    }
-    let content = std::fs::read_to_string(path).map_err(|e| Error::Io {
-        path: path.to_path_buf().into_std_path_buf(),
-        source: e,
-    })?;
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -174,34 +161,16 @@ fn parse_use_local_desc(path: &Utf8Path) -> Result<BTreeMap<String, BTreeMap<Str
             .or_default()
             .insert(flag.trim().to_string(), desc.trim().to_string());
     }
-    Ok(map)
+    map
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::tempdir;
-
-    fn write_file(dir: &Utf8Path, name: &str, content: &str) {
-        let mut f = std::fs::File::create(dir.join(name)).unwrap();
-        f.write_all(content.as_bytes()).unwrap();
-    }
-
-    fn make_repo(use_desc: &str, use_local_desc: &str) -> (tempfile::TempDir, UseDb) {
-        let dir = tempdir().unwrap();
-        let root = Utf8Path::from_path(dir.path()).unwrap();
-        let profiles = root.join("profiles");
-        std::fs::create_dir(&profiles).unwrap();
-        write_file(&profiles, "use.desc", use_desc);
-        write_file(&profiles, "use.local.desc", use_local_desc);
-        let db = UseDb::load(root).unwrap();
-        (dir, db)
-    }
 
     #[test]
     fn global_flags_parsed() {
-        let (_dir, db) = make_repo(
+        let db = UseDb::parse(
             "# comment\nssl - Enable SSL support\ndoc - Build docs\n",
             "",
         );
@@ -212,7 +181,7 @@ mod tests {
 
     #[test]
     fn local_flags_parsed() {
-        let (_dir, db) = make_repo(
+        let db = UseDb::parse(
             "",
             "# generated\ndev-libs/openssl:rfc3779 - Enable RFC 3779 support\ndev-libs/openssl:ktls - Enable kernel TLS\n",
         );
@@ -224,7 +193,7 @@ mod tests {
 
     #[test]
     fn describe_local_before_global() {
-        let (_dir, db) = make_repo(
+        let db = UseDb::parse(
             "ssl - Global SSL desc\n",
             "dev-libs/openssl:ssl - Package-specific SSL desc\n",
         );
@@ -240,22 +209,12 @@ mod tests {
 
     #[test]
     fn packages_with_local_flags() {
-        let (_dir, db) = make_repo(
+        let db = UseDb::parse(
             "",
             "cat/a:flag1 - desc1\ncat/b:flag2 - desc2\ncat/a:flag3 - desc3\n",
         );
         let pkgs: Vec<&str> = db.packages_with_local_flags().collect();
         assert_eq!(pkgs, ["cat/a", "cat/b"]);
         assert_eq!(db.local_flags("cat/a").unwrap().len(), 2);
-    }
-
-    #[test]
-    fn missing_files_return_empty() {
-        let dir = tempdir().unwrap();
-        let root = Utf8Path::from_path(dir.path()).unwrap();
-        std::fs::create_dir(root.join("profiles")).unwrap();
-        let db = UseDb::load(root).unwrap();
-        assert_eq!(db.global().len(), 0);
-        assert_eq!(db.packages_with_local_flags().count(), 0);
     }
 }

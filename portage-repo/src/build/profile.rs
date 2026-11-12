@@ -94,9 +94,10 @@ impl Profile {
     ///
     /// See [PMS 5.2.4](https://projects.gentoo.org/pms/9/pms.html#makedefaults).
     pub async fn make_defaults(&self, shell: &mut EbuildShell) -> Result<()> {
-        let path = self.path().join("make.defaults");
-        if path.is_file() {
-            shell.source_make_defaults(&path).await?;
+        if let Some(text) = self.read_file("make.defaults")? {
+            shell
+                .source_make_defaults_text(&text, &self.shown("make.defaults"))
+                .await?;
         }
         Ok(())
     }
@@ -191,10 +192,10 @@ impl ProfileStack {
         let mut expand_acc: HashMap<String, String> = HashMap::new();
 
         for profile in self.profiles() {
-            let path = profile.path().join("make.defaults");
-            if !path.is_file() {
+            let Some(text) = profile.read_file("make.defaults")? else {
                 continue;
-            }
+            };
+            let path = profile.path().join("make.defaults");
 
             // USE_EXPAND/USE_EXPAND_UNPREFIXED names known from *prior*
             // layers, used only to decide what to reset before sourcing so
@@ -226,7 +227,9 @@ impl ProfileStack {
 
             // Source the file through brush — all bash features available,
             // cross-file non-incremental vars (set by earlier files) are visible.
-            shell.source_make_defaults(&path).await?;
+            shell
+                .source_make_defaults_text(&text, &profile.shown("make.defaults"))
+                .await?;
 
             // Capture this layer's contribution to the true incrementals only.
             let mut vars: HashMap<&'static str, String> = HashMap::new();

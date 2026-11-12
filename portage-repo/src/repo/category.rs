@@ -3,7 +3,7 @@ use std::sync::Arc;
 use camino::{Utf8Path, Utf8PathBuf};
 
 use super::package::Package;
-use super::util;
+use crate::tree::{EntryKind, TreeSource, tree_lines};
 
 type CategoryFilter = dyn Fn(&Category) -> bool + Send + Sync;
 type PackageFilter = dyn Fn(&Package) -> bool + Send + Sync;
@@ -13,15 +13,26 @@ type PackageFilter = dyn Fn(&Package) -> bool + Send + Sync;
 /// Represents a directory such as `dev-lang/` containing package directories.
 ///
 /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Category {
     name: String,
     path: Utf8PathBuf,
+    tree: Arc<dyn TreeSource>,
+}
+
+impl std::fmt::Debug for Category {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Category")
+            .field("name", &self.name)
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Category {
-    pub(crate) fn new(name: String, path: Utf8PathBuf) -> Self {
-        Self { name, path }
+    /// `path` is the checkout's directory for `name`; reads go through `tree`
+    pub(crate) fn new(name: String, path: Utf8PathBuf, tree: Arc<dyn TreeSource>) -> Self {
+        Self { name, path, tree }
     }
 
     /// The category name (e.g. `dev-lang`)
@@ -34,25 +45,28 @@ impl Category {
         &self.path
     }
 
-    /// Whether the category directory exists on disk
+    /// Whether the category directory exists in the repository
     pub fn exists(&self) -> bool {
-        self.path.is_dir()
+        is_dir(&*self.tree, Utf8Path::new(&self.name))
     }
 
     /// Lazy iterator over all packages in this category
     pub fn packages(&self) -> Packages {
-        Packages::new(self.path.clone(), self.name.clone())
+        Packages::new(self.clone())
     }
 
     /// Look up a specific package by name
     pub fn package(&self, name: &str) -> Option<Package> {
-        let path = self.path.join(name);
-        if path.is_dir() {
-            Some(Package::new(&self.name, name, path))
-        } else {
-            None
-        }
+        is_dir(&*self.tree, &Utf8Path::new(&self.name).join(name)).then(|| self.child(name))
     }
+
+    fn child(&self, name: &str) -> Package {
+        Package::new(&self.name, name, self.path.join(name), self.tree.clone())
+    }
+}
+
+fn is_dir(tree: &dyn TreeSource, rel: &Utf8Path) -> bool {
+    matches!(tree.kind(rel), Ok(Some(EntryKind::Dir)))
 }
 
 /// Lazy, composable package discovery within a category directory
@@ -60,8 +74,7 @@ impl Category {
 /// Produced by [`Category::packages`]. Nothing is read until the iterator
 /// is driven. Use `.filter()` to restrict and `.collect_vec()` to materialise.
 pub struct Packages {
-    path: Utf8PathBuf,
-    category: String,
+    category: Category,
     filter: Option<Arc<PackageFilter>>,
 }
 
@@ -72,9 +85,8 @@ pub struct PackagesIter {
 }
 
 impl Packages {
-    fn new(path: Utf8PathBuf, category: String) -> Self {
+    fn new(category: Category) -> Self {
         Self {
-            path,
             category,
             filter: None,
         }
@@ -100,43 +112,22 @@ impl IntoIterator for Packages {
     type IntoIter = PackagesIter;
 
     fn into_iter(self) -> PackagesIter {
-        let Ok(entries) = std::fs::read_dir(&self.path) else {
-            return PackagesIter {
-                entries: Vec::new().into_iter(),
-                filter: self.filter,
-            };
-        };
-
-        let mut packages = Vec::new();
-        for entry in entries {
-            let Ok(entry) = entry else { continue };
-            let Ok(ft) = entry.file_type() else {
-                continue;
-            };
-            // Follow symlinks — some overlays (notably crossdev) symlink
-            // their package dirs at the gentoo originals.
-            let is_dir = if ft.is_dir() {
-                true
-            } else if ft.is_symlink() {
-                std::fs::metadata(entry.path())
-                    .map(|m| m.is_dir())
-                    .unwrap_or(false)
-            } else {
-                false
-            };
-            if !is_dir {
-                continue;
-            }
-            let file_name = entry.file_name();
-            let name = file_name.to_string_lossy();
-            if name.starts_with('.') || name == "CVS" {
-                continue;
-            }
-            let Ok(path) = entry.path().try_into() else {
-                continue;
-            };
-            packages.push(Package::new(&self.category, &name, path));
-        }
+        // `list` follows symlinks: some overlays (notably crossdev) symlink their package dirs
+        // at the gentoo originals.
+        let cat = &self.category;
+        let children = cat
+            .tree
+            .list(Utf8Path::new(&cat.name))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let mut packages: Vec<Package> = children
+            .into_iter()
+            .filter(|(name, kind)| {
+                *kind == EntryKind::Dir && !name.starts_with('.') && name != "CVS"
+            })
+            .map(|(name, _)| cat.child(&name))
+            .collect();
         packages.sort_by(|a, b| a.name().cmp(b.name()));
         PackagesIter {
             entries: packages.into_iter(),
@@ -166,8 +157,8 @@ impl Iterator for PackagesIter {
 /// Produced by [`Repository::categories`](crate::Repository::categories).
 /// Nothing is read until the iterator is driven.
 pub struct Categories {
-    file: Utf8PathBuf,
     repo: Utf8PathBuf,
+    tree: Arc<dyn TreeSource>,
     filter: Option<Arc<CategoryFilter>>,
 }
 
@@ -175,14 +166,16 @@ pub struct Categories {
 pub struct CategoriesIter {
     lines: std::vec::IntoIter<String>,
     repo: Utf8PathBuf,
+    tree: Arc<dyn TreeSource>,
     filter: Option<Arc<CategoryFilter>>,
 }
 
 impl Categories {
-    pub(crate) fn new(file: Utf8PathBuf, repo: Utf8PathBuf) -> Self {
+    /// The categories `profiles/categories` lists; `repo` is the checkout root
+    pub(crate) fn new(repo: Utf8PathBuf, tree: Arc<dyn TreeSource>) -> Self {
         Self {
-            file,
             repo,
+            tree,
             filter: None,
         }
     }
@@ -207,10 +200,11 @@ impl IntoIterator for Categories {
     type IntoIter = CategoriesIter;
 
     fn into_iter(self) -> CategoriesIter {
-        let lines = util::read_lines(&self.file).unwrap_or_default();
+        let lines = tree_lines(&*self.tree, "profiles/categories").unwrap_or_default();
         CategoriesIter {
             lines: lines.into_iter(),
             repo: self.repo,
+            tree: self.tree,
             filter: self.filter,
         }
     }
@@ -223,7 +217,7 @@ impl Iterator for CategoriesIter {
         loop {
             let name = self.lines.next()?;
             let path = self.repo.join(&name);
-            let cat = Category::new(name, path);
+            let cat = Category::new(name, path, self.tree.clone());
             match &self.filter {
                 Some(f) if !f(&cat) => continue,
                 _ => return Some(cat),
@@ -234,6 +228,11 @@ impl Iterator for CategoriesIter {
 
 #[cfg(test)]
 mod tests {
+    fn fs(tmp: &tempfile::TempDir) -> std::sync::Arc<dyn crate::tree::TreeSource> {
+        let root = camino::Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::sync::Arc::new(crate::tree::FsTree::new(root))
+    }
+
     use super::*;
 
     fn setup_repo() -> tempfile::TempDir {
@@ -254,7 +253,7 @@ mod tests {
         std::fs::create_dir_all(cat_dir.join("bar")).unwrap();
         std::fs::write(cat_dir.join("README"), "not a package").unwrap();
 
-        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap());
+        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap(), fs(&tmp));
         let pkgs = cat.packages().collect_vec();
         let names: Vec<&str> = pkgs.iter().map(|p| p.name()).collect();
         assert_eq!(names, vec!["bar", "foo"]);
@@ -267,7 +266,7 @@ mod tests {
         std::fs::create_dir_all(cat_dir.join("foo")).unwrap();
         std::fs::create_dir_all(cat_dir.join(".hidden")).unwrap();
 
-        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap());
+        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap(), fs(&tmp));
         let pkgs = cat.packages().collect_vec();
         let names: Vec<&str> = pkgs.iter().map(|p| p.name()).collect();
         assert_eq!(names, vec!["foo"]);
@@ -279,7 +278,7 @@ mod tests {
         let cat_dir = tmp.path().join("dev-util");
         std::fs::create_dir_all(cat_dir.join("foo")).unwrap();
 
-        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap());
+        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap(), fs(&tmp));
         assert!(cat.package("foo").is_some());
         assert!(cat.package("nonexistent").is_none());
     }
@@ -290,12 +289,13 @@ mod tests {
         let cat_dir = tmp.path().join("dev-util");
         std::fs::create_dir_all(&cat_dir).unwrap();
 
-        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap());
+        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap(), fs(&tmp));
         assert!(cat.exists());
 
         let cat2 = Category::new(
             "missing".into(),
             tmp.path().join("no-such-dir").try_into().unwrap(),
+            fs(&tmp),
         );
         assert!(!cat2.exists());
     }
@@ -307,7 +307,7 @@ mod tests {
         std::fs::create_dir_all(cat_dir.join("foo")).unwrap();
         std::fs::create_dir_all(cat_dir.join("bar")).unwrap();
 
-        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap());
+        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap(), fs(&tmp));
         let pkgs = cat.packages().filter(|p| p.name() == "foo").collect_vec();
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].name(), "foo");

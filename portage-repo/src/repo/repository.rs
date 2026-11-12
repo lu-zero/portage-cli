@@ -13,6 +13,10 @@ use portage_metadata::{CacheEntry, Eapi};
 use super::category::Categories;
 use super::ebuild::Ebuild;
 use crate::metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
+use crate::tree::{
+    EbuildFile, EntryKind, EntrySource, Storage, TreeSource, content_lines, read_text, tree_lines,
+    tree_names,
+};
 
 type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
 
@@ -38,8 +42,22 @@ type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
 /// # }
 /// ```
 pub struct Ebuilds {
-    walker: WalkDir,
+    found: Found,
+    source: EbuildSource,
     filter: Option<Arc<EbuildFilter>>,
+}
+
+/// How the ebuilds are found: walking the checkout, or from the backend's index
+enum Found {
+    Walk(WalkDir),
+    Listed(Vec<Ebuild>),
+}
+
+/// The repository the walked ebuilds belong to: its checkout root and its tree
+#[derive(Clone)]
+struct EbuildSource {
+    root: Utf8PathBuf,
+    tree: Arc<dyn TreeSource>,
 }
 
 /// Concrete iterator produced by [`Ebuilds::into_iter`]
@@ -47,14 +65,21 @@ pub struct Ebuilds {
 /// Holds the jwalk `DirEntryIter` and converts each entry
 /// to an [`Ebuild`] on the fly, applying the optional filter.
 pub struct EbuildsIter {
-    inner: jwalk::DirEntryIter<((), ())>,
+    inner: FoundIter,
+    source: EbuildSource,
     filter: Option<Arc<EbuildFilter>>,
 }
 
+enum FoundIter {
+    Walk(jwalk::DirEntryIter<((), ())>),
+    Listed(std::vec::IntoIter<Ebuild>),
+}
+
 impl Ebuilds {
-    fn new(walker: WalkDir) -> Self {
+    fn new(found: Found, source: EbuildSource) -> Self {
         Self {
-            walker,
+            found,
+            source,
             filter: None,
         }
     }
@@ -78,7 +103,10 @@ impl Ebuilds {
     }
 }
 
-fn dir_entry_to_ebuild(entry: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<Ebuild> {
+fn dir_entry_to_ebuild(
+    entry: jwalk::Result<jwalk::DirEntry<((), ())>>,
+    source: &EbuildSource,
+) -> Option<Ebuild> {
     let entry = entry.ok()?;
     let path: Utf8PathBuf = entry.path().try_into().ok()?;
     let stem = path.file_name()?.strip_suffix(".ebuild")?;
@@ -89,7 +117,8 @@ fn dir_entry_to_ebuild(entry: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Optio
     cpv_str.push('/');
     cpv_str.push_str(stem);
     let cpv = Cpv::parse(&cpv_str).ok()?;
-    Some(Ebuild::new(cpv, path))
+    let rel = path.strip_prefix(&source.root).ok()?.to_path_buf();
+    Some(Ebuild::in_tree(cpv, path, source.tree.clone(), rel))
 }
 
 impl IntoIterator for Ebuilds {
@@ -97,8 +126,13 @@ impl IntoIterator for Ebuilds {
     type IntoIter = EbuildsIter;
 
     fn into_iter(self) -> EbuildsIter {
+        let inner = match self.found {
+            Found::Walk(walker) => FoundIter::Walk(walker.into_iter()),
+            Found::Listed(ebuilds) => FoundIter::Listed(ebuilds.into_iter()),
+        };
         EbuildsIter {
-            inner: self.walker.into_iter(),
+            inner,
+            source: self.source,
             filter: self.filter,
         }
     }
@@ -109,7 +143,10 @@ impl Iterator for EbuildsIter {
 
     fn next(&mut self) -> Option<Ebuild> {
         loop {
-            let ebuild = dir_entry_to_ebuild(self.inner.next()?)?;
+            let ebuild = match &mut self.inner {
+                FoundIter::Walk(walk) => dir_entry_to_ebuild(walk.next()?, &self.source)?,
+                FoundIter::Listed(listed) => listed.next()?,
+            };
             match &self.filter {
                 Some(f) if !f(&ebuild) => continue,
                 _ => return Some(ebuild),
@@ -224,6 +261,8 @@ use crate::error::{Error, Result};
 #[derive(Clone)]
 pub struct Repository {
     path: Utf8PathBuf,
+    tree: Arc<dyn TreeSource>,
+    entry_source: Arc<dyn EntrySource>,
     layout: LayoutConf,
     name: Interned<DefaultInterner>,
     arch_cache: Vec<Arch>,
@@ -242,6 +281,8 @@ pub struct Repository {
     /// every consumer) so `ebuilds`/`find_cpns`/`is_fresh_cached` can't be
     /// called with a mismatched or stale masters list.
     masters: Vec<Repository>,
+    /// Under which copies of a tree stored elsewhere are made for builds
+    checkout_root: Option<Utf8PathBuf>,
 }
 
 impl std::fmt::Debug for Repository {
@@ -278,6 +319,8 @@ enum SecondarySpec {
 #[derive(Clone, Default)]
 pub struct RepositoryBuilder {
     secondary: Option<SecondarySpec>,
+    storage: Option<Storage>,
+    checkouts: Option<Utf8PathBuf>,
 }
 
 impl RepositoryBuilder {
@@ -303,10 +346,23 @@ impl RepositoryBuilder {
         self
     }
 
+    /// Read the tree, entries and primary cache from `storage` instead of the checkout
+    pub fn storage(mut self, storage: Storage) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
+    /// Builds from a repository stored elsewhere than a checkout use copies of its package
+    /// directories at `root/<location>/<tree>`, masters' included
+    pub fn checkout_root(mut self, root: impl Into<Utf8PathBuf>) -> Self {
+        self.checkouts = Some(root.into());
+        self
+    }
+
     /// Open an ebuild repository at `path`
     pub fn open(self, path: impl Into<PathBuf>) -> Result<Repository> {
         let spec = self.secondary.ok_or(Error::BuilderMissingSecondary)?;
-        Repository::open_with_secondary(path, spec)
+        Repository::open_with_secondary(path, spec, self.storage, self.checkouts.as_deref())
     }
 
     /// Open a repository and resolve masters from `repos_dir`
@@ -335,7 +391,9 @@ impl RepositoryBuilder {
         default_master: Option<&str>,
     ) -> Result<Repository> {
         let spec = self.secondary.ok_or(Error::BuilderMissingSecondary)?;
-        let mut repo = Repository::open_with_secondary(path, spec.clone())?;
+        let checkouts = self.checkouts.as_deref();
+        let mut repo =
+            Repository::open_with_secondary(path, spec.clone(), self.storage, checkouts)?;
         let mut masters: Vec<Repository> = Vec::new();
         let mut seen = HashSet::new();
         seen.insert(repo.name().to_string());
@@ -362,27 +420,47 @@ impl Repository {
     fn open_with_secondary(
         path: impl Into<PathBuf>,
         secondary_spec: SecondarySpec,
+        storage: Option<Storage>,
+        checkouts: Option<&Utf8Path>,
     ) -> Result<Self> {
         let std_path = path.into();
         let path = Utf8PathBuf::from_path_buf(std_path).map_err(Error::InvalidRepository)?;
-        if !path.is_dir() {
+        // A repository stored elsewhere needs no checkout at its location.
+        if storage.is_none() && !crate::tree::is_repository(&path) && !path.is_dir() {
             return Err(Error::InvalidRepository(path.into_std_path_buf()));
         }
+        let Storage {
+            tree,
+            entries: entry_source,
+            primary,
+        } = match storage {
+            Some(storage) => storage,
+            None => crate::tree::storage_at(&path).map_err(|e| util::io_err(&path, e))?,
+        };
+        let layout = match read_text(&*tree, "metadata/layout.conf")? {
+            Some(text) => LayoutConf::parse(&text)?,
+            None => {
+                return Err(Error::InvalidLayout(
+                    "metadata/layout.conf not found".into(),
+                ));
+            }
+        };
 
-        let layout = LayoutConf::from_repo(path.as_std_path())?;
-
-        let name = util::resolve_repo_name(path.as_std_path())?;
+        let name = match read_text(&*tree, "profiles/repo_name")?
+            .as_deref()
+            .and_then(|t| content_lines(t).next())
+        {
+            Some(name) => name.to_string(),
+            None => format!("x-{}", path.file_name().unwrap_or_default()),
+        };
         let interned_name = Interned::<DefaultInterner>::intern(&name);
 
-        let arch_cache: Vec<Arch> = util::read_lines(path.join("profiles").join("arch.list"))
+        let arch_cache: Vec<Arch> = tree_lines(&*tree, "profiles/arch.list")
             .unwrap_or_default()
             .into_iter()
             .map(|s| Arch::intern(&s))
             .collect();
 
-        let primary: Arc<dyn MetadataCache> = Arc::new(DirMetadataCache::new(
-            path.join("metadata").join("md5-cache"),
-        ));
         let secondary_dir = match &secondary_spec {
             SecondarySpec::UserRoot(root) => Some(root.join(&name)),
             SecondarySpec::Memory | SecondarySpec::Custom(_) => None,
@@ -391,6 +469,8 @@ impl Repository {
 
         Ok(Repository {
             path,
+            tree,
+            entry_source,
             layout,
             name: interned_name,
             arch_cache,
@@ -398,6 +478,7 @@ impl Repository {
             secondary,
             secondary_dir,
             masters: Vec::new(),
+            checkout_root: checkouts.map(Utf8Path::to_owned),
         })
     }
 
@@ -440,16 +521,59 @@ impl Repository {
                 SecondarySpec::UserRoot(root) => SecondarySpec::UserRoot(root.clone()),
                 SecondarySpec::Memory | SecondarySpec::Custom(_) => SecondarySpec::Memory,
             };
-            let master = Self::open_with_secondary(master_path, master_spec)?;
+            let checkouts = repo.checkout_root.as_deref();
+            let master = Self::open_with_secondary(master_path, master_spec, None, checkouts)?;
             Self::resolve_masters_with_spec(&master, repos_dir, out, seen, spec, None, None)?;
             out.push(master);
         }
         Ok(())
     }
 
+    /// Every valid metadata entry, answered by the repository's storage backend
+    pub async fn entries(&self) -> Vec<(Cpv, CacheEntry)> {
+        self.entry_source.entries(self).await
+    }
+
+    /// How the repository's metadata entries are produced
+    pub(crate) fn entry_source(&self) -> &dyn EntrySource {
+        &*self.entry_source
+    }
+
+    /// Where the repository's files are read from
+    pub(crate) fn tree(&self) -> &dyn TreeSource {
+        &*self.tree
+    }
+
     /// Absolute path to the repository root
     pub fn path(&self) -> &Utf8Path {
         &self.path
+    }
+
+    /// Where copies of this repository go, keyed by its location so two trees sharing a name
+    /// (the host's and a stage's) never prune each other
+    fn copies_dir(&self) -> Option<Utf8PathBuf> {
+        let root = self.checkout_root.as_ref()?;
+        Some(root.join(self.path.strip_prefix("/").unwrap_or(&self.path)))
+    }
+
+    /// `cpv`'s ebuild, for a build to make real with [`EbuildFile::checkout`]
+    pub fn ebuild_file(&self, cpv: &Cpv) -> EbuildFile {
+        let rel = Utf8PathBuf::from(format!(
+            "{}/{}/{}-{}.ebuild",
+            cpv.cpn.category, cpv.cpn.package, cpv.cpn.package, cpv.version
+        ));
+        EbuildFile::new(
+            Arc::clone(&self.tree),
+            self.copies_dir(),
+            rel,
+            self.path.clone(),
+        )
+    }
+
+    /// The tree to search for eclasses; `None` when it has no `eclass/` directory
+    pub(crate) fn eclass_tree(&self) -> Option<Arc<dyn TreeSource>> {
+        let kind = self.tree.kind(Utf8Path::new("eclass"));
+        matches!(kind, Ok(Some(crate::tree::EntryKind::Dir))).then(|| Arc::clone(&self.tree))
     }
 
     /// Resolved master repositories, set by [`RepositoryBuilder::open_with_masters`]
@@ -459,10 +583,8 @@ impl Repository {
         &self.masters
     }
 
-    /// Directory backing the in-tree primary md5-cache (`metadata/md5-cache`
-    /// under [`Self::path`]), regardless of whether it's currently writable
-    /// — matches `open_with_secondary`'s own construction of `primary`
-    /// (private, in this module).
+    /// The checkout's md5-cache directory (`metadata/md5-cache` under [`Self::path`]), whether
+    /// or not it exists or is writable; a repository stored elsewhere has none
     pub fn primary_cache_dir(&self) -> Utf8PathBuf {
         self.path.join("metadata").join("md5-cache")
     }
@@ -563,10 +685,7 @@ impl Repository {
     ///
     /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn categories(&self) -> Categories {
-        Categories::new(
-            self.path.join("profiles").join("categories"),
-            self.path.clone(),
-        )
+        Categories::new(self.path.clone(), self.tree.clone())
     }
 
     /// List all ebuilds in the repository using parallel directory walking
@@ -582,7 +701,7 @@ impl Repository {
     pub fn ebuilds(&self) -> Result<Ebuilds> {
         let mut categories: HashSet<String> = HashSet::new();
         for repo in std::iter::once(self).chain(self.masters.iter()) {
-            if let Ok(lines) = util::read_lines(repo.path().join("profiles").join("categories")) {
+            if let Ok(lines) = tree_lines(&*repo.tree, "profiles/categories") {
                 categories.extend(lines.into_iter().filter(|c| !c.is_empty()));
             }
         }
@@ -598,6 +717,31 @@ impl Repository {
         // Follow symlinks: overlays like crossdev's symlink whole package
         // directories to the host repo's ebuilds (the category comes from the
         // logical path, so cross-*/gcc stays cross-*/gcc).
+        let source = EbuildSource {
+            root: self.path.clone(),
+            tree: self.tree.clone(),
+        };
+        if let Some(index) = self.tree.ebuild_index() {
+            let paths = index.map_err(|e| util::io_err(self.tree.display(Utf8Path::new("")), e))?;
+            let listed = paths
+                .into_iter()
+                .filter_map(|rel| {
+                    let cat = rel.components().next()?.as_str();
+                    if !categories.contains(cat) {
+                        return None;
+                    }
+                    let stem = rel.file_stem()?;
+                    let cpv = Cpv::parse(&format!("{cat}/{stem}")).ok()?;
+                    Some(Ebuild::in_tree(
+                        cpv,
+                        self.path.join(&rel),
+                        self.tree.clone(),
+                        rel,
+                    ))
+                })
+                .collect();
+            return Ok(Ebuilds::new(Found::Listed(listed), source));
+        }
         let walker = WalkDir::new(&self.path)
             .follow_links(true)
             .min_depth(3)
@@ -617,17 +761,40 @@ impl Repository {
                 });
             });
 
-        Ok(Ebuilds::new(walker))
+        Ok(Ebuilds::new(Found::Walk(walker), source))
+    }
+
+    /// The categories `profiles/categories` lists, or when it lists none every top-level
+    /// directory named like one (`cat-name`, `virtual`), as an overlay without the file has
+    pub fn listed_or_present_categories(&self) -> Result<HashSet<String>> {
+        let listed: HashSet<String> = tree_lines(&*self.tree, "profiles/categories")?
+            .into_iter()
+            .filter(|c| !c.is_empty())
+            .collect();
+        if !listed.is_empty() {
+            return Ok(listed);
+        }
+        let root = Utf8Path::new("");
+        let names = self
+            .tree
+            .list(root)
+            .map_err(|e| util::io_err(self.tree.display(root), e))?
+            .unwrap_or_default();
+        Ok(names
+            .into_iter()
+            .filter(|(n, kind)| {
+                *kind == EntryKind::Dir
+                    && !n.starts_with('.')
+                    && (n.contains('-') || n == "virtual")
+            })
+            .map(|(n, _)| n)
+            .collect())
     }
 
     /// Look up a single category by name
     pub fn category(&self, name: &str) -> Option<Category> {
-        let cat_path: Utf8PathBuf = self.path.join(name);
-        if cat_path.is_dir() {
-            Some(Category::new(name.to_string(), cat_path))
-        } else {
-            None
-        }
+        let cat = Category::new(name.to_string(), self.path.join(name), self.tree.clone());
+        cat.exists().then_some(cat)
     }
 
     /// Look up the ebuild for an exact, already-known `Cpv` — three stats
@@ -685,7 +852,7 @@ impl Repository {
             // here.
             let mut category_names: BTreeSet<String> = BTreeSet::new();
             for repo in std::iter::once(self).chain(self.masters.iter()) {
-                if let Ok(lines) = util::read_lines(repo.path.join("profiles").join("categories")) {
+                if let Ok(lines) = tree_lines(&*repo.tree, "profiles/categories") {
                     category_names.extend(lines.into_iter().filter(|c| !c.is_empty()));
                 }
             }
@@ -792,19 +959,14 @@ impl Repository {
         if entry.eclasses.is_empty() {
             return true;
         }
-        // Built on the first memo miss only: the memo serves nearly every lookup.
-        let mut eclass_dirs: Option<Vec<Utf8PathBuf>> = None;
         for (name, recorded) in &entry.eclasses {
             let actual = digests.entry(*name).or_insert_with(|| {
                 // Own `eclass/`, then masters last-listed first, matching `shell_with_masters`.
-                let dirs = eclass_dirs.get_or_insert_with(|| {
-                    std::iter::once(self.path.join("eclass"))
-                        .chain(self.masters.iter().rev().map(|m| m.path.join("eclass")))
-                        .collect()
-                });
-                let path = find_eclass_in(dirs, name)?;
-                let bytes = std::fs::read(&path).ok()?;
-                Some(md5::compute(&bytes))
+                let rel = Utf8PathBuf::from(format!("eclass/{name}.eclass"));
+                std::iter::once(self)
+                    .chain(self.masters.iter().rev())
+                    .find_map(|repo| repo.tree.read(&rel).ok().flatten())
+                    .map(|bytes| md5::compute(&bytes))
             });
             match actual {
                 Some(d) if d == recorded => {}
@@ -818,7 +980,7 @@ impl Repository {
     ///
     /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
     pub fn profiles_desc(&self) -> Result<Vec<ProfileDesc>> {
-        let lines = util::read_lines(self.path.join("profiles").join("profiles.desc"))?;
+        let lines = tree_lines(&*self.tree, "profiles/profiles.desc")?;
         let mut descs = Vec::new();
         for line in lines {
             descs.push(ProfileDesc::parse(&line)?);
@@ -832,7 +994,8 @@ impl Repository {
     ///
     /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn profiles_eapi(&self) -> Result<Option<Eapi>> {
-        match util::read_single_line(self.path.join("profiles").join("eapi"))? {
+        let text = read_text(&*self.tree, "profiles/eapi")?;
+        match text.as_deref().and_then(|t| content_lines(t).next()) {
             Some(s) => {
                 let eapi = s.parse::<Eapi>().map_err(|e| {
                     Error::InvalidProfile(format!("bad EAPI in profiles/eapi: {e}"))
@@ -851,7 +1014,7 @@ impl Repository {
     ///
     /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn repo_package_mask(&self) -> Result<Vec<Dep>> {
-        let lines = util::read_lines(self.path.join("profiles").join("package.mask"))?;
+        let lines = tree_lines(&*self.tree, "profiles/package.mask")?;
         lines
             .into_iter()
             .map(|l| Dep::parse(&l).map_err(Into::into))
@@ -873,28 +1036,10 @@ impl Repository {
     ///
     /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn use_expand_names(&self) -> Result<Vec<String>> {
-        let dir: Utf8PathBuf = self.path.join("profiles").join("desc");
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(util::io_err(&dir, e)),
-        };
-        let mut names = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| util::io_err(&dir, e))?;
-            let path: Utf8PathBuf = match entry.path().try_into() {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            if let Some(fname) = path.file_name()
-                && let Some(stem) = fname.strip_suffix(".desc")
-                && !stem.starts_with('.')
-            {
-                names.push(stem.to_string());
-            }
-        }
-        names.sort();
-        Ok(names)
+        Ok(tree_names(&*self.tree, "profiles/desc")?
+            .into_iter()
+            .filter_map(|(name, _)| Some(name.strip_suffix(".desc")?.to_string()))
+            .collect())
     }
 
     /// Parse USE_EXPAND flag descriptions from `profiles/desc/{name}.desc`
@@ -904,12 +1049,10 @@ impl Repository {
     ///
     /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn use_expand_desc(&self, name: &str) -> Result<Vec<(String, String)>> {
-        parse_desc_file(
-            self.path
-                .join("profiles")
-                .join("desc")
-                .join(format!("{name}.desc")),
-        )
+        Ok(parse_desc_lines(tree_lines(
+            &*self.tree,
+            &format!("profiles/desc/{name}.desc"),
+        )?))
     }
 
     /// Parse all package-move and slot-move entries from `profiles/updates/`
@@ -919,28 +1062,9 @@ impl Repository {
     ///
     /// See [PMS 4.4.4](https://projects.gentoo.org/pms/9/pms.html#profiles-updates).
     pub fn profile_updates(&self) -> Result<Vec<ProfileUpdate>> {
-        let dir: Utf8PathBuf = self.path.join("profiles").join("updates");
-        let mut files: Vec<Utf8PathBuf> = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let path: Utf8PathBuf = e.path().try_into().ok()?;
-                    let name = path.file_name()?;
-                    if name.starts_with('.') {
-                        None
-                    } else {
-                        Some(path)
-                    }
-                })
-                .collect(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(util::io_err(&dir, e)),
-        };
-        files.sort();
-
         let mut updates = Vec::new();
-        for file in files {
-            for line in util::read_lines(&file)? {
+        for (file, _) in tree_names(&*self.tree, "profiles/updates")? {
+            for line in tree_lines(&*self.tree, &format!("profiles/updates/{file}"))? {
                 let mut parts = line.split_whitespace();
                 match parts.next() {
                     Some("move") => {
@@ -991,31 +1115,29 @@ impl Repository {
 
     /// List available eclass names (without the `.eclass` extension)
     pub fn eclasses(&self) -> Result<Vec<String>> {
-        let eclass_dir: Utf8PathBuf = self.path.join("eclass");
-        let entries = match std::fs::read_dir(&eclass_dir) {
-            Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(util::io_err(&eclass_dir, e)),
-        };
+        Ok(tree_names(&*self.tree, "eclass")?
+            .into_iter()
+            .filter_map(|(name, _)| Some(name.strip_suffix(".eclass")?.to_string()))
+            .collect())
+    }
 
-        let mut names = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| util::io_err(&eclass_dir, e))?;
-            let path: Utf8PathBuf = match entry.path().try_into() {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            if let Some(stem) = path.file_name().and_then(|n| n.strip_suffix(".eclass")) {
-                names.push(stem.to_string());
-            }
-        }
-        names.sort();
-        Ok(names)
+    /// The file (or directory of files) at `rel` in this repository
+    pub fn file(&self, rel: &str) -> crate::tree::TreeFile {
+        crate::tree::TreeFile::new(self.tree.clone(), rel.into())
+    }
+
+    /// The text of `eclass/<name>.eclass` in this repository (not its masters)
+    pub fn eclass_text(&self, name: &str) -> Result<Option<String>> {
+        read_text(&*self.tree, &format!("eclass/{name}.eclass"))
     }
 
     /// List available license names from `licenses/`
     pub fn licenses(&self) -> Result<Vec<String>> {
-        list_dir_names(self.path.join("licenses"))
+        Ok(tree_names(&*self.tree, "licenses")?
+            .into_iter()
+            .filter(|(name, _)| name != "CVS")
+            .map(|(name, _)| name)
+            .collect())
     }
 
     /// Architectures declared in `profiles/arch.list` (typed)
@@ -1042,7 +1164,10 @@ impl Repository {
     ///
     /// Returns `(flag_name, description)` pairs.
     pub fn use_desc(&self) -> Result<Vec<(String, String)>> {
-        parse_desc_file(self.path.join("profiles").join("use.desc"))
+        Ok(parse_desc_lines(tree_lines(
+            &*self.tree,
+            "profiles/use.desc",
+        )?))
     }
 
     /// Build a [`crate::UseDb`] for this repository
@@ -1050,14 +1175,19 @@ impl Repository {
     /// Combines global (`use.desc`) and package-local (`use.local.desc`)
     /// USE flag descriptions into an indexed structure with O(log n) lookup.
     pub fn use_db(&self) -> Result<crate::UseDb> {
-        crate::UseDb::load(&self.path)
+        let use_desc = read_text(&*self.tree, "profiles/use.desc")?;
+        let use_local_desc = read_text(&*self.tree, "profiles/use.local.desc")?;
+        Ok(crate::UseDb::parse(
+            use_desc.as_deref().unwrap_or_default(),
+            use_local_desc.as_deref().unwrap_or_default(),
+        ))
     }
 
     /// Parse per-package USE flag descriptions from `profiles/use.local.desc`
     ///
     /// Returns `(Cpn, flag_name, description)` tuples.
     pub fn use_local_desc(&self) -> Result<Vec<(Cpn, String, String)>> {
-        let lines = util::read_lines(self.path.join("profiles").join("use.local.desc"))?;
+        let lines = tree_lines(&*self.tree, "profiles/use.local.desc")?;
         let mut result = Vec::new();
         for line in lines {
             // Format: category/package:flag - description
@@ -1079,7 +1209,7 @@ impl Repository {
     ///
     /// Returns `(mirror_name, [urls...])` pairs.
     pub fn thirdpartymirrors(&self) -> Result<Vec<(String, Vec<String>)>> {
-        let lines = util::read_lines(self.path.join("profiles").join("thirdpartymirrors"))?;
+        let lines = tree_lines(&*self.tree, "profiles/thirdpartymirrors")?;
         let mut result = Vec::new();
         for line in lines {
             let mut parts = line.split_whitespace();
@@ -1100,50 +1230,15 @@ fn materialise_secondary(repo_name: &str, spec: SecondarySpec) -> Arc<dyn Metada
     }
 }
 
-/// Locate `{name}.eclass` by searching `dirs` in order (first hit wins)
-fn find_eclass_in(dirs: &[Utf8PathBuf], name: &str) -> Option<Utf8PathBuf> {
-    let filename = format!("{name}.eclass");
-    for dir in dirs {
-        let path = dir.join(&filename);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    None
-}
-
-/// List file/directory names in a directory (sorted, skipping dotfiles)
-fn list_dir_names(dir: impl AsRef<Path>) -> Result<Vec<String>> {
-    let dir = dir.as_ref();
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(util::io_err(dir, e)),
-    };
-
-    let mut names = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| util::io_err(dir, e))?;
-        let file_name = entry.file_name();
-        let name = file_name.to_string_lossy();
-        if !name.starts_with('.') && name != "CVS" {
-            names.push(name.into_owned());
-        }
-    }
-    names.sort();
-    Ok(names)
-}
-
 /// Parse a `flag - description` file format (`use.desc` and similar)
-fn parse_desc_file(path: impl AsRef<Path>) -> Result<Vec<(String, String)>> {
-    let lines = util::read_lines(path)?;
-    let mut result = Vec::new();
-    for line in lines {
-        if let Some((flag, desc)) = line.split_once(" - ") {
-            result.push((flag.to_string(), desc.to_string()));
-        }
-    }
-    Ok(result)
+fn parse_desc_lines(lines: Vec<String>) -> Vec<(String, String)> {
+    lines
+        .into_iter()
+        .filter_map(|line| {
+            let (flag, desc) = line.split_once(" - ")?;
+            Some((flag.to_string(), desc.to_string()))
+        })
+        .collect()
 }
 
 #[cfg(test)]
