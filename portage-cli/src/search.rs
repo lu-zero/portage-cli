@@ -4,7 +4,7 @@ use std::io::Write as _;
 use anyhow::{Result, bail};
 use portage_atom::{Cpn, Cpv};
 use portage_metadata::RawCacheEntry;
-use portage_repo::{CacheReadOpts, Repository, cache_entries_parallel};
+use portage_repo::{CacheReadOpts, Repository, cache_entries_parallel, repo_entries};
 
 use crate::style::{C_BOLD, C_LABEL, C_MASKED, C_PKG, C_STAR};
 
@@ -196,8 +196,13 @@ async fn described(
             homepage: None,
         })
     });
+    Ok(newest_per_package(from_index.chain(from_cache)))
+}
+
+/// The newest version of each package among `found`; on equal versions the earlier repository wins
+fn newest_per_package(found: impl IntoIterator<Item = Described>) -> Vec<Described> {
     let mut best: std::collections::HashMap<Cpn, Described> = std::collections::HashMap::new();
-    for d in from_index.chain(from_cache) {
+    for d in found {
         match best.get(&d.cpv.cpn) {
             Some(prev)
                 if prev.cpv.version > d.cpv.version
@@ -207,7 +212,19 @@ async fn described(
             }
         }
     }
-    Ok(best.into_values().collect())
+    best.into_values().collect()
+}
+
+/// The descriptions of a repository with no md5-cache, from its user-side cache or by sourcing
+/// its ebuilds (what emerge's `aux_get` does for such an overlay)
+async fn sourced(repo: &Repository, position: usize, homepage: bool) -> Vec<Described> {
+    let entries = repo_entries(repo).await;
+    newest_per_package(entries.into_iter().map(|(cpv, entry)| Described {
+        cpv,
+        repo: position,
+        homepage: homepage.then(|| entry.metadata.homepage.join(" ")),
+        description: entry.metadata.description,
+    }))
 }
 
 /// Repositories by position, with their description index
@@ -237,8 +254,12 @@ async fn run_desc(
     name_only: bool,
     homepage: bool,
 ) -> Result<()> {
-    let mut entries: Vec<(Cpn, Option<String>)> = described(indexed, repos, homepage)
-        .await?
+    let mut found = described(indexed, repos, homepage).await?;
+    // The md5-cache read above sees nothing of a repository without one (most overlays).
+    for (position, repo) in repos.iter().filter(|(_, r)| !r.has_primary_cache()) {
+        found.extend(sourced(repo, *position, homepage).await);
+    }
+    let mut entries: Vec<(Cpn, Option<String>)> = newest_per_package(found)
         .into_iter()
         .filter(|d| all || contains_ci(&d.description, pat))
         .map(|d| {
@@ -618,6 +639,47 @@ mod tests {
                 ("app-misc/foo-2".to_string(), "Foo: the tool".to_string()),
                 ("app-misc/bar-1-r1".to_string(), String::new()),
             ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_repository_without_md5_cache_is_described_by_sourcing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ov");
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        std::fs::create_dir_all(root.join("app-misc/foo")).unwrap();
+        std::fs::write(root.join("profiles/repo_name"), "ov\n").unwrap();
+        std::fs::write(root.join("profiles/categories"), "app-misc\n").unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        for (v, d) in [("1", "Old overlay tool"), ("2", "New overlay tool")] {
+            std::fs::write(
+                root.join(format!("app-misc/foo/foo-{v}.ebuild")),
+                format!("EAPI=8\nDESCRIPTION=\"{d}\"\nHOMEPAGE=\"https://example.invalid/{v}\"\nSLOT=\"0\"\n"),
+            )
+            .unwrap();
+        }
+        let repo = Repository::builder().in_memory_cache().open(&root).unwrap();
+        assert!(!repo.has_primary_cache());
+        // The md5-cache read finds nothing here; sourcing does.
+        assert!(
+            described(&[], &[(0, repo.clone())], false)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let found: Vec<(String, String, Option<String>)> = sourced(&repo, 0, true)
+            .await
+            .into_iter()
+            .map(|d| (d.cpv.to_string(), d.description, d.homepage))
+            .collect();
+        assert_eq!(
+            found,
+            [(
+                "app-misc/foo-2".to_string(),
+                "New overlay tool".to_string(),
+                Some("https://example.invalid/2".to_string())
+            )]
         );
     }
 
