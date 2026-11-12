@@ -3,8 +3,7 @@ use std::io::Write as _;
 
 use anyhow::{Result, bail};
 use portage_atom::{Cpn, Cpv};
-use portage_metadata::RawCacheEntry;
-use portage_repo::{CacheReadOpts, Repository, cache_entries_parallel, repo_entries};
+use portage_repo::{Repository, repo_entries};
 
 use crate::style::{C_BOLD, C_LABEL, C_MASKED, C_PKG, C_STAR};
 
@@ -191,30 +190,10 @@ async fn described(
     rest: &[(usize, Repository)],
     homepage: bool,
 ) -> Result<Vec<Described>> {
-    let opts = CacheReadOpts {
-        latest_per_cpn: true,
-        ..Default::default()
-    };
-    // One read per repository, so an md5-cache hit names the repository it came from (an
-    // overlay-only package must not be looked up in the first repository).
-    let mut from_cache = Vec::new();
-    for (repo, repository) in rest {
-        let cached = cache_entries_parallel(std::slice::from_ref(repository), &opts, move |text| {
-            let raw = RawCacheEntry::new(text);
-            let description = raw.field("DESCRIPTION").unwrap_or("").to_string();
-            let page = homepage.then(|| raw.field("HOMEPAGE").unwrap_or("").to_string());
-            Ok::<_, portage_repo::Error>((description, page))
-        })
-        .await?;
-        from_cache.extend(cached.into_iter().filter_map(|(cpv, r)| {
-            let (description, homepage) = r.ok()?;
-            Some(Described {
-                cpv,
-                repo: *repo,
-                description,
-                homepage,
-            })
-        }));
+    // `repo_entries` checks each cache entry against its ebuild, so a stale or missing one is sourced afresh.
+    let mut from_repos = Vec::new();
+    for (position, repository) in rest {
+        from_repos.extend(sourced(repository, *position, homepage).await);
     }
     let from_index = indexed.iter().flat_map(|(repo, index)| {
         index.iter().map(|(cpv, description)| Described {
@@ -224,7 +203,7 @@ async fn described(
             homepage: None,
         })
     });
-    Ok(newest_per_package(from_index.chain(from_cache)))
+    Ok(newest_per_package(from_index.chain(from_repos)))
 }
 
 /// The newest version of each package among `found`; on equal versions the earlier repository wins
@@ -282,12 +261,8 @@ async fn run_desc(
     name_only: bool,
     homepage: bool,
 ) -> Result<()> {
-    let mut found = described(indexed, repos, homepage).await?;
-    // The md5-cache read above sees nothing of a repository without one (most overlays).
-    for (position, repo) in repos.iter().filter(|(_, r)| !r.has_primary_cache()) {
-        found.extend(sourced(repo, *position, homepage).await);
-    }
-    let mut entries: Vec<(Cpn, Option<String>)> = newest_per_package(found)
+    let mut entries: Vec<(Cpn, Option<String>)> = described(indexed, repos, homepage)
+        .await?
         .into_iter()
         .filter(|d| all || contains_ci(&d.description, pat))
         .map(|d| {
@@ -774,13 +749,6 @@ mod tests {
         }
         let repo = Repository::builder().in_memory_cache().open(&root).unwrap();
         assert!(!repo.has_primary_cache());
-        // The md5-cache read finds nothing here; sourcing does.
-        assert!(
-            described(&[], &[(0, repo.clone())], false)
-                .await
-                .unwrap()
-                .is_empty()
-        );
         let found: Vec<(String, String, Option<String>)> = sourced(&repo, 0, true)
             .await
             .into_iter()
@@ -793,6 +761,53 @@ mod tests {
                 "New overlay tool".to_string(),
                 Some("https://example.invalid/2".to_string())
             )]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stale_md5_cache_is_refreshed_from_the_ebuild() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ov");
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::create_dir_all(root.join("metadata/md5-cache/app-misc")).unwrap();
+        std::fs::create_dir_all(root.join("app-misc/foo")).unwrap();
+        std::fs::create_dir_all(root.join("app-misc/bar")).unwrap();
+        std::fs::write(root.join("profiles/repo_name"), "ov\n").unwrap();
+        std::fs::write(root.join("profiles/categories"), "app-misc\n").unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        let cache = root.join("metadata/md5-cache/app-misc/foo-1");
+        std::fs::write(
+            &cache,
+            "DESCRIPTION=Stale\nEAPI=8\nSLOT=0\n_md5_=00000000000000000000000000000000\n",
+        )
+        .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&cache)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap();
+        for pn in ["foo", "bar"] {
+            std::fs::write(
+                root.join(format!("app-misc/{pn}/{pn}-1.ebuild")),
+                format!("EAPI=8\nDESCRIPTION=\"Fresh {pn}\"\nSLOT=\"0\"\n"),
+            )
+            .unwrap();
+        }
+        let repo = Repository::builder().in_memory_cache().open(&root).unwrap();
+        let mut found: Vec<(String, String)> = described(&[], &[(0, repo)], false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.cpv.to_string(), d.description))
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                ("app-misc/bar-1".to_string(), "Fresh bar".to_string()),
+                ("app-misc/foo-1".to_string(), "Fresh foo".to_string()),
+            ]
         );
     }
 
