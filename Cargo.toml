@@ -118,10 +118,10 @@ terminal_size = "0.4"
 # 0.11 still pre-release; pin tip RC until stable ships. 0.10 is the last stable.
 blake2 = "0.11.0-rc.6"
 boxcar = "0.2"
-brush-winnow-args-adapter = { git = "https://github.com/lu-zero/brush.git", rev = "ab841787" }
-brush-builtins = { git = "https://github.com/lu-zero/brush.git", rev = "ab841787" }
-brush-core = { git = "https://github.com/lu-zero/brush.git", rev = "ab841787" }
-brush-parser = { git = "https://github.com/lu-zero/brush.git", rev = "ab841787" }
+brush-winnow-args-adapter = { git = "https://github.com/lu-zero/brush.git", rev = "08cfdd95" }
+brush-builtins = { git = "https://github.com/lu-zero/brush.git", rev = "08cfdd95" }
+brush-core = { git = "https://github.com/lu-zero/brush.git", rev = "08cfdd95" }
+brush-parser = { git = "https://github.com/lu-zero/brush.git", rev = "08cfdd95" }
 dhat = "0.3.3"
 # LD_PRELOAD fake root (same FakerootCommandExt API), for --privilege pseudoroot.
 pseudoroot = "0.2.2"
