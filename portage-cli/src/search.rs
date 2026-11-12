@@ -15,8 +15,16 @@ fn open_repos(repo_paths: &[std::path::PathBuf]) -> Result<Vec<Repository>> {
         bail!("no repositories configured");
     }
     let mut repos: Vec<Repository> = Vec::with_capacity(repo_paths.len());
+    // Masters as the resolver resolves them (named under the main repository's parent), so an
+    // overlay without md5-cache can be sourced against their eclasses and categories.
+    let repos_dir = repo_paths[0]
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
     for p in repo_paths {
-        match crate::repo_open::open(p) {
+        let opened = crate::repo_open::open_with_masters(p, &repos_dir, None, None)
+            .or_else(|_| crate::repo_open::open(p));
+        match opened {
             Ok(r) => repos.push(r),
             Err(e) => crate::style::warn_line!("skipping {}: {e}", p.display()),
         }
@@ -667,6 +675,61 @@ mod tests {
                 ("app-misc/bar-1-r1".to_string(), String::new()),
             ]
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_overlay_without_md5_cache_is_sourced_against_its_master() {
+        let dir = tempfile::tempdir().unwrap();
+        let master = dir.path().join("gentoo");
+        let ov = dir.path().join("ov");
+        for (root, name) in [(&master, "gentoo"), (&ov, "ov")] {
+            std::fs::create_dir_all(root.join("profiles")).unwrap();
+            std::fs::create_dir_all(root.join("metadata")).unwrap();
+            std::fs::write(root.join("profiles/repo_name"), format!("{name}\n")).unwrap();
+        }
+        std::fs::write(master.join("metadata/layout.conf"), "masters =\n").unwrap();
+        std::fs::write(master.join("profiles/categories"), "app-misc\n").unwrap();
+        std::fs::create_dir_all(master.join("eclass")).unwrap();
+        std::fs::write(
+            master.join("eclass/desc.eclass"),
+            "DESCRIPTION=\"from the master eclass\"\n",
+        )
+        .unwrap();
+        // The overlay lists no categories and inherits a master eclass.
+        std::fs::write(ov.join("metadata/layout.conf"), "masters = gentoo\n").unwrap();
+        std::fs::create_dir_all(ov.join("app-misc/ovpkg")).unwrap();
+        std::fs::write(
+            ov.join("app-misc/ovpkg/ovpkg-1.ebuild"),
+            "EAPI=8\ninherit desc\nSLOT=\"0\"\n",
+        )
+        .unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let repos: Vec<Repository> = [&master, &ov]
+            .iter()
+            .map(|p| {
+                Repository::builder()
+                    .user_cache_root(
+                        camino::Utf8PathBuf::try_from(cache.path().to_path_buf()).unwrap(),
+                    )
+                    .open_with_masters(p.as_path(), dir.path(), None, None)
+                    .unwrap()
+            })
+            .collect();
+        let found: Vec<(String, String)> = sourced(&repos[1], 1, false)
+            .await
+            .into_iter()
+            .map(|d| (d.cpv.to_string(), d.description))
+            .collect();
+        assert_eq!(
+            found,
+            [(
+                "app-misc/ovpkg-1".to_string(),
+                "from the master eclass".to_string()
+            )]
+        );
+        // And the emerge-style block then reads it back from the user-side cache.
+        let cpn = Cpn::parse("app-misc/ovpkg").unwrap();
+        assert!(latest_visible(&repos, 1, &cpn, "amd64").is_some());
     }
 
     #[test]
