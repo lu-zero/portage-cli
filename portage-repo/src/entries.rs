@@ -491,6 +491,32 @@ pub async fn alias_entries(
     .await
 }
 
+/// Entries for `cpvs`, which the storage backend holds no valid entry for: the secondary
+/// cache's when still valid, otherwise sourced through the tree and written there
+#[cfg(feature = "redb")]
+pub(crate) async fn backend_gaps(repo: &Repository, cpvs: Vec<Cpv>) -> Vec<(Cpv, CacheEntry)> {
+    if cpvs.is_empty() {
+        return Vec::new();
+    }
+    tracing::debug!(
+        "repo '{}': {} ebuild(s) with no valid stored entry",
+        repo.name(),
+        cpvs.len()
+    );
+    let ebuilds: Vec<_> = cpvs
+        .into_iter()
+        .map(|cpv| repo.listed_ebuild(cpv))
+        .collect();
+    resolve_ebuilds(
+        repo,
+        Store::Only(repo.secondary()),
+        ebuilds,
+        &mut HashMap::new(),
+        &mut EclassMemo::default(),
+    )
+    .await
+}
+
 /// Where [`resolve_ebuilds`] looks up and persists what it sources
 #[derive(Clone, Copy)]
 enum Store<'a> {

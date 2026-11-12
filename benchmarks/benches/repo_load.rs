@@ -60,6 +60,41 @@ fn bench_repo_load(c: &mut Criterion) {
         b.iter(|| std::hint::black_box(repo.profile_updates().expect("updates")))
     });
 
+    #[cfg(feature = "redb")]
+    if let Ok(db) = std::env::var("GENTOO_REDB") {
+        use portage_repo::tree::redb::{RedbCache, RedbTree};
+        let cache_db = std::env::var("GENTOO_REDB_CACHE").expect("GENTOO_REDB_CACHE");
+        let open_redb = || {
+            let tree = std::sync::Arc::new(RedbTree::open(db.as_str()).expect("redb"));
+            let cache = RedbCache::open(cache_db.as_str(), tree.clone()).expect("cache redb");
+            let cache = std::sync::Arc::new(cache);
+            let mut storage = portage_repo::tree::Storage::checkout(repo_path.as_str().into());
+            storage.tree = tree;
+            storage.entries = cache.clone();
+            storage.primary = cache;
+            Repository::builder()
+                .in_memory_cache()
+                .storage(storage)
+                .open(&repo_path)
+                .expect("failed to open repository")
+        };
+        let redb = open_redb();
+        // The database holds the checkout's own commit, so both answer the same entries.
+        assert_eq!(runtime.block_on(redb.entries()).len(), entry_count);
+        group.bench_function("redb_entries", |b| {
+            b.iter_with_large_drop(|| {
+                let entries = runtime.block_on(redb.entries());
+                assert_eq!(entries.len(), entry_count);
+                std::hint::black_box(entries)
+            })
+        });
+        group.bench_function("redb_profile_updates", |b| {
+            b.iter(|| std::hint::black_box(redb.profile_updates().expect("updates")))
+        });
+        group.bench_function("redb_open", |b| {
+            b.iter(|| std::hint::black_box(open_redb()))
+        });
+    }
     group.finish();
 }
 

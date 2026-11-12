@@ -17,6 +17,8 @@ dhat-heap = ["dep:dhat"]
 mimalloc = ["dep:mimalloc"]
 lasso = ["portage-atom/lasso", "portage-metadata/lasso"]
 symbol-table = ["portage-atom/symbol-table", "portage-metadata/symbol-table"]
+# Read a repository from a redb database instead of a checkout (experimental)
+redb = ["dep:redb", "dep:serde_json", "dep:zstd"]
 
 [dependencies]
 futures-util = { workspace = true }
@@ -52,6 +54,9 @@ md5 = { workspace = true }
 winnow = { workspace = true, features = ["parser"] }
 rustix = { workspace = true }
 tempfile = { workspace = true }
+redb = { version = "4", optional = true }
+zstd = { version = "0.14", optional = true }
+serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 clap = { workspace = true }

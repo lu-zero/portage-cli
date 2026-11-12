@@ -15,6 +15,9 @@ use crate::error::Result;
 use crate::metadata_cache::{DirMetadataCache, MetadataCache};
 use crate::repo::Repository;
 
+#[cfg(feature = "redb")]
+pub mod redb;
+
 /// What a directory child is
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
@@ -57,8 +60,15 @@ pub trait EntrySource: Send + Sync {
     }
 }
 
-/// The storage of the repository at `location`: its checkout, serving both files and entries
+/// The storage of the repository at `location`
+///
+/// With the `redb` feature, `<location>.redb` holds the tree and `<location>.md5-cache.redb` the
+/// entries, when they exist; otherwise the checkout at `location` serves both.
 pub(crate) fn storage_at(location: &Utf8Path) -> io::Result<Storage> {
+    #[cfg(feature = "redb")]
+    if let Some(found) = redb::storage_at(location)? {
+        return Ok(found);
+    }
     Ok(Storage::checkout(location))
 }
 
@@ -86,12 +96,32 @@ impl Storage {
 
 /// The tree of the repository at `location`, as [`storage_at`] finds it
 pub(crate) fn tree_at(location: &Utf8Path) -> io::Result<Arc<dyn TreeSource>> {
+    #[cfg(feature = "redb")]
+    if let Some(tree) = redb::tree_at(location)? {
+        return Ok(tree);
+    }
     Ok(Arc::new(FsTree::new(location)))
 }
 
+/// Whether the repository at `location` is read from a database next to it (`<location>.redb`)
+/// rather than its checkout; always `false` without the `redb` feature
+pub fn stored_elsewhere(location: &Utf8Path) -> bool {
+    cfg_select! {
+        feature = "redb" => redb::tree_file(location).is_file(),
+        _ => {
+            let _ = location;
+            false
+        }
+    }
+}
+
 /// Whether `location` holds a repository: a checkout with `metadata/layout.conf` or
-/// `profiles/repo_name`
+/// `profiles/repo_name`, or (with the `redb` feature) a tree database next to it
 pub(crate) fn is_repository(location: &Utf8Path) -> bool {
+    #[cfg(feature = "redb")]
+    if redb::tree_file(location).is_file() {
+        return true;
+    }
     location.join("metadata/layout.conf").is_file() || location.join("profiles/repo_name").is_file()
 }
 
