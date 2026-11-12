@@ -2358,6 +2358,10 @@ impl EbuildShell {
 
     /// Read a variable from the shell environment
     pub fn get_var(&self, name: &str) -> Option<String> {
+        // `export NAME` leaves an exported variable with no value, which is not a set one.
+        if !self.shell.env().is_set(name, &self.shell) {
+            return None;
+        }
         self.shell.env_str(name).map(|cow| cow.into_owned())
     }
 
