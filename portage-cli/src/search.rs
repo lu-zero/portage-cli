@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write as _;
 
 use anyhow::{Result, bail};
@@ -305,12 +305,7 @@ pub async fn run_emerge_style(
     search_index: bool,
 ) -> Result<()> {
     let repos = open_repos(repo_paths)?;
-    // A repository without md5-cache answers `cache_entry` only from the user-side cache, empty
-    // until something sources its ebuilds; source them now, as emerge's `aux_get` would, so its
-    // descriptions match and its blocks show a version.
-    for repo in repos.iter().filter(|r| !r.has_primary_cache()) {
-        repo_entries(repo).await;
-    }
+    let entries = repo_entry_maps(&repos).await;
     let descs = if search_desc {
         let (indexed, rest) = split_indexed(&repos, search_index);
         described(&indexed, &rest, false).await?
@@ -361,7 +356,7 @@ pub async fn run_emerge_style(
                         contains_ci(pkg.name(), pat)
                     };
                     if !hit && search_desc && !has_cache {
-                        hit = latest_visible(&repos, idx, pkg.cpn(), &arch_str)
+                        hit = latest_visible(&repos, &entries, idx, pkg.cpn(), &arch_str)
                             .is_some_and(|(_, e, _)| contains_ci(&e.metadata.description, pat));
                     }
                     if hit {
@@ -383,7 +378,7 @@ pub async fn run_emerge_style(
         }
 
         for (key, (cpn, idx)) in &matched {
-            print_search_block(&repos, *idx, cpn, key, &installed, &arch_str);
+            print_search_block(&repos, &entries, *idx, cpn, key, &installed, &arch_str);
         }
         println!("[ Applications found : {} ]\n", matched.len());
     }
@@ -397,8 +392,21 @@ pub async fn run_emerge_style(
 /// found for the arch; `false` means the returned entry is a fallback to the
 /// newest version that had metadata (the package appears as "\[ Masked \]" in
 /// emerge-style search output).
+/// A repository's cache entries by version, each checked against its ebuild
+type Entries = HashMap<Cpv, portage_metadata::CacheEntry>;
+
+/// The checked entries of every repository, sourcing the ones a cache lacks or has stale
+async fn repo_entry_maps(repos: &[Repository]) -> Vec<Entries> {
+    let mut maps = Vec::with_capacity(repos.len());
+    for repo in repos {
+        maps.push(repo_entries(repo).await.into_iter().collect());
+    }
+    maps
+}
+
 fn latest_visible(
     repos: &[Repository],
+    entries: &[Entries],
     idx: usize,
     cpn: &Cpn,
     arch: &str,
@@ -409,7 +417,7 @@ fn latest_visible(
     let ebuilds = pkg.ebuilds().ok()?;
     let mut newest: Option<(portage_atom::Version, portage_metadata::CacheEntry, bool)> = None;
     for eb in ebuilds.iter().rev() {
-        let Some(entry) = entry_for(repos, idx, eb) else {
+        let Some(entry) = entry_for(repos, entries, idx, eb) else {
             continue;
         };
         if newest.is_none() {
@@ -431,18 +439,17 @@ fn latest_visible(
 /// the link resolves into.
 fn entry_for(
     repos: &[Repository],
+    entries: &[Entries],
     idx: usize,
     ebuild: &portage_repo::Ebuild,
 ) -> Option<portage_metadata::CacheEntry> {
-    let repo = &repos[idx];
     let cpv = ebuild.cpv();
-    // Primary then secondary (configured at open via builder).
-    if let Ok(Some(entry)) = repo.cache_entry(cpv) {
-        return Some(entry);
+    if let Some(entry) = entries[idx].get(cpv) {
+        return Some(entry.clone());
     }
     // Symlinked ebuild: the target repo's cache entry is byte-exact.
     let real = ebuild.path().canonicalize_utf8().ok()?;
-    for other in repos {
+    for (other_idx, other) in repos.iter().enumerate() {
         let Ok(rel) = real.strip_prefix(other.path()) else {
             continue;
         };
@@ -450,8 +457,8 @@ fn entry_for(
         let Ok(target) = Cpv::parse(&format!("{category}/{}", rel.file_stem()?)) else {
             continue;
         };
-        if let Ok(Some(entry)) = other.cache_entry(&target) {
-            return Some(entry);
+        if let Some(entry) = entries[other_idx].get(&target) {
+            return Some(entry.clone());
         }
     }
     None
@@ -459,13 +466,14 @@ fn entry_for(
 
 fn print_search_block(
     repos: &[Repository],
+    entries: &[Entries],
     idx: usize,
     cpn: &Cpn,
     key: &str,
     installed: &BTreeMap<Cpn, portage_atom::Version>,
     arch: &str,
 ) {
-    let latest = latest_visible(repos, idx, cpn, arch);
+    let latest = latest_visible(repos, entries, idx, cpn, arch);
     let is_masked = latest.as_ref().is_some_and(|(_, _, vis)| !vis);
 
     let mut out = anstream::stdout();
@@ -702,9 +710,10 @@ mod tests {
                 "from the master eclass".to_string()
             )]
         );
-        // And the emerge-style block then reads it back from the user-side cache.
+        // And the emerge-style block reads the same entries.
+        let entries = repo_entry_maps(&repos).await;
         let cpn = Cpn::parse("app-misc/ovpkg").unwrap();
-        assert!(latest_visible(&repos, 1, &cpn, "amd64").is_some());
+        assert!(latest_visible(&repos, &entries, 1, &cpn, "amd64").is_some());
     }
 
     #[test]
@@ -809,6 +818,44 @@ mod tests {
                 ("app-misc/foo-1".to_string(), "Fresh foo".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn the_emerge_style_block_reads_a_stale_cache_entry_from_the_ebuild() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ov");
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::create_dir_all(root.join("metadata/md5-cache/app-misc")).unwrap();
+        std::fs::create_dir_all(root.join("app-misc/foo")).unwrap();
+        std::fs::write(root.join("profiles/repo_name"), "ov\n").unwrap();
+        std::fs::write(root.join("profiles/categories"), "app-misc\n").unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        let cache = root.join("metadata/md5-cache/app-misc/foo-1");
+        std::fs::write(
+            &cache,
+            "DESCRIPTION=Stale\nEAPI=8\nSLOT=0\nKEYWORDS=amd64\n_md5_=00000000000000000000000000000000\n",
+        )
+        .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&cache)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap();
+        std::fs::write(
+            root.join("app-misc/foo/foo-1.ebuild"),
+            "EAPI=8\nDESCRIPTION=\"Fresh\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+        )
+        .unwrap();
+        let repos = [Repository::builder().in_memory_cache().open(&root).unwrap()];
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let entries = rt.block_on(repo_entry_maps(&repos));
+        let cpn = Cpn::parse("app-misc/foo").unwrap();
+        let (_, entry, _) = latest_visible(&repos, &entries, 0, &cpn, "amd64").unwrap();
+        assert_eq!(entry.metadata.description, "Fresh");
     }
 
     #[tokio::test]
