@@ -871,4 +871,147 @@ mod tests {
         assert_eq!(human_bytes(2048), "2.0 KiB");
         assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MiB");
     }
+
+    // A repository read from its database has no package directories at its location, or only a
+    // stale checkout: the keep sets come from the database, never from that directory.
+    #[cfg(all(feature = "redb", feature = "sync-gix"))]
+    #[test]
+    fn a_repository_stored_in_redb_keeps_its_own_distfiles_and_packages() {
+        use std::process::Command;
+        let git = |cwd: &Utf8Path, args: &[&str]| {
+            let st = Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?}");
+        };
+        let write = |root: &Utf8Path, files: &[(&str, &str)]| {
+            for (path, text) in files {
+                let file = root.join(path);
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(&file, text).unwrap();
+            }
+        };
+        let _path = crate::test_support::path_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let origin = root.join("origin");
+        write(
+            &origin,
+            &[
+                ("profiles/repo_name", "stored\n"),
+                ("profiles/categories", "app-misc\n"),
+                ("metadata/layout.conf", "masters =\n"),
+                (
+                    "app-misc/foo/foo-2.ebuild",
+                    "EAPI=8\nSRC_URI=\"https://e/foo-2.tar.gz\"\n",
+                ),
+                ("app-misc/foo/Manifest", "DIST foo-2.tar.gz 3 SHA256 aa\n"),
+                ("app-misc/bar/bar-1.ebuild", "EAPI=8\n"),
+                (
+                    "app-misc/nomani/nomani-1.ebuild",
+                    "EAPI=8\nSRC_URI=\"https://e/n.tar.gz\"\n",
+                ),
+            ],
+        );
+        git(&origin, &["init", "-q"]);
+        git(&origin, &["add", "."]);
+        git(&origin, &["commit", "-q", "-m", "1"]);
+        let url = format!("file://{origin}");
+
+        // Converted from a checkout, which then went stale: its Manifest still names foo-1.
+        let converted = root.join("converted");
+        git(root, &["clone", "-q", &url, converted.as_str()]);
+        crate::maint::sync::sync_redb_for_tests(&converted, &url);
+        write(
+            &converted,
+            &[("app-misc/foo/Manifest", "DIST foo-1.tar.gz 3 SHA256 aa\n")],
+        );
+        std::fs::rename(
+            converted.join("app-misc/foo/foo-2.ebuild"),
+            converted.join("app-misc/foo/foo-1.ebuild"),
+        )
+        .unwrap();
+        // Fetched with no checkout at all.
+        let fetched = root.join("fetched");
+        crate::maint::sync::sync_redb_for_tests(&fetched, &url);
+        assert!(!fetched.exists());
+
+        for location in [&converted, &fetched] {
+            let mut wanted = std::collections::HashSet::new();
+            let mut unmanifested = 0;
+            repo_distfiles(location, None, &mut wanted, &mut unmanifested).unwrap();
+            assert_eq!(
+                wanted,
+                std::collections::HashSet::from(["foo-2.tar.gz".to_string()]),
+                "{location}"
+            );
+            assert_eq!(
+                unmanifested, 1,
+                "{location}: nomani has a SRC_URI and no Manifest"
+            );
+
+            let only = std::collections::HashSet::from([("app-misc".into(), "bar".into())]);
+            let mut wanted = std::collections::HashSet::new();
+            repo_distfiles(location, Some(&only), &mut wanted, &mut 0).unwrap();
+            assert!(
+                wanted.is_empty(),
+                "{location}: --deep keeps only installed packages"
+            );
+
+            let mut cpvs: Vec<String> = repo_cpvs(location).unwrap().into_iter().collect();
+            cpvs.sort();
+            assert_eq!(
+                cpvs,
+                ["app-misc/bar-1", "app-misc/foo-2", "app-misc/nomani-1"],
+                "{location}"
+            );
+        }
+
+        // An overlay without profiles/categories keeps what its category directories hold.
+        let overlay = root.join("overlay-origin");
+        write(
+            &overlay,
+            &[
+                ("profiles/repo_name", "bare\n"),
+                ("metadata/layout.conf", "masters = gentoo\n"),
+                (
+                    "app-misc/baz/baz-1.ebuild",
+                    "EAPI=8\nSRC_URI=\"https://e/baz-1.tar.gz\"\n",
+                ),
+                ("app-misc/baz/Manifest", "DIST baz-1.tar.gz 3 SHA256 aa\n"),
+            ],
+        );
+        git(&overlay, &["init", "-q"]);
+        git(&overlay, &["add", "."]);
+        git(&overlay, &["commit", "-q", "-m", "1"]);
+        let bare = root.join("bare");
+        crate::maint::sync::sync_redb_for_tests(&bare, &format!("file://{overlay}"));
+        let mut wanted = std::collections::HashSet::new();
+        repo_distfiles(&bare, None, &mut wanted, &mut 0).unwrap();
+        assert_eq!(
+            wanted,
+            std::collections::HashSet::from(["baz-1.tar.gz".to_string()])
+        );
+        let cpvs: Vec<String> = repo_cpvs(&bare).unwrap().into_iter().collect();
+        assert_eq!(cpvs, ["app-misc/baz-1"]);
+
+        // A database that cannot be read stops the sweep instead of keeping nothing from it.
+        std::fs::write(format!("{fetched}.redb"), b"not a database").unwrap();
+        assert!(repo_cpvs(&fetched).is_err());
+        assert!(
+            repo_distfiles(
+                &fetched,
+                None,
+                &mut std::collections::HashSet::new(),
+                &mut 0
+            )
+            .is_err()
+        );
+    }
 }
