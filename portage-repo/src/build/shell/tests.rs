@@ -2763,3 +2763,31 @@ async fn an_env_file_that_exits_is_an_error() {
     assert!(err.to_string().contains("exited 0"), "{err}");
     assert_ne!(shell.get_var("CFLAGS").as_deref(), Some("-O3"));
 }
+
+#[tokio::test]
+async fn get_var_reads_an_exported_name_with_no_value_as_unset() {
+    // 560b69eb: `export NAME` exports the name without setting it, as `[[ -v NAME ]]` says.
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().to_path_buf();
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters = \n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "test-repo\n").unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    shell
+        .run_string(
+            "export EM_NOVAL; EM_EMPTY=; export EM_SET=x; EM_DROPPED=y; unset EM_DROPPED; \
+             [[ -v EM_NOVAL ]] && BASH_SAYS=set || BASH_SAYS=unset",
+        )
+        .await
+        .unwrap();
+    assert_eq!(shell.get_var("BASH_SAYS").as_deref(), Some("unset"));
+    assert_eq!(shell.get_var("EM_NOVAL"), None);
+    assert_eq!(shell.get_var("EM_EMPTY").as_deref(), Some(""));
+    assert_eq!(shell.get_var("EM_SET").as_deref(), Some("x"));
+    assert_eq!(shell.get_var("EM_DROPPED"), None);
+}
