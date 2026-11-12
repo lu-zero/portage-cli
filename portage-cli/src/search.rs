@@ -302,6 +302,12 @@ pub async fn run_emerge_style(
     search_index: bool,
 ) -> Result<()> {
     let repos = open_repos(repo_paths)?;
+    // A repository without md5-cache answers `cache_entry` only from the user-side cache, empty
+    // until something sources its ebuilds; source them now, as emerge's `aux_get` would, so its
+    // descriptions match and its blocks show a version.
+    for repo in repos.iter().filter(|r| !r.has_primary_cache()) {
+        repo_entries(repo).await;
+    }
     let descs = if search_desc {
         let (indexed, rest) = split_indexed(&repos, search_index);
         described(&indexed, &rest, false).await?
