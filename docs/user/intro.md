@@ -313,6 +313,14 @@ em sync
 em sync
 ```
 
+**Experimental: a repository stored in redb.** An `em` built with the `redb` and `sync-gix`
+features can keep a repository in two database files next to its location instead of a checkout.
+Set `sync-type = git-redb` in its `repos.conf` entry; `em sync` then imports the checkout's commit,
+or fetches the tip, and later syncs update the database from the remote. Only `em` syncs it:
+emerge does not know the sync type, and a checkout left at the location stops being updated.
+While `em sync` writes the database, other `em` commands reading that repository stop with an
+error, and the other way round. The database format may still change; [`tree-storage.md`](../design/tree-storage.md) has the design.
+
 ### Bootstrap and Setup
 
 ```bash
