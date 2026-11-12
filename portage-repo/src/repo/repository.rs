@@ -549,6 +549,12 @@ impl Repository {
         &self.path
     }
 
+    /// Whether the repository lives somewhere other than a checkout at [`Self::path`], so
+    /// writers that target its directory must not run
+    pub fn stored_elsewhere(&self) -> bool {
+        !self.tree.is_checkout()
+    }
+
     /// Where copies of this repository go, keyed by its location so two trees sharing a name
     /// (the host's and a stage's) never prune each other
     fn copies_dir(&self) -> Option<Utf8PathBuf> {
@@ -811,6 +817,16 @@ impl Repository {
         pkg.ebuild(&cpv.version.to_string())
     }
 
+    /// `cpv`'s ebuild, which the storage backend's own index says exists
+    #[cfg(feature = "redb")]
+    pub(crate) fn listed_ebuild(&self, cpv: Cpv) -> Ebuild {
+        let rel = Utf8PathBuf::from(format!(
+            "{}/{}/{}-{}.ebuild",
+            cpv.cpn.category, cpv.cpn.package, cpv.cpn.package, cpv.version
+        ));
+        Ebuild::in_tree(cpv, self.path.join(&rel), Arc::clone(&self.tree), rel)
+    }
+
     /// Look up a single package by `Cpn`; `None` when this repo has no such package
     pub fn package(&self, cpn: &Cpn) -> Option<Package> {
         self.category(cpn.category.as_ref())?
@@ -882,6 +898,12 @@ impl Repository {
             return Ok(None);
         }
         self.secondary.get(cpv)
+    }
+
+    /// The secondary (always-writable) store
+    #[cfg(feature = "redb")]
+    pub(crate) fn secondary(&self) -> &dyn MetadataCache {
+        &*self.secondary
     }
 
     /// Persist `entry` to the secondary (always-writable) store

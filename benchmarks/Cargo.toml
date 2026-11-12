@@ -29,6 +29,7 @@ dhat-heap = ["dep:dhat"]
 # comparisons, so keep the default `cargo build`/`check` over this crate
 # lean and opt in explicitly when you actually want the pkgcraft numbers.
 pkgcraft-compare = ["dep:pkgcraft"]
+redb = ["portage-repo/redb"]
 
 [dependencies]
 gentoo-core = { workspace = true }
