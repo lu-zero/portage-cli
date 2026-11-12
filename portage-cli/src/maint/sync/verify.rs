@@ -47,8 +47,8 @@ impl CommitVerifier {
         Self { keyring, key_path }
     }
 
-    /// Check `raw`, the object of the tip commit `rev`, before anything moves to it
-    pub(super) fn check(&self, raw: &[u8], rev: &str, quiet: bool) -> Result<()> {
+    /// Check `raw`, the object of the tip commit `rev`, before anything moves to it; the signing key
+    pub(super) fn check(&self, raw: &[u8], rev: &str, quiet: bool) -> Result<String> {
         let Some((signature, signed)) = split_signature(raw) else {
             bail!("No valid signature found: no signature (git revision: {rev})");
         };
@@ -60,7 +60,7 @@ impl CommitVerifier {
                 self.key_path.display()
             ));
         }
-        Ok(())
+        Ok(signer)
     }
 }
 
