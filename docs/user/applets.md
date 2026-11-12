@@ -133,7 +133,7 @@ and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`
 
 | Subcommand | Status | Notes |
 |---|---|---|
-| `dist` | Working | Removes distfiles no ebuild references. The reference set is every `DIST` line in every `Manifest` across the configured repos |
+| `dist` | Working | Removes distfiles no ebuild references. The reference set is every `DIST` line in every `Manifest` across the configured repos, read from a repository's database when it is stored in redb |
 | `pkg` | Working | Removes binary packages whose cpv no longer has an ebuild |
 | `all` | Working | Both of the above plus the retained `build.log` files (`em maint logs`), announcing each step |
 
