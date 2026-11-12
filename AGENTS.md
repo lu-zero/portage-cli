@@ -188,6 +188,9 @@ brush".
 - Tests live in a `#[cfg(test)] mod tests` block
 - Keep doctests compiling and green (`cargo test --doc`); rustdoc under
   `RUSTDOCFLAGS=-D warnings` must stay clean
+- Mermaid diagrams in `docs/` use the winnow-args help palette: copy the `config:` header and
+  `classDef` lines from a block in `docs/design/tree-storage.md`, since GitHub has no shared config.
+  Roles: teal nodes, `#5faf5f` results, `#87afaf` decisions, `#00afaf` storage, `#d75f5f` failures
 
 ### Licensing — never embed a real shell script
 
