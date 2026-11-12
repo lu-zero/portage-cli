@@ -160,20 +160,34 @@ struct Described {
 /// versions the earlier repository wins
 async fn described(
     indexed: &[(usize, DescIndex)],
-    rest: &[Repository],
+    rest: &[(usize, Repository)],
     homepage: bool,
 ) -> Result<Vec<Described>> {
     let opts = CacheReadOpts {
         latest_per_cpn: true,
         ..Default::default()
     };
-    let cached = cache_entries_parallel(rest, &opts, move |text| {
-        let raw = RawCacheEntry::new(text);
-        let description = raw.field("DESCRIPTION").unwrap_or("").to_string();
-        let page = homepage.then(|| raw.field("HOMEPAGE").unwrap_or("").to_string());
-        Ok::<_, portage_repo::Error>((description, page))
-    })
-    .await?;
+    // One read per repository, so an md5-cache hit names the repository it came from (an
+    // overlay-only package must not be looked up in the first repository).
+    let mut from_cache = Vec::new();
+    for (repo, repository) in rest {
+        let cached = cache_entries_parallel(std::slice::from_ref(repository), &opts, move |text| {
+            let raw = RawCacheEntry::new(text);
+            let description = raw.field("DESCRIPTION").unwrap_or("").to_string();
+            let page = homepage.then(|| raw.field("HOMEPAGE").unwrap_or("").to_string());
+            Ok::<_, portage_repo::Error>((description, page))
+        })
+        .await?;
+        from_cache.extend(cached.into_iter().filter_map(|(cpv, r)| {
+            let (description, homepage) = r.ok()?;
+            Some(Described {
+                cpv,
+                repo: *repo,
+                description,
+                homepage,
+            })
+        }));
+    }
     let from_index = indexed.iter().flat_map(|(repo, index)| {
         index.iter().map(|(cpv, description)| Described {
             cpv: cpv.clone(),
@@ -182,19 +196,12 @@ async fn described(
             homepage: None,
         })
     });
-    let from_cache = cached.into_iter().filter_map(|(cpv, r)| {
-        let (description, homepage) = r.ok()?;
-        Some(Described {
-            cpv,
-            repo: 0,
-            description,
-            homepage,
-        })
-    });
     let mut best: std::collections::HashMap<Cpn, Described> = std::collections::HashMap::new();
     for d in from_index.chain(from_cache) {
         match best.get(&d.cpv.cpn) {
-            Some(prev) if prev.cpv.version >= d.cpv.version => {}
+            Some(prev)
+                if prev.cpv.version > d.cpv.version
+                    || (prev.cpv.version == d.cpv.version && prev.repo <= d.repo) => {}
             _ => {
                 best.insert(d.cpv.cpn, d);
             }
@@ -203,18 +210,20 @@ async fn described(
     Ok(best.into_values().collect())
 }
 
-/// The descriptions of the repositories with an index, by position in `repos`, and the
-/// repositories whose md5-cache has to be read instead
-fn split_indexed(
-    repos: &[Repository],
-    use_index: bool,
-) -> (Vec<(usize, DescIndex)>, Vec<Repository>) {
+/// Repositories by position, with their description index
+type Indexed = Vec<(usize, DescIndex)>;
+/// Repositories by position, whose md5-cache has to be read
+type Scanned = Vec<(usize, Repository)>;
+
+/// The descriptions of the repositories with an index, and the repositories whose md5-cache has
+/// to be read instead, each by its position in `repos`
+fn split_indexed(repos: &[Repository], use_index: bool) -> (Indexed, Scanned) {
     let mut indexed = Vec::new();
     let mut rest = Vec::new();
     for (idx, repo) in repos.iter().enumerate() {
         match use_index.then(|| desc_index(repo)).flatten() {
             Some(index) => indexed.push((idx, index)),
-            None => rest.push(repo.clone()),
+            None => rest.push((idx, repo.clone())),
         }
     }
     (indexed, rest)
@@ -222,7 +231,7 @@ fn split_indexed(
 
 async fn run_desc(
     indexed: &[(usize, DescIndex)],
-    repos: &[Repository],
+    repos: &[(usize, Repository)],
     pat: &str,
     all: bool,
     name_only: bool,
@@ -521,6 +530,64 @@ fn distfiles_size(repo: &Repository, cpn: &Cpn, meta: &portage_metadata::EbuildM
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A repository with `metadata/md5-cache` entries `(cpv, description)` and no index
+    fn repo_with_cache(dir: &std::path::Path, name: &str, entries: &[(&str, &str)]) -> Repository {
+        let root = dir.join(name);
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        std::fs::write(root.join("profiles/repo_name"), format!("{name}\n")).unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        for (cpv, description) in entries {
+            let (cat, pf) = cpv.split_once('/').unwrap();
+            let cache = root.join("metadata/md5-cache").join(cat);
+            std::fs::create_dir_all(&cache).unwrap();
+            std::fs::write(
+                cache.join(pf),
+                format!("DESCRIPTION={description}\nEAPI=8\nSLOT=0\n_md5_=00000000000000000000000000000000\n"),
+            )
+            .unwrap();
+        }
+        Repository::builder().in_memory_cache().open(root).unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_md5_cache_hit_names_its_own_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let repos = [
+            repo_with_index(dir.path(), "gentoo", "app-misc/foo 1: Foo\n"),
+            repo_with_cache(
+                dir.path(),
+                "overlay",
+                &[
+                    ("app-misc/only-1", "Overlay only"),
+                    ("app-misc/foo-1", "Foo again"),
+                ],
+            ),
+            repo_with_cache(
+                dir.path(),
+                "third",
+                &[("app-misc/only-1", "Same version later")],
+            ),
+        ];
+        let (indexed, rest) = split_indexed(&repos, true);
+        assert_eq!(rest.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1, 2]);
+        let mut found: Vec<(String, usize, String)> = described(&indexed, &rest, false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.cpv.to_string(), d.repo, d.description))
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                ("app-misc/foo-1".to_string(), 0, "Foo".to_string()),
+                ("app-misc/only-1".to_string(), 1, "Overlay only".to_string()),
+            ],
+            "the overlay-only package is the overlay's, and on equal versions the earlier repository wins"
+        );
+    }
 
     fn repo_with_index(dir: &std::path::Path, name: &str, index: &str) -> Repository {
         let root = dir.join(name);
