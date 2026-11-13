@@ -1,3 +1,6 @@
+// winnow-args spells a flag's extra short letters as repeated `short = '…'`.
+#![allow(clippy::duplicated_attributes)]
+
 #[cfg(test)]
 use std::ffi::OsStr;
 use std::ffi::OsString;
