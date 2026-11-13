@@ -1,6 +1,3 @@
-// winnow-args spells a flag's extra short letters as repeated `short = '…'`.
-#![allow(clippy::duplicated_attributes)]
-
 #[cfg(test)]
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -2798,21 +2795,15 @@ pub struct CleanArgs {
 #[derive(winnow_args::Args, Debug, Clone)]
 pub struct UseArgs {
     /// Add (enable) flags — euse calls this --enable/-E
-    #[arg(short = 'E', short = 'a', long = "add", value_name = "FLAG")]
+    #[arg(short = 'E', short_alias = 'a', long = "add", value_name = "FLAG")]
     pub add: Vec<String>,
     /// Subtract flags (written with leading '-', e.g. -themes) — euse
     /// calls this --disable/-D
-    #[arg(short = 'D', short = 's', long = "subtract", value_name = "FLAG")]
+    #[arg(short = 'D', short_alias = 's', long = "subtract", value_name = "FLAG")]
     pub subtract: Vec<String>,
     /// Drop flags entirely (removes both flag and -flag forms) — euse
     /// calls this --remove/-R or --prune/-P
-    #[arg(
-        short = 'R',
-        short = 'P',
-        short = 'd',
-        long = "drop",
-        value_name = "FLAG"
-    )]
+    #[arg(short = 'R', short_alias('P', 'd'), long = "drop", value_name = "FLAG")]
     pub drop: Vec<String>,
     /// Preview the resulting value without writing make.conf
     #[arg(short = 'n', long = "dry-run")]
@@ -2963,7 +2954,7 @@ pub struct GrepArgs {
 
     /// Treat PATTERN (and -S) as a regular expression instead of a literal
     /// substring
-    #[arg(short = 'e', long = "regexp", short = 'x', long = "extended")]
+    #[arg(short = 'e', long = "regexp", short_alias = 'x', alias = "extended")]
     pub regexp: bool,
 
     /// Search installed packages' own ebuild copies (under
@@ -3799,21 +3790,15 @@ pub enum PkgCommand {
         atom: String,
         /// Add flags (written verbatim, e.g. truetype) — euse calls this
         /// --enable/-E
-        #[arg(short = 'E', short = 'a', long = "add", value_name = "FLAG")]
+        #[arg(short = 'E', short_alias = 'a', long = "add", value_name = "FLAG")]
         add: Vec<String>,
         /// Subtract flags (written with leading '-', e.g. -themes) — euse
         /// calls this --disable/-D
-        #[arg(short = 'D', short = 's', long = "subtract", value_name = "FLAG")]
+        #[arg(short = 'D', short_alias = 's', long = "subtract", value_name = "FLAG")]
         subtract: Vec<String>,
         /// Drop flags entirely (removes both flag and -flag forms) — euse
         /// calls this --remove/-R or --prune/-P
-        #[arg(
-            short = 'R',
-            short = 'P',
-            short = 'd',
-            long = "drop",
-            value_name = "FLAG"
-        )]
+        #[arg(short = 'R', short_alias('P', 'd'), long = "drop", value_name = "FLAG")]
         drop: Vec<String>,
         /// Preview the resulting entry without writing package.use
         #[arg(short = 'n', long = "dry-run")]
