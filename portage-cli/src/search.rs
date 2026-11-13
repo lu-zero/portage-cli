@@ -93,17 +93,16 @@ fn run_name(repos: &[Repository], pat: &str, all: bool, name_only: bool, homepag
     let mut matched: BTreeMap<String, (Cpn, usize)> = BTreeMap::new();
     for (idx, repo) in repos.iter().enumerate() {
         for cat in walk_categories(repo, &names) {
-            for pkg in cat.packages() {
+            for name in cat.package_names() {
                 let hit = if all {
                     true
                 } else if pat_has_slash {
-                    let full = format!("{}/{}", cat.name(), pkg.name());
-                    contains_ci(&full, pat)
+                    contains_ci(&format!("{}/{name}", cat.name()), pat)
                 } else {
-                    contains_ci(pkg.name(), pat)
+                    contains_ci(&name, pat)
                 };
-                if hit {
-                    let key = format!("{}/{}", cat.name(), pkg.name());
+                if hit && let Some(pkg) = cat.package(&name) {
+                    let key = format!("{}/{name}", cat.name());
                     matched.entry(key).or_insert_with(|| (*pkg.cpn(), idx));
                 }
             }

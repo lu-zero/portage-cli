@@ -55,6 +55,26 @@ impl Category {
         Packages::new(self.clone())
     }
 
+    /// The names of the package directories, unsorted
+    ///
+    /// For scanning every name without building a [`Package`] for each; [`Self::package`] builds
+    /// the ones that matter.
+    pub fn package_names(&self) -> Vec<String> {
+        // `list` follows symlinks: some overlays (notably crossdev) symlink their package dirs
+        // at the gentoo originals.
+        self.tree
+            .list(Utf8Path::new(&self.name))
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(name, kind)| {
+                *kind == EntryKind::Dir && !name.starts_with('.') && name != "CVS"
+            })
+            .map(|(name, _)| name)
+            .collect()
+    }
+
     /// Look up a specific package by name
     pub fn package(&self, name: &str) -> Option<Package> {
         is_dir(&*self.tree, &Utf8Path::new(&self.name).join(name)).then(|| self.child(name))
@@ -112,21 +132,11 @@ impl IntoIterator for Packages {
     type IntoIter = PackagesIter;
 
     fn into_iter(self) -> PackagesIter {
-        // `list` follows symlinks: some overlays (notably crossdev) symlink their package dirs
-        // at the gentoo originals.
         let cat = &self.category;
-        let children = cat
-            .tree
-            .list(Utf8Path::new(&cat.name))
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let mut packages: Vec<Package> = children
-            .into_iter()
-            .filter(|(name, kind)| {
-                *kind == EntryKind::Dir && !name.starts_with('.') && name != "CVS"
-            })
-            .map(|(name, _)| cat.child(&name))
+        let mut packages: Vec<Package> = cat
+            .package_names()
+            .iter()
+            .map(|name| cat.child(name))
             .collect();
         packages.sort_by(|a, b| a.name().cmp(b.name()));
         PackagesIter {
@@ -256,6 +266,21 @@ mod tests {
         let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap(), fs(&tmp));
         let pkgs = cat.packages().collect_vec();
         let names: Vec<&str> = pkgs.iter().map(|p| p.name()).collect();
+        assert_eq!(names, vec!["bar", "foo"]);
+    }
+
+    #[test]
+    fn package_names_lists_package_directories_only() {
+        let tmp = setup_repo();
+        let cat_dir = tmp.path().join("dev-util");
+        for dir in ["foo", "bar", ".hidden", "CVS"] {
+            std::fs::create_dir_all(cat_dir.join(dir)).unwrap();
+        }
+        std::fs::write(cat_dir.join("README"), "not a package").unwrap();
+
+        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap(), fs(&tmp));
+        let mut names = cat.package_names();
+        names.sort();
         assert_eq!(names, vec!["bar", "foo"]);
     }
 
