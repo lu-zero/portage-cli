@@ -54,7 +54,7 @@ criterion = "0.8"
 lasso = { version = "0.7", features = ["multi-threaded"] }
 mimalloc = "0.1.52"
 parking_lot = "0.12"
-papaya = "0.2"
+papaya = { version = "0.2", default-features = false }
 pubgrub = "0.4"
 resolvo = "0.12"
 rustc-hash = "2"
