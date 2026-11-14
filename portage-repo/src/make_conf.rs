@@ -699,6 +699,19 @@ fn build_entries(src: &str, program: &brush_parser::ast::Program) -> Vec<Entry> 
     let mut cursor = 0usize;
 
     for (span, vars) in stmts {
+        // Two statements on one line (`USE="a"; FEATURES="b"`) both extend to its newline; tiling
+        // them separately would write the second one twice, so they share one entry.
+        if span.start < cursor
+            && let Some(Entry::Statement {
+                span: prev,
+                vars: prev_vars,
+            }) = entries.last_mut()
+        {
+            prev.end = prev.end.max(span.end);
+            prev_vars.extend(vars);
+            cursor = prev.end;
+            continue;
+        }
         if cursor < span.start {
             entries.push(Entry::Opaque(cursor..span.start));
         }
@@ -1193,6 +1206,27 @@ mod tests {
                 mc
             );
         }
+    }
+
+    #[test]
+    fn statements_sharing_a_line_are_written_once() {
+        let src = "USE=\"a\"; FEATURES=\"b\"\nX=1; Y=2; Z=3 # c\n";
+        let mut mc = parse(src);
+        assert_eq!(mc.to_string(), src);
+        mc.apply_use_changes(&["c".to_string()], &[]);
+        assert_eq!(
+            mc.to_string(),
+            "USE=\"a c\"; FEATURES=\"b\"\nX=1; Y=2; Z=3 # c\n"
+        );
+        mc.set("Y", "two words");
+        assert_eq!(
+            mc.to_string(),
+            "USE=\"a c\"; FEATURES=\"b\"\nX=1; Y=\"two words\"; Z=3 # c\n"
+        );
+        mc.set("FEATURES", "");
+        assert_eq!(mc.get("FEATURES"), Some(""));
+        assert_eq!(bash_value(&mc.to_string(), "Z").as_deref(), Some("3"));
+        assert_eq!(bash_value(&mc.to_string(), "USE").as_deref(), Some("a c"));
     }
 
     #[test]
