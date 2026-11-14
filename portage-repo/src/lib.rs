@@ -66,7 +66,7 @@ pub use cache::{
     CacheReadOpts, RegenItem, RegenMode, RegenOpts, RegenStats, RegenWriteTarget, cache_cpvs,
     cache_entries_parallel, cache_entries_parallel_with_mtime, regen_cache,
 };
-pub use entries::{alias_entries, gap_entries, repo_entries};
+pub use entries::{alias_entries, ebuild_entries, gap_entries, repo_entries};
 pub use gentoo_core::arch::ExoticKey;
 pub use gentoo_core::{Arch, KnownArch, arch};
 pub use make_conf::{

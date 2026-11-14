@@ -435,6 +435,37 @@ pub(crate) fn reconcile_gap_index(repo: &Repository, covered: &HashSet<Cpv>) {
     write_gap_index(&path, &stamp, remaining.iter());
 }
 
+/// Checked entries for only `ebuilds` of `repo`, for a caller that needs a few packages
+///
+/// A cached entry (primary, then secondary) is kept when its `_md5_` matches the ebuild and its
+/// eclasses are unchanged, as Portage's `aux_get` validates it; the rest are sourced. The cost
+/// is that of the given ebuilds, not of the whole repository as with [`repo_entries`].
+pub async fn ebuild_entries(
+    repo: &Repository,
+    ebuilds: Vec<crate::repo::Ebuild>,
+) -> Vec<(Cpv, CacheEntry)> {
+    let mut digests = EclassMemo::default();
+    let mut out = Vec::new();
+    let mut covered = HashSet::new();
+    for ebuild in &ebuilds {
+        let cpv = ebuild.cpv();
+        let Ok(Some(entry)) = repo.cache_entry(cpv) else {
+            continue;
+        };
+        let md5_matches = entry.md5.as_deref().is_some_and(|recorded| {
+            ebuild.read_bytes().is_ok_and(|bytes| {
+                recorded.eq_ignore_ascii_case(&format!("{:x}", md5::compute(&bytes)))
+            })
+        });
+        if md5_matches && repo.is_fresh_cached(&entry, &mut digests.by_name) {
+            covered.insert(cpv.clone());
+            out.push((cpv.clone(), entry));
+        }
+    }
+    out.extend(gap_entries_with_digests(repo, ebuilds, &covered, &mut digests).await);
+    out
+}
+
 /// The same chain over only the CPVs `covered` does not already contain
 ///
 /// The cache's gap. Every ebuild reaching the chain here is one with no

@@ -3,7 +3,7 @@ use std::io::Write as _;
 
 use anyhow::{Result, bail};
 use portage_atom::{Cpn, Cpv};
-use portage_repo::{Repository, repo_entries};
+use portage_repo::{Repository, ebuild_entries, repo_entries};
 
 use crate::style::{C_BOLD, C_LABEL, C_MASKED, C_PKG, C_STAR};
 
@@ -304,7 +304,7 @@ pub async fn run_emerge_style(
     search_index: bool,
 ) -> Result<()> {
     let repos = open_repos(repo_paths)?;
-    let entries = repo_entry_maps(&repos).await;
+    let mut entries = uncached_entry_maps(&repos).await;
     let descs = if search_desc {
         let (indexed, rest) = split_indexed(&repos, search_index);
         described(&indexed, &rest, false).await?
@@ -376,12 +376,86 @@ pub async fn run_emerge_style(
             }
         }
 
+        check_matched(&repos, &mut entries, matched.values()).await;
         for (key, (cpn, idx)) in &matched {
             print_search_block(&repos, &entries, *idx, cpn, key, &installed, &arch_str);
         }
         println!("[ Applications found : {} ]\n", matched.len());
     }
     Ok(())
+}
+
+/// A repository's cache entries by version, each checked against its ebuild
+type Entries = HashMap<Cpv, portage_metadata::CacheEntry>;
+
+/// Every entry of each repository without an md5-cache, whose descriptions the name walk
+/// matches; a repository with one starts empty and is filled by [`check_matched`]
+///
+/// Checking a whole md5-cache-backed tree (Gentoo's) costs a full tree read per search, so
+/// only the packages that are shown are checked, as emerge's `aux_get` does.
+async fn uncached_entry_maps(repos: &[Repository]) -> Vec<Entries> {
+    let mut maps = Vec::with_capacity(repos.len());
+    for repo in repos {
+        maps.push(if repo.has_primary_cache() {
+            Entries::new()
+        } else {
+            repo_entries(repo).await.into_iter().collect()
+        });
+    }
+    maps
+}
+
+/// Check the entries of the matched packages' ebuilds, and of the ebuilds a symlinked one
+/// resolves to, in the repositories whose maps [`uncached_entry_maps`] left empty
+async fn check_matched<'a>(
+    repos: &[Repository],
+    entries: &mut [Entries],
+    matched: impl Iterator<Item = &'a (Cpn, usize)>,
+) {
+    let mut wanted: Vec<Vec<portage_repo::Ebuild>> = vec![Vec::new(); repos.len()];
+    let mut want = |idx: usize, ebuild: portage_repo::Ebuild| {
+        if repos[idx].has_primary_cache()
+            && !entries[idx].contains_key(ebuild.cpv())
+            && !wanted[idx].iter().any(|e| e.cpv() == ebuild.cpv())
+        {
+            wanted[idx].push(ebuild);
+        }
+    };
+    for (cpn, idx) in matched {
+        let Some(pkg) = repos[*idx]
+            .category(cpn.category.as_str())
+            .and_then(|cat| cat.package(cpn.package.as_str()))
+        else {
+            continue;
+        };
+        for ebuild in pkg.ebuilds().unwrap_or_default() {
+            if let Some((other, target)) = symlink_target(repos, &ebuild)
+                && let Some(Ok(Some(real))) = repos[other]
+                    .category(target.cpn.category.as_str())
+                    .and_then(|cat| cat.package(target.cpn.package.as_str()))
+                    .map(|p| p.ebuild(&target.version.to_string()))
+            {
+                want(other, real);
+            }
+            want(*idx, ebuild);
+        }
+    }
+    for (idx, ebuilds) in wanted.into_iter().enumerate() {
+        if !ebuilds.is_empty() {
+            entries[idx].extend(ebuild_entries(&repos[idx], ebuilds).await);
+        }
+    }
+}
+
+/// The repository and version a symlinked ebuild resolves into, if it is another one
+fn symlink_target(repos: &[Repository], ebuild: &portage_repo::Ebuild) -> Option<(usize, Cpv)> {
+    let real = ebuild.path().canonicalize_utf8().ok()?;
+    repos.iter().enumerate().find_map(|(idx, other)| {
+        let rel = real.strip_prefix(other.path()).ok()?;
+        let category = rel.components().next()?.as_str();
+        let target = Cpv::parse(&format!("{category}/{}", rel.file_stem()?)).ok()?;
+        (target != *ebuild.cpv()).then_some((idx, target))
+    })
 }
 
 /// The latest version whose KEYWORDS accept this arch (stable or testing),
@@ -391,18 +465,6 @@ pub async fn run_emerge_style(
 /// found for the arch; `false` means the returned entry is a fallback to the
 /// newest version that had metadata (the package appears as "\[ Masked \]" in
 /// emerge-style search output).
-/// A repository's cache entries by version, each checked against its ebuild
-type Entries = HashMap<Cpv, portage_metadata::CacheEntry>;
-
-/// The checked entries of every repository, sourcing the ones a cache lacks or has stale
-async fn repo_entry_maps(repos: &[Repository]) -> Vec<Entries> {
-    let mut maps = Vec::with_capacity(repos.len());
-    for repo in repos {
-        maps.push(repo_entries(repo).await.into_iter().collect());
-    }
-    maps
-}
-
 fn latest_visible(
     repos: &[Repository],
     entries: &[Entries],
@@ -710,8 +772,9 @@ mod tests {
             )]
         );
         // And the emerge-style block reads the same entries.
-        let entries = repo_entry_maps(&repos).await;
+        let mut entries = uncached_entry_maps(&repos).await;
         let cpn = Cpn::parse("app-misc/ovpkg").unwrap();
+        check_matched(&repos, &mut entries, [(cpn, 1)].iter()).await;
         assert!(latest_visible(&repos, &entries, 1, &cpn, "amd64").is_some());
     }
 
@@ -851,10 +914,77 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let entries = rt.block_on(repo_entry_maps(&repos));
         let cpn = Cpn::parse("app-misc/foo").unwrap();
+        let entries = rt.block_on(async {
+            let mut entries = uncached_entry_maps(&repos).await;
+            assert!(
+                entries[0].is_empty(),
+                "a repository with an md5-cache is checked on demand"
+            );
+            check_matched(&repos, &mut entries, [(cpn, 0)].iter()).await;
+            entries
+        });
         let (_, entry, _) = latest_visible(&repos, &entries, 0, &cpn, "amd64").unwrap();
         assert_eq!(entry.metadata.description, "Fresh");
+    }
+
+    #[test]
+    fn only_the_matched_packages_of_a_cached_repository_are_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ov");
+        for d in [
+            "profiles",
+            "metadata/md5-cache/app-misc",
+            "app-misc/foo",
+            "app-misc/bar",
+        ] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        std::fs::write(root.join("profiles/repo_name"), "ov\n").unwrap();
+        std::fs::write(root.join("profiles/categories"), "app-misc\n").unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        for pn in ["foo", "bar"] {
+            let ebuild =
+                format!("EAPI=8\nDESCRIPTION=\"Fresh {pn}\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n");
+            std::fs::write(root.join(format!("app-misc/{pn}/{pn}-1.ebuild")), &ebuild).unwrap();
+            // A fresh entry for foo, a stale one for bar.
+            let md5 = if pn == "foo" {
+                format!("{:x}", md5::compute(ebuild.as_bytes()))
+            } else {
+                "0".repeat(32)
+            };
+            std::fs::write(
+                root.join(format!("metadata/md5-cache/app-misc/{pn}-1")),
+                format!("DESCRIPTION=Cached {pn}\nEAPI=8\nSLOT=0\nKEYWORDS=amd64\n_md5_={md5}\n"),
+            )
+            .unwrap();
+        }
+        let repos = [Repository::builder().in_memory_cache().open(&root).unwrap()];
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let foo = Cpn::parse("app-misc/foo").unwrap();
+        let bar = Cpn::parse("app-misc/bar").unwrap();
+        let mut entries = rt.block_on(uncached_entry_maps(&repos));
+        rt.block_on(check_matched(&repos, &mut entries, [(foo, 0)].iter()));
+        let checked: Vec<String> = entries[0].keys().map(ToString::to_string).collect();
+        assert_eq!(
+            checked,
+            ["app-misc/foo-1"],
+            "bar was not matched, so not read"
+        );
+        // The fresh cached entry is kept as is.
+        assert_eq!(
+            entries[0].values().next().unwrap().metadata.description,
+            "Cached foo"
+        );
+        rt.block_on(check_matched(&repos, &mut entries, [(bar, 0)].iter()));
+        let (_, entry, _) = latest_visible(&repos, &entries, 0, &bar, "amd64").unwrap();
+        assert_eq!(
+            entry.metadata.description, "Fresh bar",
+            "a stale entry is sourced"
+        );
     }
 
     #[tokio::test]
