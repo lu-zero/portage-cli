@@ -29,7 +29,7 @@ Not part of the stage arc, but where the work went 2026-10-28…11-15.
 | `em -S`/`em search -S` read `metadata/pkg_desc_index` (`--search-index n` scans); emerge-style blocks name the right repository | ✅ 864e156c | — |
 | Emerge-style search checked the whole tree on every run (b2770b0b); only the shown packages of a cached repository are checked now (3a88cdf2): `-s python-magic` 210 → 36 ms, output identical. make.conf statements sharing a line are written once (930d90d7). Lyra followup10 landed | ✅ | review followup10 |
 | `em search` wall time vs CPU (was ~67 ms wall for ~30 ms CPU): re-measure; now 36–67 ms wall | 🟡 | found 2026-11-07 |
-| `em search` against `emerge -s`: fuzzy/misspelling matches, one `[ Masked ]` flag (`sci-chemistry/probe`), `EMERGE_DEFAULT_OPTS` display flags accepted as no-ops | 🔴 | Lyra followup8/followup10 |
+| `em -s` key reading landed (0b770a0c): `%`/auto regex, `@`/`cat/name`, fuzzy at 80%, `--fuzzy-search`/`--search-similarity`/`--regex-search-auto`; output matches emerge on 14 keys. Still differs: `Size of files` counts every USE-gated distfile (emerge: enabled USE only), `Latest version available` ignores package.mask (`dev-lang/tk` shows 9.0.3-r2, emerge 8.6.17), search does not list sets, display flags (`--nospinner`, `--quiet-build`, ...) not accepted as no-ops | 🟡 | emerge `search.py`; needs the USE/mask policy layer |
 | A real run prints the plan only with `-p`/`-a`/`-v`; candy or banners show progress (2ab5fcc2). Output of a real merge not checked live | 🟡 | `docs/user/activity.md` |
 | USE layers as `UseToken`s (e7312ec1…671f3488), nested prefix globs (26eb640c) | ✅ | — |
 
