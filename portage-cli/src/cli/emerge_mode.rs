@@ -31,6 +31,18 @@ pub struct EmergeModeArgs {
     #[arg(long, value_name = "y|n")]
     pub search_index: Option<super::YesNo>,
 
+    /// `n`: a name matches only by its text, not also by similarity
+    #[arg(long, value_name = "y|n")]
+    pub fuzzy_search: Option<super::YesNo>,
+
+    /// The percentage of similarity, 0 to 100, at which a name matches (default 80)
+    #[arg(long, value_name = "PERCENT")]
+    pub search_similarity: Option<f64>,
+
+    /// `n`: a key is a regular expression only after `%`, not when it looks like one
+    #[arg(long, value_name = "y|n")]
+    pub regex_search_auto: Option<super::YesNo>,
+
     /// Skip dependency resolution and only merge specified packages
     #[arg(short = 'O', long)]
     pub nodeps: bool,

@@ -107,6 +107,13 @@ Pick a different operation than a merge.
 * `--search-index <y|n>` — `n`: match descriptions from the md5-cache, not `metadata/pkg_desc_index`
   * `y`: Yes
   * `n`: No
+* `--fuzzy-search <y|n>` — `n`: a name matches only by its text, not also by similarity
+  * `y`: Yes
+  * `n`: No
+* `--search-similarity <PERCENT>` — The percentage of similarity, 0 to 100, at which a name matches (default 80)
+* `--regex-search-auto <y|n>` — `n`: a key is a regular expression only after `%`, not when it looks like one
+  * `y`: Yes
+  * `n`: No
 * `-O, --nodeps` — Skip dependency resolution and only merge specified packages
 * `-C, --unmerge` — Remove the matching installed packages completely, without regard to dependencies
 

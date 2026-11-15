@@ -1000,7 +1000,18 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
     // emerge -s / -S: the arguments are search patterns, not atoms.
     if mode.search || mode.searchdesc {
         let index = mode.search_index != Some(cli::YesNo::N);
-        return search::run_emerge_style(&cli.search_repos(), &atoms, mode.searchdesc, index).await;
+        let defaults = crate::search_key::KeyOptions::default();
+        let similarity = mode.search_similarity.unwrap_or(defaults.similarity);
+        if !(0.0..=100.0).contains(&similarity) {
+            bail!("invalid --search-similarity parameter (not between 0 and 100): '{similarity}'");
+        }
+        let key = crate::search_key::KeyOptions {
+            fuzzy: mode.fuzzy_search != Some(cli::YesNo::N),
+            similarity,
+            regex_auto: mode.regex_search_auto != Some(cli::YesNo::N),
+        };
+        return search::run_emerge_style(&cli.search_repos(), &atoms, mode.searchdesc, index, key)
+            .await;
     }
     if atoms.is_empty() {
         crate::style::error_line!("no atoms or applet specified. Use --help for usage.");

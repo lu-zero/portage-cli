@@ -47,6 +47,7 @@ pub(crate) mod regen;
 pub(crate) mod repo_open;
 pub(crate) mod revdep;
 pub(crate) mod search;
+pub(crate) mod search_key;
 pub(crate) mod select;
 pub(crate) mod settings;
 pub(crate) mod setup;

@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use portage_atom::{Cpn, Cpv};
 use portage_repo::{Repository, ebuild_entries, repo_entries};
 
+use crate::search_key::{KeyOptions, SearchKey};
 use crate::style::{C_BOLD, C_LABEL, C_MASKED, C_PKG, C_STAR};
 
 /// Open every configured repo path, skipping (with a warning) any that fail
@@ -302,6 +303,7 @@ pub async fn run_emerge_style(
     patterns: &[String],
     search_desc: bool,
     search_index: bool,
+    options: KeyOptions,
 ) -> Result<()> {
     let repos = open_repos(repo_paths)?;
     let mut entries = uncached_entry_maps(&repos).await;
@@ -333,6 +335,8 @@ pub async fn run_emerge_style(
     let names = category_names(&repos);
 
     for pat in patterns {
+        let key = SearchKey::new(pat, options)
+            .map_err(|e| anyhow::anyhow!("invalid search key '{pat}': {e}"))?;
         let mut out = anstream::stdout();
         writeln!(
             out,
@@ -349,14 +353,10 @@ pub async fn run_emerge_style(
             let has_cache = repo.has_primary_cache();
             for cat in walk_categories(repo, &names) {
                 for pkg in cat.packages() {
-                    let mut hit = if pat.contains('/') {
-                        contains_ci(&format!("{}/{}", cat.name(), pkg.name()), pat)
-                    } else {
-                        contains_ci(pkg.name(), pat)
-                    };
+                    let mut hit = key.matches_name(cat.name(), pkg.name());
                     if !hit && search_desc && !has_cache {
                         hit = latest_visible(&repos, &entries, idx, pkg.cpn(), &arch_str)
-                            .is_some_and(|(_, e, _)| contains_ci(&e.metadata.description, pat));
+                            .is_some_and(|(_, e, _)| key.matches_text(&e.metadata.description));
                     }
                     if hit {
                         matched
@@ -369,7 +369,7 @@ pub async fn run_emerge_style(
 
         // -S: also match the descriptions, read once above from the indexes and md5-caches.
         if search_desc {
-            for d in descs.iter().filter(|d| contains_ci(&d.description, pat)) {
+            for d in descs.iter().filter(|d| key.matches_text(&d.description)) {
                 let cpn = d.cpv.cpn;
                 let key = format!("{}/{}", cpn.category, cpn.package);
                 matched.entry(key).or_insert((cpn, d.repo));
@@ -600,8 +600,8 @@ fn print_search_block(
 }
 
 /// Sum of the package's `Manifest` DIST sizes for every file the latest
-/// version's `SRC_URI` can reference (all USE conditionals taken, as emerge's
-/// search does).
+/// version's `SRC_URI` can reference, all USE conditionals taken. Emerge counts
+/// only the files of the enabled USE, so a package with flag-gated distfiles shows more here.
 fn distfiles_size(repo: &Repository, cpn: &Cpn, meta: &portage_metadata::EbuildMetadata) -> u64 {
     let Some(Ok(Some(manifest))) = repo.package(cpn).map(|pkg| pkg.manifest()) else {
         return 0;
