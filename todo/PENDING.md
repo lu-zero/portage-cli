@@ -2,7 +2,7 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-11-07**.
+here briefly for context). Updated **2026-11-15**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
@@ -11,23 +11,25 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 `[[name]]` links still resolve by filename there. Milestone-level build
 progress (M0 → M4, each with its gate command) lives in [[build-roadmap]].
 
-## Latest (2026-11-07) — repository storage, sync verification, search
+## Latest (2026-11-15) — repository storage, sync verification, search
 
-Not part of the stage arc, but where the work went 2026-10-28…11-07.
+Not part of the stage arc, but where the work went 2026-10-28…11-15.
 
 | Item | Status | Detail |
 |------|--------|--------|
-| Storage split: every reader goes through `Repository`'s `TreeSource`/`EntrySource`; flat on the default path (1.14 s `-uDN @world`, identical output) | 🟡 on branch | `tree-source` (pushed; 49 commits on master as of 2026-11-07), `docs/design/tree-storage.md` |
+| Storage split: every reader goes through `Repository`'s `TreeSource`/`EntrySource`; flat on the default path (1.14 s `-uDN @world`, identical output) | 🟡 on branch | `tree-source` (pushed 2026-11-15, rebased on master; default 2509 tests, redb + sync-gix 2542), `docs/design/tree-storage.md` |
 | redb backend + `sync-type = git-redb` (schema 3: symlinks, fail-closed open, cache catch-up, import lock); experimental behind `redb`/`sync-gix` | 🟡 experimental | `docs/design/tree-storage.md`, results in `docs/design/tree-storage-experiment.md` |
 | redb open work: md5-cache layout (split tables, field-wise; would make `pkg_desc_index` redundant), compression (zstd dictionary), vacuum policy, concurrency, staleness warning, import peak memory | 🔴 | `docs/design/tree-storage.md` § Open |
-| Merge `tree-source` into master | 🔴 decide | — |
+| Merge `tree-source` into master | 🔴 decide | ready: rebased 2026-11-15 |
 | git sync verifies the fetched tip's OpenPGP signature before the checkout moves (e5f385ec); a rejected or interrupted clone is checked out once verification passes (12f64743) | ✅ | `docs/design/sync-backends.md` |
 | OpenPGP policy gaps (code reading, Lyra followup6 P3): expiry from key-ID-only self-signatures, signing-subkey flags, signature time vs key creation, newest vs primary-UID self-signature | 🔴 | Lyra review dfb31b28 |
 | No key refresh (WKD/keyserver, how revocations arrive) and no maximum commit age | 🔴 | Lyra review dfb31b28 |
 | gix as the default git backend | 🟡 | `docs/design/sync-backends.md` § Status |
 | Portage sync module that syncs a redb repository with em and writes the changed files into a checkout | 🔴 later | `docs/design/tree-storage.md` § Sync and interop |
 | `em -S`/`em search -S` read `metadata/pkg_desc_index` (`--search-index n` scans); emerge-style blocks name the right repository | ✅ 864e156c | — |
-| Every `em search` takes ~67 ms wall for ~30 ms CPU, even name-only: something waits | 🔴 | found 2026-11-07 |
+| Emerge-style search checked the whole tree on every run (b2770b0b); only the shown packages of a cached repository are checked now (3a88cdf2): `-s python-magic` 210 → 36 ms, output identical. make.conf statements sharing a line are written once (930d90d7). Lyra followup10 landed | ✅ | review followup10 |
+| `em search` wall time vs CPU (was ~67 ms wall for ~30 ms CPU): re-measure; now 36–67 ms wall | 🟡 | found 2026-11-07 |
+| `em search` against `emerge -s`: fuzzy/misspelling matches, one `[ Masked ]` flag (`sci-chemistry/probe`), `EMERGE_DEFAULT_OPTS` display flags accepted as no-ops | 🔴 | Lyra followup8/followup10 |
 | A real run prints the plan only with `-p`/`-a`/`-v`; candy or banners show progress (2ab5fcc2). Output of a real merge not checked live | 🟡 | `docs/user/activity.md` |
 | USE layers as `UseToken`s (e7312ec1…671f3488), nested prefix globs (26eb640c) | ✅ | — |
 
