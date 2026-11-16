@@ -337,11 +337,14 @@ impl RunAsync<&cli::Cli> for SearchArgs {
         search::run(
             &cli.search_repos(),
             self.pattern.as_deref(),
-            self.all,
-            self.desc,
-            self.name_only,
-            self.homepage,
-            self.search_index != Some(cli::YesNo::N),
+            search::ListOptions {
+                all: self.all,
+                search_desc: self.desc,
+                name_only: self.name_only,
+                homepage: self.homepage,
+                search_index: self.search_index != Some(cli::YesNo::N),
+                show_repo: self.show_repo,
+            },
         )
         .await
     }

@@ -13,7 +13,7 @@ em search [OPTIONS] [PATTERN]
 
 ## Arguments
 
-* `[PATTERN]` — Pattern to search (required unless --all)
+* `[PATTERN]` — Regular expression to search, matched without regard to case (required unless --all)
 
 ## Options
 
@@ -24,6 +24,7 @@ em search [OPTIONS] [PATTERN]
 * `--search-index <y|n>` — `n`: match descriptions from the md5-cache, not `metadata/pkg_desc_index`
   * `y`: Yes
   * `n`: No
+* `-R, --show-repo` — Show the repository each package comes from, as `category/name::repo`
 * `--repo <PATH>` — Pin search/query to a single repository
 
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).

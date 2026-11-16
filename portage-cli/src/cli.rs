@@ -3040,7 +3040,10 @@ pub struct SearchArgs {
     /// `n`: match descriptions from the md5-cache, not `metadata/pkg_desc_index`
     #[arg(long, value_name = "y|n")]
     pub search_index: Option<YesNo>,
-    /// Pattern to search (required unless --all)
+    /// Show the repository each package comes from, as `category/name::repo`
+    #[arg(short = 'R', long = "show-repo")]
+    pub show_repo: bool,
+    /// Regular expression to search, matched without regard to case (required unless --all)
     #[arg(positional, required_unless = "all")]
     pub pattern: Option<String>,
     #[arg(flatten)]

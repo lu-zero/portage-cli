@@ -29,6 +29,7 @@ Not part of the stage arc, but where the work went 2026-10-28…11-15.
 | `em -S`/`em search -S` read `metadata/pkg_desc_index` (`--search-index n` scans); emerge-style blocks name the right repository | ✅ 864e156c | — |
 | Emerge-style search checked the whole tree on every run (b2770b0b); only the shown packages of a cached repository are checked now (3a88cdf2): `-s python-magic` 210 → 36 ms, output identical. make.conf statements sharing a line are written once (930d90d7). Lyra followup10 landed | ✅ | review followup10 |
 | `em search` wall time vs CPU (was ~67 ms wall for ~30 ms CPU): re-measure; now 36–67 ms wall | 🟡 | found 2026-11-07 |
+| `em search` matches `qsearch` for names, `-S`, `-H`, `-N`, regular expressions and `-R` (`--show-repo`); still differs: no `-v` (full versions), `-F` (format), `-s`, packages in several repos are listed once (qsearch once per repo), order is by name | 🟡 | `qsearch` |
 | `em -s` matches emerge on 11 keys, sizes by enabled USE and the latest version by keywords and package.mask (`-v` adds the all-USE size and the newer masked version). Still differs: license masks are not applied | 🟡 | emerge `search.py` |
 | A real run prints the plan only with `-p`/`-a`/`-v`; candy or banners show progress (2ab5fcc2). Output of a real merge not checked live | 🟡 | `docs/user/activity.md` |
 | USE layers as `UseToken`s (e7312ec1…671f3488), nested prefix globs (26eb640c) | ✅ | — |

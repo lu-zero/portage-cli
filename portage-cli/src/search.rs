@@ -39,25 +39,73 @@ fn open_repos(repo_paths: &[std::path::PathBuf]) -> Result<Vec<Repository>> {
     Ok(repos)
 }
 
+/// What `em search` lists, and how
+#[derive(Debug, Clone, Copy)]
+pub struct ListOptions {
+    /// List every package; no pattern needed
+    pub all: bool,
+    /// Match the pattern against descriptions instead of names
+    pub search_desc: bool,
+    /// Print the package only
+    pub name_only: bool,
+    /// Print the homepage in place of the description
+    pub homepage: bool,
+    /// Read descriptions from `metadata/pkg_desc_index` where there is one
+    pub search_index: bool,
+    /// End each package with `::repo`
+    pub show_repo: bool,
+}
+
+/// `em search`: the packages whose name, or with `search_desc` description, a regular expression matches
 pub async fn run(
     repo_paths: &[std::path::PathBuf],
     pattern: Option<&str>,
-    all: bool,
-    search_desc: bool,
-    name_only: bool,
-    homepage: bool,
-    search_index: bool,
+    options: ListOptions,
 ) -> Result<()> {
+    let ListOptions {
+        all,
+        search_desc,
+        name_only,
+        homepage,
+        search_index,
+        show_repo,
+    } = options;
     let repos = open_repos(repo_paths)?;
     let pat = pattern.unwrap_or("");
+    let regex = regex::RegexBuilder::new(pat)
+        .case_insensitive(true)
+        .build()
+        .map_err(|e| anyhow::anyhow!("invalid pattern '{pat}': {e}"))?;
+    let shown = Shown {
+        name_only,
+        homepage,
+        repos: show_repo.then(|| repos.iter().map(|r| r.name().to_string()).collect()),
+    };
 
     if search_desc {
         // The index holds descriptions only.
         let (indexed, rest) = split_indexed(&repos, search_index && !homepage);
-        run_desc(&indexed, &rest, pat, all, name_only, homepage).await
+        run_desc(&indexed, &rest, &regex, all, &shown).await
     } else {
-        run_name(&repos, pat, all, name_only, homepage);
+        run_name(&repos, &regex, all, &shown);
         Ok(())
+    }
+}
+
+/// What each line of the applet's output shows
+struct Shown {
+    name_only: bool,
+    homepage: bool,
+    /// The names of the repositories, by position, when the line ends its package with `::repo`
+    repos: Option<Vec<String>>,
+}
+
+impl Shown {
+    fn key(&self, key: &str, repo: usize) -> String {
+        match &self.repos {
+            Some(names) => format!("{key}::{}", names[repo]),
+            None => key.to_string(),
+        }
     }
 }
 
@@ -80,20 +128,8 @@ fn category_names(repos: &[Repository]) -> Vec<String> {
     names.into_iter().collect()
 }
 
-fn contains_ci(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    let hb = haystack.as_bytes();
-    let nb = needle.as_bytes();
-    if nb.len() > hb.len() {
-        return false;
-    }
-    hb.windows(nb.len()).any(|w| w.eq_ignore_ascii_case(nb))
-}
-
-fn run_name(repos: &[Repository], pat: &str, all: bool, name_only: bool, homepage: bool) {
-    let pat_has_slash = pat.contains('/');
+fn run_name(repos: &[Repository], pat: &regex::Regex, all: bool, shown: &Shown) {
+    let pat_has_slash = pat.as_str().contains('/');
     let names = category_names(repos);
     let mut matched: BTreeMap<String, (Cpn, usize)> = BTreeMap::new();
     for (idx, repo) in repos.iter().enumerate() {
@@ -102,9 +138,9 @@ fn run_name(repos: &[Repository], pat: &str, all: bool, name_only: bool, homepag
                 let hit = if all {
                     true
                 } else if pat_has_slash {
-                    contains_ci(&format!("{}/{name}", cat.name()), pat)
+                    pat.is_match(&format!("{}/{name}", cat.name()))
                 } else {
-                    contains_ci(&name, pat)
+                    pat.is_match(&name)
                 };
                 if hit && let Some(pkg) = cat.package(&name) {
                     let key = format!("{}/{name}", cat.name());
@@ -116,15 +152,17 @@ fn run_name(repos: &[Repository], pat: &str, all: bool, name_only: bool, homepag
 
     let mut out = anstream::stdout();
 
-    if name_only {
-        for key in matched.keys() {
+    if shown.name_only {
+        for (key, (_, idx)) in &matched {
+            let key = shown.key(key, *idx);
             writeln!(out, "{C_PKG}{key}{C_PKG:#}").ok();
         }
         return;
     }
 
     for (key, (cpn, idx)) in &matched {
-        let info = latest_entry_info(&repos[*idx], cpn, homepage);
+        let info = latest_entry_info(&repos[*idx], cpn, shown.homepage);
+        let key = shown.key(key, *idx);
         if info.is_empty() {
             writeln!(out, "{C_PKG}{key}{C_PKG:#}").ok();
         } else {
@@ -260,33 +298,32 @@ fn split_indexed(repos: &[Repository], use_index: bool) -> (Indexed, Scanned) {
 async fn run_desc(
     indexed: &[(usize, DescIndex)],
     repos: &[(usize, Repository)],
-    pat: &str,
+    pat: &regex::Regex,
     all: bool,
-    name_only: bool,
-    homepage: bool,
+    shown: &Shown,
 ) -> Result<()> {
-    let mut entries: Vec<(Cpn, Option<String>)> = described(indexed, repos, homepage)
+    let mut entries: Vec<(Cpn, usize, Option<String>)> = described(indexed, repos, shown.homepage)
         .await?
         .into_iter()
-        .filter(|d| all || contains_ci(&d.description, pat))
+        .filter(|d| all || pat.is_match(&d.description))
         .map(|d| {
-            let info = if name_only {
+            let info = if shown.name_only {
                 None
             } else {
                 Some(d.homepage.unwrap_or(d.description))
             };
-            (d.cpv.cpn, info)
+            (d.cpv.cpn, d.repo, info)
         })
         .collect();
 
     // By name: interned values order by interning sequence, which the parallel read makes vary.
-    entries.sort_by(|(a, _), (b, _)| {
+    entries.sort_by(|(a, ..), (b, ..)| {
         (a.category.as_str(), a.package.as_str()).cmp(&(b.category.as_str(), b.package.as_str()))
     });
 
     let mut out = anstream::stdout();
-    for (cpn, info) in &entries {
-        let key = format!("{}/{}", cpn.category, cpn.package);
+    for (cpn, repo, info) in &entries {
+        let key = shown.key(&format!("{}/{}", cpn.category, cpn.package), *repo);
         match info {
             None => writeln!(out, "{C_PKG}{key}{C_PKG:#}").ok(),
             Some(s) => writeln!(out, "{C_PKG}{key}{C_PKG:#}: {s}").ok(),
@@ -1105,6 +1142,30 @@ mod tests {
             .unwrap()
             .entry;
         assert_eq!(entry.metadata.description, "Fresh");
+    }
+
+    #[test]
+    fn the_repository_ends_a_key_only_when_asked_for() {
+        let names = vec!["gentoo".to_string(), "guru".to_string()];
+        let plain = Shown {
+            name_only: false,
+            homepage: false,
+            repos: None,
+        };
+        let with = Shown {
+            repos: Some(names),
+            ..plain
+        };
+        assert_eq!(
+            with.key("dev-python/fastapi", 1),
+            "dev-python/fastapi::guru"
+        );
+        let plain = Shown {
+            name_only: false,
+            homepage: false,
+            repos: None,
+        };
+        assert_eq!(plain.key("dev-python/fastapi", 1), "dev-python/fastapi");
     }
 
     #[test]
