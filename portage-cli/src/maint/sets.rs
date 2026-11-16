@@ -18,6 +18,54 @@ pub struct KnownSets {
     /// resolution failure means `em` has no implementation, not that the
     /// name is bogus. See [`Self::is_declared`].
     declared: HashSet<String>,
+    /// Every set once, in the order the config files declare them
+    ordered: Vec<SetDetail>,
+}
+
+/// Where a set comes from, and what its definition says of it
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetDetail {
+    /// The set's name, without the `@` prefix
+    pub name: String,
+    /// The `class =` of its `.conf` section
+    class: Option<String>,
+    /// The comment block above its `.conf` section
+    comment: String,
+    /// The file of a static set
+    file: Option<Utf8PathBuf>,
+}
+
+impl SetDetail {
+    /// A line that says what the set holds; `profile` is the path of the active profile
+    ///
+    /// Written for `em`: the built-in sets by name, the others by the comment above their
+    /// definition, a static set by its file, else by class.
+    pub fn description(&self, profile: Option<&str>) -> String {
+        let of_profile = profile
+            .map(|p| format!(" (profile {p})"))
+            .unwrap_or_default();
+        match self.name.as_str() {
+            "world" => "The profile, selected and system packages together".into(),
+            "profile" => format!("Packages the profile selects{of_profile}"),
+            "system" => format!("System packages{of_profile}"),
+            "selected" => "Packages and sets the user installed by name".into(),
+            "selected-packages" => "Packages the user installed by name".into(),
+            "selected-sets" => "Sets the user installed by name".into(),
+            "security" => "Packages a security advisory affects and that is not applied".into(),
+            "installed" => "A slot atom for every installed package".into(),
+            _ => {
+                if let Some(file) = &self.file {
+                    format!("Package set from {file}")
+                } else if !self.comment.is_empty() {
+                    self.comment.clone()
+                } else if let Some(class) = &self.class {
+                    format!("Package set of class {class}")
+                } else {
+                    "Package set".into()
+                }
+            }
+        }
+    }
 }
 
 impl KnownSets {
@@ -25,7 +73,6 @@ impl KnownSets {
     pub fn load(root: Option<&Utf8Path>) -> Self {
         let root = root.unwrap_or(Utf8Path::new("/"));
         let mut names = HashSet::new();
-        let mut declared = HashSet::new();
 
         // VDB-aware built-ins are resolved by `resolve_vdb_set` (a VDB/registry
         // query, not a config-file-defined set), so they're always known even
@@ -45,24 +92,60 @@ impl KnownSets {
         }
 
         // Built-in sets from /usr/share/portage/config/sets/*.conf
-        let builtin_dir = root.join("usr/share/portage/config/sets");
-        collect_from_conf_dir(&builtin_dir, &mut declared);
+        let mut sections = Vec::new();
+        collect_from_conf_dir(&root.join("usr/share/portage/config/sets"), &mut sections);
 
         // User set config overrides/additions
         let user_conf = root.join("etc/portage/sets.conf");
         if user_conf.is_file() {
-            collect_from_conf_file(&user_conf, &mut declared);
+            collect_from_conf_file(&user_conf, &mut sections);
         }
 
+        let declared: HashSet<String> = sections.iter().map(|d| d.name.clone()).collect();
         names.extend(declared.iter().cloned());
 
         // Static set files: each filename is a set name
+        let mut files = Vec::new();
         let sets_dir = root.join("etc/portage/sets");
         if sets_dir.is_dir() {
-            collect_from_sets_dir(&sets_dir, &mut names);
+            collect_from_sets_dir(&sets_dir, &mut files);
+        }
+        names.extend(files.iter().map(|d| d.name.clone()));
+
+        // The `usersets` section stands for the static files: they sit where it does.
+        let mut ordered: Vec<SetDetail> = Vec::new();
+        let mut push = |detail: SetDetail| match ordered.iter_mut().find(|d| d.name == detail.name)
+        {
+            Some(known) => *known = detail,
+            None => ordered.push(detail),
+        };
+        for section in sections {
+            if section.name == "usersets" {
+                files.drain(..).for_each(&mut push);
+            } else {
+                push(section);
+            }
+        }
+        files.into_iter().for_each(&mut push);
+        let mut rest: Vec<&String> = names
+            .iter()
+            .filter(|n| *n != "usersets" && !ordered.iter().any(|d| d.name == **n))
+            .collect();
+        rest.sort();
+        for name in rest {
+            ordered.push(SetDetail {
+                name: name.clone(),
+                class: None,
+                comment: String::new(),
+                file: None,
+            });
         }
 
-        Self { names, declared }
+        Self {
+            names,
+            declared,
+            ordered,
+        }
     }
 
     /// Return `true` if `name` (without the `@` prefix) is a known set
@@ -74,6 +157,12 @@ impl KnownSets {
     /// set even though this resolver may have no implementation for it.
     pub fn is_declared(&self, name: &str) -> bool {
         self.declared.contains(name)
+    }
+
+    /// Every set once, in the order the config files declare them: the built-in sections, the
+    /// static files where `usersets` is, then any other name
+    pub fn details(&self) -> &[SetDetail] {
+        &self.ordered
     }
 
     /// Every known set name (without the `@` prefix), unordered — callers
@@ -571,8 +660,8 @@ fn slot_member(pkg: &InstalledPackage) -> Option<(Cpn, Slot)> {
     Some((*pkg.cpn(), Slot::from_name(pkg.slot_main().ok()?)))
 }
 
-/// Parse `[section_name]` headers from all `.conf` files in `dir`
-fn collect_from_conf_dir(dir: &Utf8Path, names: &mut HashSet<String>) {
+/// Read every `*.conf` of `dir`, in name order
+fn collect_from_conf_dir(dir: &Utf8Path, sections: &mut Vec<SetDetail>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -580,37 +669,50 @@ fn collect_from_conf_dir(dir: &Utf8Path, names: &mut HashSet<String>) {
         .flatten()
         .filter_map(|e| {
             let p = Utf8PathBuf::try_from(e.path()).ok()?;
-            if p.extension() == Some("conf") {
-                Some(p)
-            } else {
-                None
-            }
+            (p.extension() == Some("conf")).then_some(p)
         })
         .collect();
     files.sort();
     for f in &files {
-        collect_from_conf_file(f, names);
+        collect_from_conf_file(f, sections);
     }
 }
 
-/// Parse `[section_name]` headers from a single ini-style `.conf` file
-fn collect_from_conf_file(path: &Utf8Path, names: &mut HashSet<String>) {
+/// Read the `[section]` headers of one ini-style `.conf` file, each with its `class` and the
+/// comment block directly above it
+fn collect_from_conf_file(path: &Utf8Path, sections: &mut Vec<SetDetail>) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
+    let mut comment: Vec<&str> = Vec::new();
     for line in content.lines() {
         let line = line.trim();
         if let Some(inner) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             let name = inner.trim();
             if !name.is_empty() {
-                names.insert(name.to_string());
+                sections.push(SetDetail {
+                    name: name.to_string(),
+                    class: None,
+                    comment: comment.join(" "),
+                    file: None,
+                });
+            }
+            comment.clear();
+        } else if let Some(text) = line.strip_prefix('#') {
+            comment.push(text.trim());
+        } else {
+            comment.clear();
+            if let Some(("class", class)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))
+                && let Some(last) = sections.last_mut()
+            {
+                last.class = Some(class.to_string());
             }
         }
     }
 }
 
-/// Each filename (non-hidden, non-directory) in `dir` is a set name
-fn collect_from_sets_dir(dir: &Utf8Path, names: &mut HashSet<String>) {
+/// Each filename (non-hidden, non-directory) in `dir` is a set name, in name order
+fn collect_from_sets_dir(dir: &Utf8Path, sets: &mut Vec<SetDetail>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -619,10 +721,17 @@ fn collect_from_sets_dir(dir: &Utf8Path, names: &mut HashSet<String>) {
         if path.is_file()
             && let Some(name) = path.file_name().and_then(|n| n.to_str())
             && !name.starts_with('.')
+            && let Ok(file) = Utf8PathBuf::try_from(path.clone())
         {
-            names.insert(name.to_string());
+            sets.push(SetDetail {
+                name: name.to_string(),
+                class: None,
+                comment: String::new(),
+                file: Some(file),
+            });
         }
     }
+    sets.sort_by(|a, b| a.name.cmp(&b.name));
 }
 
 #[cfg(test)]
@@ -683,6 +792,31 @@ mod tests {
         let dir = make_root("", &[]);
         let sets = KnownSets::load(Some(Utf8Path::from_path(dir.path()).unwrap()));
         assert!(sets.contains("preserved-rebuild"));
+    }
+
+    #[test]
+    fn sets_are_listed_in_declaration_order_with_static_files_at_usersets() {
+        let dir = make_root(
+            "[world]\nclass = a\n\n# Installed ebuilds with \"live\" property.\n[live-rebuild]\nclass = b\n\n[usersets]\nclass = c\n\n[last]\nclass = d\n",
+            &["zeta", "alpha"],
+        );
+        let sets = KnownSets::load(Some(Utf8Path::from_path(dir.path()).unwrap()));
+        let names: Vec<&str> = sets.details().iter().map(|d| d.name.as_str()).collect();
+        // The names `em` always knows and no file declares come last, sorted.
+        assert_eq!(
+            &names[..5],
+            ["world", "live-rebuild", "alpha", "zeta", "last"]
+        );
+        let describe = |name: &str| {
+            let set = sets.details().iter().find(|d| d.name == name).unwrap();
+            set.description(None)
+        };
+        assert_eq!(
+            describe("live-rebuild"),
+            "Installed ebuilds with \"live\" property."
+        );
+        assert!(describe("alpha").starts_with("Package set from "));
+        assert_eq!(describe("last"), "Package set of class d");
     }
 
     // --- resolve_vdb_set dispatch ---

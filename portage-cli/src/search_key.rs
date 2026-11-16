@@ -96,6 +96,20 @@ impl SearchKey {
                 .is_some_and(|f| f.matches(subject, self.category))
     }
 
+    /// Whether the package set `name` matches: its last path segment, or all of it for a category key
+    pub fn matches_set(&self, name: &str) -> bool {
+        let subject = if self.category {
+            name
+        } else {
+            name.rsplit('/').next().unwrap_or(name)
+        };
+        self.pattern.is_match(subject)
+            || self
+                .fuzzy
+                .as_ref()
+                .is_some_and(|f| f.matches(subject, self.category))
+    }
+
     /// Whether a description matches; similarity does not apply to it
     pub fn matches_text(&self, text: &str) -> bool {
         self.pattern.is_match(text)
@@ -278,6 +292,14 @@ mod tests {
         assert!(!full.matches_name("app-misc", "python-magic"));
         // Each part has to be similar, so a short name does not match a long category.
         assert!(!key("@dev-libs/tk").matches_name("dev-libs", "zlib"));
+    }
+
+    #[test]
+    fn a_set_matches_by_its_last_segment_unless_the_key_names_a_category() {
+        assert!(key("^world$").matches_set("world"));
+        assert!(key("sel").matches_set("selected-sets"));
+        assert!(key("^sub$").matches_set("my/sub"));
+        assert!(!key("@my/sub").matches_set("other/sub"));
     }
 
     #[test]

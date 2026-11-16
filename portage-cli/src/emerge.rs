@@ -1011,14 +1011,19 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             regex_auto: mode.regex_search_auto != Some(cli::YesNo::N),
         };
         let policy = search_policy(cli).await;
+        let roots = cli.roots();
+        let env = search::SearchEnv {
+            policy: policy.as_ref(),
+            verbose: cli.verbose() > 0,
+            config_root: roots.config(),
+        };
         return search::run_emerge_style(
             &cli.search_repos(),
             &atoms,
             mode.searchdesc,
             index,
             key,
-            policy.as_ref(),
-            cli.verbose() > 0,
+            &env,
         )
         .await;
     }

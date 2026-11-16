@@ -1,6 +1,6 @@
 # Default options from the config, and sets in `em -s`
 
-Status: plan, nothing implemented. Written 2026-11-16.
+Status: part 2 (sets in `em -s`) landed; part 1 parked until winnow-args has a public `response::split`. Written 2026-11-16.
 
 ## Why
 

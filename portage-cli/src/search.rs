@@ -299,6 +299,16 @@ async fn run_desc(
 // emerge -s / -S style search
 // ---------------------------------------------------------------------------
 
+/// What the emerge-style search reads besides the repositories
+pub struct SearchEnv<'a> {
+    /// Keywords, masks and USE of the configured profile
+    pub policy: Option<&'a ResolvedPolicy>,
+    /// Show what a mask hides and the size over every USE flag
+    pub verbose: bool,
+    /// The config root, where the sets are defined
+    pub config_root: Option<&'a camino::Utf8Path>,
+}
+
 /// Search with emerge's output format: one block per package with latest
 /// available/installed versions, distfile size, homepage, description and
 /// license, bracketed by the search-key header and the result count.
@@ -308,9 +318,9 @@ pub async fn run_emerge_style(
     search_desc: bool,
     search_index: bool,
     options: KeyOptions,
-    policy: Option<&ResolvedPolicy>,
-    verbose: bool,
+    env: &SearchEnv<'_>,
 ) -> Result<()> {
+    let (policy, verbose) = (env.policy, env.verbose);
     let repos = open_repos(repo_paths)?;
     let mut entries = uncached_entry_maps(&repos).await;
     let descs = if search_desc {
@@ -390,7 +400,17 @@ pub async fn run_emerge_style(
         for (key, (cpn, idx)) in &matched {
             print_search_block(&repos, &entries, *idx, cpn, key, &installed, &vis, verbose);
         }
-        println!("[ Applications found : {} ]\n", matched.len());
+        let sets = matching_sets(env.config_root, &key, search_desc);
+        for (name, description) in &sets {
+            let mut out = anstream::stdout();
+            writeln!(out, "{C_STAR}*{C_STAR:#}  {C_BOLD}{name}{C_BOLD:#}").ok();
+            writeln!(
+                out,
+                "      {C_LABEL}Description:{C_LABEL:#}   {description}\n"
+            )
+            .ok();
+        }
+        println!("[ Applications found : {} ]\n", matched.len() + sets.len());
     }
     Ok(())
 }
@@ -466,6 +486,29 @@ fn symlink_target(repos: &[Repository], ebuild: &portage_repo::Ebuild) -> Option
         let target = Cpv::parse(&format!("{category}/{}", rel.file_stem()?)).ok()?;
         (target != *ebuild.cpv()).then_some((idx, target))
     })
+}
+
+/// The sets whose name matches `key`, or with `-S` whose description does, with their descriptions
+fn matching_sets(
+    config_root: Option<&camino::Utf8Path>,
+    key: &SearchKey,
+    search_desc: bool,
+) -> Vec<(String, String)> {
+    let root = config_root.unwrap_or(camino::Utf8Path::new("/"));
+    let profile = root
+        .join("etc/portage/make.profile")
+        .canonicalize_utf8()
+        .ok()
+        .map(|p| p.to_string());
+    crate::maint::sets::KnownSets::load(config_root)
+        .details()
+        .iter()
+        .filter_map(|set| {
+            let description = set.description(profile.as_deref());
+            (key.matches_set(&set.name) || (search_desc && key.matches_text(&description)))
+                .then(|| (set.name.clone(), description))
+        })
+        .collect()
 }
 
 /// What makes a version visible: the configured keywords and `package.mask` when the profile
