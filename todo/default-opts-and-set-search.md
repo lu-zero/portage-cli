@@ -27,7 +27,7 @@ The effective command line of an `emerge` run is, left to right:
 `parse_cli_or_exit` parses once, and the config root is only known afterwards, as emerge also parses twice.
 
 1. Parse the arguments as they are. If the applet is not `Emerge`, or `--ignore-default-opts` is given, stop here.
-2. Read the variables for `cli.roots().config()`. Split them into words on whitespace, with `'…'`, `"…"` and `\` keeping a word together, as `shlex.split` does; nothing else is special (no operators, no expansion). A 20-line splitter in `portage-repo`; an unterminated quote is an error.
+2. Read the variables for `cli.roots().config()`. Split them into words with winnow-args' response-file tokenizer (whitespace, `'…'`, `"…"`, `\`; no operators, no expansion, no `@file`). It is private today: it needs a public `winnow_args::response::split` first, in the sibling repo, which wants the user's go-ahead. No splitter of our own.
 3. Build the argv of the second parse. The grammar already says every word after a leading flag is an emerge argument, so the rule is exact:
    - the first word is `emerge`: insert after it;
    - otherwise (a leading flag, `-r`, or a bare atom): insert at the front.
@@ -104,5 +104,5 @@ Part 2 first (small, self-contained, a day), then Part 1 (the parse path is shar
 ## Decisions (2026-11-16)
 
 - The default options apply to `em emerge` only, not to other applets.
-- Words are split on whitespace with quotes honoured, by a small splitter of our own: brush's tokenizer would add shell syntax a list of arguments does not have.
+- Words are split by winnow-args (a public `response::split` to add there), not by a splitter of our own and not by brush's shell tokenizer.
 - Flags dropped from `EMERGE_DEFAULT_OPTS` are reported in debug mode only (and in `em info`).
