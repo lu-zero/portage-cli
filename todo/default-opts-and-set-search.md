@@ -27,7 +27,7 @@ The effective command line of an `emerge` run is, left to right:
 `parse_cli_or_exit` parses once, and the config root is only known afterwards, as emerge also parses twice.
 
 1. Parse the arguments as they are. If the applet is not `Emerge`, or `--ignore-default-opts` is given, stop here.
-2. Read the variables for `cli.roots().config()`. Split them like a shell would (no expansion). Add `shlex` as a dependency, or write 30 lines; the choice is open.
+2. Read the variables for `cli.roots().config()`. Split them into words with brush, which the workspace already depends on: `brush_parser::tokenize_str`, then `unquote_str` on each word token. An operator token (`;`, `|`, `$(...)`) is an error: the variable is a list of words, not a script. No expansion is done.
 3. Build the argv of the second parse. The grammar already says every word after a leading flag is an emerge argument, so the rule is exact:
    - the first word is `emerge`: insert after it;
    - otherwise (a leading flag, `-r`, or a bare atom): insert at the front.
@@ -101,8 +101,8 @@ The effective command line of an `emerge` run is, left to right:
 
 Part 2 first (small, self-contained, a day), then Part 1 (the parse path is shared by every run, so it gets an Opus review before landing).
 
-## Open questions
+## Decisions (2026-11-16)
 
-- Should `EM_DEFAULT_OPTS` apply to the other applets (a per-applet variable like `EM_QUERY_DEFAULT_OPTS`)? The plan says no, until a flag is wanted there.
-- `shlex` as a dependency, or our own splitter?
-- Should the flags dropped from `EMERGE_DEFAULT_OPTS` be silent, as planned, or one warning per run?
+- The default options apply to `em emerge` only, not to other applets.
+- Words are split with brush's tokenizer, not a new dependency.
+- Flags dropped from `EMERGE_DEFAULT_OPTS` are reported in debug mode only (and in `em info`).
