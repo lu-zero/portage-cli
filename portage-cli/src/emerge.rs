@@ -1010,8 +1010,17 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             similarity,
             regex_auto: mode.regex_search_auto != Some(cli::YesNo::N),
         };
-        return search::run_emerge_style(&cli.search_repos(), &atoms, mode.searchdesc, index, key)
-            .await;
+        let policy = search_policy(cli).await;
+        return search::run_emerge_style(
+            &cli.search_repos(),
+            &atoms,
+            mode.searchdesc,
+            index,
+            key,
+            policy.as_ref(),
+            cli.verbose() > 0,
+        )
+        .await;
     }
     if atoms.is_empty() {
         crate::style::error_line!("no atoms or applet specified. Use --help for usage.");
@@ -1787,4 +1796,22 @@ mod tests {
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].cpv(), &present);
     }
+}
+
+/// The keyword, mask and USE policy of the configured profile, which `-s` shows versions and
+/// sizes by; `None` when the profile does not resolve
+async fn search_policy(cli: &cli::Cli) -> Option<portage_resolve::repo::ResolvedPolicy> {
+    let repo = crate::crossdev::main_repo(cli).ok()?;
+    let roots = cli.roots();
+    let env = portage_resolve::use_env::build_use_env(
+        &repo,
+        roots.config(),
+        roots.config_overlay(),
+        None,
+        None,
+    )
+    .await
+    .map_err(|e| tracing::debug!("search shows versions by keywords alone: {e:#}"))
+    .ok()?;
+    Some(portage_resolve::repo::ResolvedPolicy::from_use_env(env, &cli.arch()).0)
 }

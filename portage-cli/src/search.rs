@@ -2,8 +2,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::Write as _;
 
 use anyhow::{Result, bail};
+use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Cpv};
+use portage_atom_pubgrub::{PortagePackage, UseFlagState};
 use portage_repo::{Repository, ebuild_entries, repo_entries};
+use portage_resolve::effective_use::effective_use;
+use portage_resolve::repo::{ResolvedPolicy, is_masked};
 
 use crate::search_key::{KeyOptions, SearchKey};
 use crate::style::{C_BOLD, C_LABEL, C_MASKED, C_PKG, C_STAR};
@@ -304,6 +308,8 @@ pub async fn run_emerge_style(
     search_desc: bool,
     search_index: bool,
     options: KeyOptions,
+    policy: Option<&ResolvedPolicy>,
+    verbose: bool,
 ) -> Result<()> {
     let repos = open_repos(repo_paths)?;
     let mut entries = uncached_entry_maps(&repos).await;
@@ -332,6 +338,10 @@ pub async fn run_emerge_style(
 
     let arch = gentoo_core::Arch::current();
     let arch_str = arch.as_str().to_string();
+    let vis = Visibility {
+        arch: &arch_str,
+        policy,
+    };
     let names = category_names(&repos);
 
     for pat in patterns {
@@ -355,8 +365,8 @@ pub async fn run_emerge_style(
                 for pkg in cat.packages() {
                     let mut hit = key.matches_name(cat.name(), pkg.name());
                     if !hit && search_desc && !has_cache {
-                        hit = latest_visible(&repos, &entries, idx, pkg.cpn(), &arch_str)
-                            .is_some_and(|(_, e, _)| key.matches_text(&e.metadata.description));
+                        hit = latest_visible(&repos, &entries, idx, pkg.cpn(), &vis)
+                            .is_some_and(|l| key.matches_text(&l.entry.metadata.description));
                     }
                     if hit {
                         matched
@@ -378,7 +388,7 @@ pub async fn run_emerge_style(
 
         check_matched(&repos, &mut entries, matched.values()).await;
         for (key, (cpn, idx)) in &matched {
-            print_search_block(&repos, &entries, *idx, cpn, key, &installed, &arch_str);
+            print_search_block(&repos, &entries, *idx, cpn, key, &installed, &vis, verbose);
         }
         println!("[ Applications found : {} ]\n", matched.len());
     }
@@ -458,41 +468,106 @@ fn symlink_target(repos: &[Repository], ebuild: &portage_repo::Ebuild) -> Option
     })
 }
 
-/// The latest version whose KEYWORDS accept this arch (stable or testing),
-/// with its metadata and a visibility flag.
-///
-/// The bool is `true` iff a keyword-matching version (stable ~ or *) was
-/// found for the arch; `false` means the returned entry is a fallback to the
-/// newest version that had metadata (the package appears as "\[ Masked \]" in
-/// emerge-style search output).
+/// What makes a version visible: the configured keywords and `package.mask` when the profile
+/// resolves, else the KEYWORDS of the arch alone
+#[derive(Clone, Copy)]
+struct Visibility<'a> {
+    arch: &'a str,
+    policy: Option<&'a ResolvedPolicy>,
+}
+
+/// Why a version is not visible
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Hidden {
+    Mask,
+    Keywords,
+}
+
+impl Hidden {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Mask => "package.mask",
+            Self::Keywords => "keywords",
+        }
+    }
+}
+
+impl Visibility<'_> {
+    fn hidden(
+        &self,
+        repo: &Repository,
+        cpv: &Cpv,
+        entry: &portage_metadata::CacheEntry,
+    ) -> Option<Hidden> {
+        let meta = &entry.metadata;
+        let Some(resolved) = self.policy else {
+            let arch = self.arch;
+            let accepted = meta.keywords.iter().any(|k| {
+                let k = k.to_string();
+                k == arch || k == format!("~{arch}") || k == "*" || k == "~*"
+            });
+            return (!accepted).then_some(Hidden::Keywords);
+        };
+        if is_masked(
+            &resolved.package_mask,
+            &resolved.package_unmask,
+            cpv,
+            &meta.slot,
+            repo.name(),
+        ) {
+            return Some(Hidden::Mask);
+        }
+        let accepted = resolved
+            .accept_keywords
+            .accepts(&meta.keywords, cpv, Some(meta.slot.slot));
+        (!accepted).then_some(Hidden::Keywords)
+    }
+}
+
+/// The newest version, with its metadata and whether it is visible
+struct Latest {
+    cpv: Cpv,
+    entry: portage_metadata::CacheEntry,
+    visible: bool,
+    /// The newest version of all and why it is hidden, when it is not the one shown
+    newer: Option<(portage_atom::Version, Hidden)>,
+}
+
+/// The newest visible version, or the newest of all when none is
 fn latest_visible(
     repos: &[Repository],
     entries: &[Entries],
     idx: usize,
     cpn: &Cpn,
-    arch: &str,
-) -> Option<(portage_atom::Version, portage_metadata::CacheEntry, bool)> {
+    vis: &Visibility,
+) -> Option<Latest> {
     let repo = &repos[idx];
     let cat = repo.category(cpn.category.as_str())?;
     let pkg = cat.package(cpn.package.as_str())?;
     let ebuilds = pkg.ebuilds().ok()?;
-    let mut newest: Option<(portage_atom::Version, portage_metadata::CacheEntry, bool)> = None;
+    let mut newest: Option<(Cpv, portage_metadata::CacheEntry, Option<Hidden>)> = None;
     for eb in ebuilds.iter().rev() {
         let Some(entry) = entry_for(repos, entries, idx, eb) else {
             continue;
         };
-        if newest.is_none() {
-            newest = Some((eb.cpv().version.clone(), entry.clone(), false));
+        let hidden = vis.hidden(repo, eb.cpv(), &entry);
+        if hidden.is_none() {
+            let newer = newest.and_then(|(cpv, _, why)| Some((cpv.version, why?)));
+            return Some(Latest {
+                cpv: eb.cpv().clone(),
+                entry,
+                visible: true,
+                newer,
+            });
         }
-        let visible = entry.metadata.keywords.iter().any(|k| {
-            let k = k.to_string();
-            k == arch || k == format!("~{arch}") || k == "*" || k == "~*"
-        });
-        if visible {
-            return Some((eb.cpv().version.clone(), entry, true));
-        }
+        newest.get_or_insert((eb.cpv().clone(), entry, hidden));
     }
-    newest
+    newest.map(|(cpv, entry, _)| Latest {
+        cpv,
+        entry,
+        visible: false,
+        newer: None,
+    })
 }
 
 /// Metadata for one ebuild: the repo's own md5-cache, the user-side sourced
@@ -525,6 +600,7 @@ fn entry_for(
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_search_block(
     repos: &[Repository],
     entries: &[Entries],
@@ -532,10 +608,11 @@ fn print_search_block(
     cpn: &Cpn,
     key: &str,
     installed: &BTreeMap<Cpn, portage_atom::Version>,
-    arch: &str,
+    vis: &Visibility,
+    verbose: bool,
 ) {
-    let latest = latest_visible(repos, entries, idx, cpn, arch);
-    let is_masked = latest.as_ref().is_some_and(|(_, _, vis)| !vis);
+    let latest = latest_visible(repos, entries, idx, cpn, vis);
+    let is_masked = latest.as_ref().is_some_and(|l| !l.visible);
 
     let mut out = anstream::stdout();
     write!(out, "{C_STAR}*{C_STAR:#}  {C_BOLD}{key}{C_BOLD:#}").ok();
@@ -545,9 +622,10 @@ fn print_search_block(
     writeln!(out).ok();
 
     match &latest {
-        Some((ver, _, _)) => writeln!(
+        Some(l) => writeln!(
             out,
-            "      {C_LABEL}Latest version available:{C_LABEL:#} {ver}"
+            "      {C_LABEL}Latest version available:{C_LABEL:#} {}",
+            l.cpv.version
         )
         .ok(),
         None => writeln!(
@@ -556,6 +634,14 @@ fn print_search_block(
         )
         .ok(),
     };
+    if verbose && let Some((version, why)) = latest.as_ref().and_then(|l| l.newer.as_ref()) {
+        writeln!(
+            out,
+            "      {C_LABEL}Newer version masked:{C_LABEL:#}    {version} {C_MASKED}[ {} ]{C_MASKED:#}",
+            why.label()
+        )
+        .ok();
+    }
     match installed.get(cpn) {
         Some(v) => writeln!(
             out,
@@ -568,14 +654,29 @@ fn print_search_block(
         )
         .ok(),
     };
-    if let Some((_, entry, _)) = &latest {
-        let size = distfiles_size(&repos[idx], cpn, &entry.metadata);
-        writeln!(
+    if let Some(l) = &latest {
+        let entry = &l.entry;
+        let sizes = distfiles_sizes(
+            &repos[idx],
+            &l.cpv,
+            &entry.metadata,
+            vis.policy.map(|p| (p, entry)),
+        );
+        write!(
             out,
             "      {C_LABEL}Size of files:{C_LABEL:#} {} KiB",
-            size.div_ceil(1024)
+            sizes.enabled.div_ceil(1024)
         )
         .ok();
+        if verbose && sizes.all != sizes.enabled {
+            write!(
+                out,
+                " ({} KiB with every USE flag)",
+                sizes.all.div_ceil(1024)
+            )
+            .ok();
+        }
+        writeln!(out).ok();
         writeln!(
             out,
             "      {C_LABEL}Homepage:{C_LABEL:#}      {}",
@@ -599,12 +700,22 @@ fn print_search_block(
     writeln!(out).ok();
 }
 
-/// Sum of the package's `Manifest` DIST sizes for every file the latest
-/// version's `SRC_URI` can reference, all USE conditionals taken. Emerge counts
-/// only the files of the enabled USE, so a package with flag-gated distfiles shows more here.
-fn distfiles_size(repo: &Repository, cpn: &Cpn, meta: &portage_metadata::EbuildMetadata) -> u64 {
-    let Some(Ok(Some(manifest))) = repo.package(cpn).map(|pkg| pkg.manifest()) else {
-        return 0;
+/// The `Manifest` size of a version's distfiles
+struct DistfilesSize {
+    /// Those of the enabled USE, as emerge counts them; every one when no policy resolves
+    enabled: u64,
+    /// Those every USE conditional could reference
+    all: u64,
+}
+
+fn distfiles_sizes(
+    repo: &Repository,
+    cpv: &Cpv,
+    meta: &portage_metadata::EbuildMetadata,
+    policy: Option<(&ResolvedPolicy, &portage_metadata::CacheEntry)>,
+) -> DistfilesSize {
+    let Some(Ok(Some(manifest))) = repo.package(&cpv.cpn).map(|pkg| pkg.manifest()) else {
+        return DistfilesSize { enabled: 0, all: 0 };
     };
     let sizes: BTreeMap<String, u64> = manifest
         .dist_entries()
@@ -615,21 +726,44 @@ fn distfiles_size(repo: &Repository, cpn: &Cpn, meta: &portage_metadata::EbuildM
             _ => None,
         })
         .collect();
-    let mut filenames = Vec::new();
-    for entry in meta.src_uri.list() {
-        entry.collect_filenames(&|_| true, &mut filenames);
-    }
-    filenames.sort();
-    filenames.dedup();
-    filenames
-        .into_iter()
-        .filter_map(|f| sizes.get(&f).copied())
-        .sum()
+    let total = |enabled: &dyn Fn(&str) -> bool| {
+        let mut filenames = Vec::new();
+        for entry in meta.src_uri.list() {
+            entry.collect_filenames(enabled, &mut filenames);
+        }
+        filenames.sort();
+        filenames.dedup();
+        filenames
+            .into_iter()
+            .filter_map(|f| sizes.get(&f).copied())
+            .sum()
+    };
+    let all = total(&|_| true);
+    let enabled = match policy {
+        Some((resolved, entry)) => {
+            let policy = resolved.as_policy();
+            let slot = entry.metadata.slot.slot;
+            let stable =
+                resolved
+                    .accept_keywords
+                    .is_stable(&entry.metadata.keywords, cpv, Some(slot));
+            let pkg = PortagePackage::slotted(cpv.cpn, slot);
+            let cfg = effective_use(&policy, &pkg, &cpv.version, entry, stable, &[]);
+            total(&|flag| cfg.get(Interned::intern(flag)) == UseFlagState::Enabled)
+        }
+        None => all,
+    };
+    DistfilesSize { enabled, all }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const KW: Visibility = Visibility {
+        arch: "amd64",
+        policy: None,
+    };
 
     /// A repository with `metadata/md5-cache` entries `(cpv, description)` and no index
     fn repo_with_cache(dir: &std::path::Path, name: &str, entries: &[(&str, &str)]) -> Repository {
@@ -775,7 +909,7 @@ mod tests {
         let mut entries = uncached_entry_maps(&repos).await;
         let cpn = Cpn::parse("app-misc/ovpkg").unwrap();
         check_matched(&repos, &mut entries, [(cpn, 1)].iter()).await;
-        assert!(latest_visible(&repos, &entries, 1, &cpn, "amd64").is_some());
+        assert!(latest_visible(&repos, &entries, 1, &cpn, &KW).is_some());
     }
 
     #[test]
@@ -924,8 +1058,44 @@ mod tests {
             check_matched(&repos, &mut entries, [(cpn, 0)].iter()).await;
             entries
         });
-        let (_, entry, _) = latest_visible(&repos, &entries, 0, &cpn, "amd64").unwrap();
+        let entry = latest_visible(&repos, &entries, 0, &cpn, &KW)
+            .unwrap()
+            .entry;
         assert_eq!(entry.metadata.description, "Fresh");
+    }
+
+    #[test]
+    fn a_newer_version_without_the_arch_keyword_is_reported_as_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ov");
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::create_dir_all(root.join("metadata/md5-cache/app-misc")).unwrap();
+        std::fs::create_dir_all(root.join("app-misc/foo")).unwrap();
+        std::fs::write(root.join("profiles/repo_name"), "ov\n").unwrap();
+        std::fs::write(root.join("profiles/categories"), "app-misc\n").unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        for (version, keywords) in [("1", "amd64"), ("2", "~arm64")] {
+            std::fs::write(
+                root.join(format!("app-misc/foo/foo-{version}.ebuild")),
+                format!("EAPI=8\nDESCRIPTION=\"d\"\nSLOT=\"0\"\nKEYWORDS=\"{keywords}\"\n"),
+            )
+            .unwrap();
+        }
+        let repos = [Repository::builder().in_memory_cache().open(&root).unwrap()];
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let cpn = Cpn::parse("app-misc/foo").unwrap();
+        let entries = rt.block_on(async {
+            let mut entries = uncached_entry_maps(&repos).await;
+            check_matched(&repos, &mut entries, [(cpn, 0)].iter()).await;
+            entries
+        });
+        let latest = latest_visible(&repos, &entries, 0, &cpn, &KW).unwrap();
+        assert_eq!(latest.cpv.version.to_string(), "1");
+        let (newer, why) = latest.newer.unwrap();
+        assert_eq!((newer.to_string(), why.label()), ("2".into(), "keywords"));
     }
 
     #[test]
@@ -980,7 +1150,9 @@ mod tests {
             "Cached foo"
         );
         rt.block_on(check_matched(&repos, &mut entries, [(bar, 0)].iter()));
-        let (_, entry, _) = latest_visible(&repos, &entries, 0, &bar, "amd64").unwrap();
+        let entry = latest_visible(&repos, &entries, 0, &bar, &KW)
+            .unwrap()
+            .entry;
         assert_eq!(
             entry.metadata.description, "Fresh bar",
             "a stale entry is sourced"
