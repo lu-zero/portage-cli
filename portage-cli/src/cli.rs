@@ -11,6 +11,7 @@ use winnow_args::{Args as _, FromArg};
 mod activity;
 mod context;
 mod depgraph_flags;
+mod display_flags;
 mod emerge_mode;
 mod merge_flags;
 mod topology;
@@ -19,6 +20,7 @@ pub use context::{
     ArchArg, FormatArg, OutputFormat, PretendArg, QuietArg, RepoArg, VdbArg, VerboseArg,
 };
 pub use depgraph_flags::DepgraphFlags;
+pub use display_flags::DisplayArgs;
 pub use emerge_mode::EmergeModeArgs;
 pub use merge_flags::{MergeFlags, YesNo};
 pub use topology::{RootArg, RootTopology, RootedTopology, Topology};
@@ -2103,6 +2105,26 @@ mod tests {
     }
 
     #[test]
+    fn emerge_display_switches_parse_and_change_nothing() {
+        let cli = parse_cli(&[
+            "em",
+            "-p",
+            "--nospinner",
+            "--columns",
+            "--quiet-build=n",
+            "--quiet-fail",
+            "firefox",
+        ]);
+        let Some(Applet::Emerge(emerge)) = &cli.applet else {
+            panic!("an emerge run");
+        };
+        assert!(emerge.display.nospinner && emerge.display.columns);
+        assert_eq!(emerge.display.quiet_build, Some(YesNo::N));
+        assert_eq!(emerge.display.quiet_fail, Some(YesNo::Y));
+        assert_eq!(emerge.atoms, ["firefox"]);
+    }
+
+    #[test]
     fn mode_flags_before_or_after_emerge_word() {
         let prefix_s = parse_cli(&["em", "-s", "firefox"]);
         assert!(prefix_s.mode().search);
@@ -3377,6 +3399,9 @@ pub struct EmergeArgs {
 
     #[arg(flatten)]
     pub depgraph_flags: DepgraphFlags,
+
+    #[arg(flatten)]
+    pub display: DisplayArgs,
 
     #[arg(flatten)]
     pub topology: RootedTopology,

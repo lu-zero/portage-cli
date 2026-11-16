@@ -142,6 +142,30 @@ How far to re-examine installed dependencies.
   Applies to packages that appear in the depgraph; pairs with `--deep` for a full-tree USE recheck.
 * `-U, --changed-use` — Like `--newuse`, but only rebuild when an *enabled* USE flag changed among flags present in both installed and current IUSE (ignore pure IUSE add/drop). Emerge's `--changed-use` / `-U`.
 
+## Accepted, no effect
+
+Output switches `emerge` has, which `em` takes and ignores.
+
+* `--alphabetical` — Sort the enabled and disabled USE flags of the plan together
+* `--columns` — Print the plan as columns
+* `--nospinner` — Do not draw a progress spinner
+* `--quiet-repo-display` — Do not show the repository of each package
+* `--unordered-display` — Do not order the plan for display
+* `--verbose-conflicts` — Explain every blocker in detail
+* `--verbose-missing-ebuilds` — Report each missing ebuild, not only the first
+* `--quiet-build[=<y|n>]` — Send build output to the log
+  * `y`: Yes
+  * `n`: No
+* `--quiet-fail[=<y|n>]` — Print only the die message of a failed build
+  * `y`: Yes
+  * `n`: No
+* `--verbose-slot-rebuilds[=<y|n>]` — Show the slot rebuilds a plan makes
+  * `y`: Yes
+  * `n`: No
+* `--misspell-suggestions[=<y|n>]` — Suggest names for an atom that matches nothing
+  * `y`: Yes
+  * `n`: No
+
 ## Roots
 
 Which tree this invocation reads and writes.
