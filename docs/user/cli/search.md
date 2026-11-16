@@ -25,6 +25,7 @@ em search [OPTIONS] [PATTERN]
   * `y`: Yes
   * `n`: No
 * `-R, --show-repo` — Show the repository each package comes from, as `category/name::repo`
+* `-v, --verbose...` — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
 * `--repo <PATH>` — Pin search/query to a single repository
 
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).

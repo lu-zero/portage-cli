@@ -455,6 +455,7 @@ impl Cli {
             Some(Applet::Regen(a)) => a.verbose_arg.verbose,
             Some(Applet::Query(a)) => a.verbose_arg.verbose,
             Some(Applet::Grep(a)) => a.verbose_arg.verbose,
+            Some(Applet::Search(a)) => a.verbose_arg.verbose,
             _ => 0,
         }
     }
@@ -3043,6 +3044,8 @@ pub struct SearchArgs {
     /// Show the repository each package comes from, as `category/name::repo`
     #[arg(short = 'R', long = "show-repo")]
     pub show_repo: bool,
+    #[arg(flatten)]
+    pub verbose_arg: VerboseArg,
     /// Regular expression to search, matched without regard to case (required unless --all)
     #[arg(positional, required_unless = "all")]
     pub pattern: Option<String>,

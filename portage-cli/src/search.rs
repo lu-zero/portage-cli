@@ -3,7 +3,7 @@ use std::io::Write as _;
 
 use anyhow::{Result, bail};
 use portage_atom::interner::Interned;
-use portage_atom::{Cpn, Cpv};
+use portage_atom::{Cpn, Cpv, Version};
 use portage_atom_pubgrub::{PortagePackage, UseFlagState};
 use portage_repo::{Repository, ebuild_entries, repo_entries};
 use portage_resolve::effective_use::effective_use;
@@ -54,6 +54,8 @@ pub struct ListOptions {
     pub search_index: bool,
     /// End each package with `::repo`
     pub show_repo: bool,
+    /// Name the newest version of each package
+    pub versions: bool,
 }
 
 /// `em search`: the packages whose name, or with `search_desc` description, a regular expression matches
@@ -69,6 +71,7 @@ pub async fn run(
         homepage,
         search_index,
         show_repo,
+        versions,
     } = options;
     let repos = open_repos(repo_paths)?;
     let pat = pattern.unwrap_or("");
@@ -79,6 +82,7 @@ pub async fn run(
     let shown = Shown {
         name_only,
         homepage,
+        versions,
         repos: show_repo.then(|| repos.iter().map(|r| r.name().to_string()).collect()),
     };
 
@@ -96,15 +100,22 @@ pub async fn run(
 struct Shown {
     name_only: bool,
     homepage: bool,
+    /// Whether a package is named with its newest version
+    versions: bool,
     /// The names of the repositories, by position, when the line ends its package with `::repo`
     repos: Option<Vec<String>>,
 }
 
 impl Shown {
-    fn key(&self, key: &str, repo: usize) -> String {
+    /// `key` as listed: with `version` when versions are shown, and with its repository when asked for
+    fn key(&self, key: &str, version: Option<&Version>, repo: usize) -> String {
+        let key = match version.filter(|_| self.versions) {
+            Some(version) => format!("{key}-{version}"),
+            None => key.to_string(),
+        };
         match &self.repos {
             Some(names) => format!("{key}::{}", names[repo]),
-            None => key.to_string(),
+            None => key,
         }
     }
 }
@@ -153,8 +164,12 @@ fn run_name(repos: &[Repository], pat: &regex::Regex, all: bool, shown: &Shown) 
     let mut out = anstream::stdout();
 
     if shown.name_only {
-        for (key, (_, idx)) in &matched {
-            let key = shown.key(key, *idx);
+        for (key, (cpn, idx)) in &matched {
+            let version = shown
+                .versions
+                .then(|| latest_version(&repos[*idx], cpn))
+                .flatten();
+            let key = shown.key(key, version.as_ref(), *idx);
             writeln!(out, "{C_PKG}{key}{C_PKG:#}").ok();
         }
         return;
@@ -162,13 +177,26 @@ fn run_name(repos: &[Repository], pat: &regex::Regex, all: bool, shown: &Shown) 
 
     for (key, (cpn, idx)) in &matched {
         let info = latest_entry_info(&repos[*idx], cpn, shown.homepage);
-        let key = shown.key(key, *idx);
+        let version = shown
+            .versions
+            .then(|| latest_version(&repos[*idx], cpn))
+            .flatten();
+        let key = shown.key(key, version.as_ref(), *idx);
         if info.is_empty() {
             writeln!(out, "{C_PKG}{key}{C_PKG:#}").ok();
         } else {
             writeln!(out, "{C_PKG}{key}{C_PKG:#}: {info}").ok();
         }
     }
+}
+
+fn latest_version(repo: &Repository, cpn: &Cpn) -> Option<Version> {
+    let ebuilds = repo
+        .category(cpn.category.as_str())?
+        .package(cpn.package.as_str())?
+        .ebuilds()
+        .ok()?;
+    Some(ebuilds.last()?.cpv().version.clone())
 }
 
 fn latest_entry_info(repo: &Repository, cpn: &Cpn, homepage: bool) -> String {
@@ -302,7 +330,7 @@ async fn run_desc(
     all: bool,
     shown: &Shown,
 ) -> Result<()> {
-    let mut entries: Vec<(Cpn, usize, Option<String>)> = described(indexed, repos, shown.homepage)
+    let mut entries: Vec<(Cpv, usize, Option<String>)> = described(indexed, repos, shown.homepage)
         .await?
         .into_iter()
         .filter(|d| all || pat.is_match(&d.description))
@@ -312,18 +340,24 @@ async fn run_desc(
             } else {
                 Some(d.homepage.unwrap_or(d.description))
             };
-            (d.cpv.cpn, d.repo, info)
+            (d.cpv, d.repo, info)
         })
         .collect();
 
     // By name: interned values order by interning sequence, which the parallel read makes vary.
     entries.sort_by(|(a, ..), (b, ..)| {
+        let (a, b) = (&a.cpn, &b.cpn);
         (a.category.as_str(), a.package.as_str()).cmp(&(b.category.as_str(), b.package.as_str()))
     });
 
     let mut out = anstream::stdout();
-    for (cpn, repo, info) in &entries {
-        let key = shown.key(&format!("{}/{}", cpn.category, cpn.package), *repo);
+    for (cpv, repo, info) in &entries {
+        let cpn = &cpv.cpn;
+        let key = shown.key(
+            &format!("{}/{}", cpn.category, cpn.package),
+            Some(&cpv.version),
+            *repo,
+        );
         match info {
             None => writeln!(out, "{C_PKG}{key}{C_PKG:#}").ok(),
             Some(s) => writeln!(out, "{C_PKG}{key}{C_PKG:#}: {s}").ok(),
@@ -1145,27 +1179,28 @@ mod tests {
     }
 
     #[test]
-    fn the_repository_ends_a_key_only_when_asked_for() {
+    fn the_version_and_the_repository_end_a_key_only_when_asked_for() {
         let names = vec!["gentoo".to_string(), "guru".to_string()];
         let plain = Shown {
             name_only: false,
             homepage: false,
+            versions: false,
             repos: None,
         };
+        let version = Version::parse("1.2").unwrap();
+        assert_eq!(
+            plain.key("dev-python/fastapi", Some(&version), 1),
+            "dev-python/fastapi"
+        );
         let with = Shown {
+            versions: true,
             repos: Some(names),
             ..plain
         };
         assert_eq!(
-            with.key("dev-python/fastapi", 1),
-            "dev-python/fastapi::guru"
+            with.key("dev-python/fastapi", Some(&version), 1),
+            "dev-python/fastapi-1.2::guru"
         );
-        let plain = Shown {
-            name_only: false,
-            homepage: false,
-            repos: None,
-        };
-        assert_eq!(plain.key("dev-python/fastapi", 1), "dev-python/fastapi");
     }
 
     #[test]

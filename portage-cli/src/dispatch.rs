@@ -344,6 +344,7 @@ impl RunAsync<&cli::Cli> for SearchArgs {
                 homepage: self.homepage,
                 search_index: self.search_index != Some(cli::YesNo::N),
                 show_repo: self.show_repo,
+                versions: cli.verbose() > 0,
             },
         )
         .await
