@@ -1164,8 +1164,16 @@ impl EbuildShell {
             None => root_str.to_owned(),
         };
         let sysroot_trimmed = sysroot.trim_end_matches('/');
+        // In place (`--local`) the prefix is EPREFIX, so SYSROOT is the system root: a SYSROOT
+        // equal to EPREFIX makes `--sysroot ${SYSROOT}` nest the prefix under itself.
+        let sysroot_var =
+            if self.build_sysroot.is_none() && !eprefix.is_empty() && cross_triple.is_none() {
+                ""
+            } else {
+                sysroot_trimmed
+            };
         // ESYSROOT = SYSROOT + EPREFIX (PMS 11.1), where DEPEND's headers and
-        // libraries are. Under `--local` that is the prefix while SYSROOT stays
+        // libraries are. Under `--local` that is the prefix while SYSROOT is
         // `/`, so no `--sysroot` is passed and the compiler keeps the host libc.
         let esysroot = if let (true, Some(triple)) = (host_codegen, cross_triple) {
             // toolchain.eclass `--with-build-sysroot` wants the cross sysroot.
@@ -1191,7 +1199,7 @@ impl EbuildShell {
             },
             ed: format!("{}/", Self::ed_under(d, &eprefix).display()),
             eroot: root_str.to_owned(),
-            sysroot: sysroot_trimmed.to_owned(),
+            sysroot: sysroot_var.to_owned(),
             esysroot,
             eprefix,
         }

@@ -1611,6 +1611,37 @@ async fn ordinary_package_under_prefix_keeps_host_esysroot() {
     assert_eq!(shell.get_var("ESYSROOT").as_deref(), Some(""));
 }
 
+// `--local`: the package is configured for the prefix, so SYSROOT is the system
+// root and ESYSROOT is the prefix. A SYSROOT equal to EPREFIX makes
+// `--sysroot ${SYSROOT}` nest the prefix under itself.
+#[tokio::test]
+async fn in_place_prefix_has_system_sysroot_and_prefix_esysroot() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "dev-python", "flit-core");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let prefix_dir = dir.path().join("prefix");
+    std::fs::create_dir_all(&prefix_dir).unwrap();
+    let prefix = Utf8PathBuf::from_path_buf(prefix_dir.clone()).unwrap();
+    shell.set_build_roots(None, None, Some(&prefix), None, None);
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, prefix_dir.as_path())
+        .await
+        .unwrap();
+
+    assert_eq!(shell.get_var("SYSROOT").as_deref(), Some(""));
+    assert_eq!(shell.get_var("ESYSROOT").as_deref(), Some(prefix.as_str()));
+}
+
 // PMS, "Path variables and trailing slash": ROOT, EROOT, D and ED end in a
 // slash up to EAPI 6 and never from EAPI 7 on, where the system root is empty.
 #[tokio::test]
