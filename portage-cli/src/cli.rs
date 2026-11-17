@@ -3273,7 +3273,7 @@ pub struct CrossdevArgs {
 /// `em toolchain` — bootstrap a self-hosting native toolchain into `--root`
 ///
 /// The native twin of `crossdev --setup` (`CHOST == CBUILD`): the staged
-/// `baselayout → binutils → os-headers → glibc → gcc` bootstrap that produces a
+/// `baselayout → os-headers → python → perl → binutils → glibc → gcc` bootstrap that produces a
 /// working compiler + libc in a fresh ROOT. This is the *toolchain* primitive —
 /// the compiler the `em stages` production (stage1 `packages.build`, stage3
 /// `--emptytree @system`) then builds against. Kept separate from the stages on

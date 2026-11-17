@@ -10,7 +10,7 @@ pitfalls: [`em-prefix-experiment.md`](../design/em-prefix-experiment.md).
 
 ```sh
 em setup --prefix P
-em toolchain --prefix P --setup    # baselayout → binutils → headers → glibc → gcc
+em toolchain --prefix P --setup    # baselayout → headers → python → perl → binutils → glibc → gcc
 em select gcc set --prefix P N     # activate P's gcc
 em --prefix P llvm-core/clang      # builds with P's gcc, not the host's
 em active set --prefix P           # register P as the active context

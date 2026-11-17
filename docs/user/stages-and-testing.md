@@ -23,7 +23,7 @@ catalyst / crossdev-stages):
 
 | Step | Command | What it does | USE |
 |------|---------|--------------|-----|
-| **Toolchain** | `em toolchain --setup --root R` | Native self-hosting compiler + libc into `R`: baselayout → binutils → headers → glibc → gcc | step-local overrides inside the staged driver (not a stage recipe) |
+| **Toolchain** | `em toolchain --setup --root R` | Native self-hosting compiler + libc into `R`: baselayout → headers → python → perl → binutils → glibc → gcc | step-local overrides inside the staged driver (not a stage recipe) |
 | **Cross toolchain** | `em crossdev --target T --setup` | Cross tools into `/usr/<T>` (host-side) + sysroot skeleton | eclass/crossdev model |
 | **Stage1** | `em stages --stage1 --root R` | Bootstrap set: baselayout (`USE=build`, `--nodeps`) then profile `packages.build` | **forced** conf-layer `USE="-* build ${BOOTSTRAP_USE}"`; **`--autosolve-use` always on** (IUSE `+` defaults preferred when `-*` wiped them) |
 | **Stage3** | `em stages --stage3 --root R` | Emptytree rebuild of `@system` | **none injected** — profile + ROOT `make.conf` + `package.use` only |
@@ -145,7 +145,7 @@ em toolchain --root /path/to/stage \
 ```
 
 - Produces a self-hosting native toolchain in the root
-  (`baselayout → binutils → os-headers → glibc → gcc`).
+  (`baselayout → os-headers → python → perl → binutils → glibc → gcc`).
 - Activates wrappers via `em select` post-steps.
 - Prefer **`--root`** or **`--prefix`** for full toolchains; **`--local`**
   still hits known hard-cycle partials (see regression-matrix “KNOWN-PARTIAL”).

@@ -23,7 +23,7 @@
 //! - **native** — a self-hosting stage1 into `--root` (`CHOST == CBUILD`), plain
 //!   `::gentoo` atoms. The seed compiler at `BROOT=/` already targets this arch,
 //!   so it builds *full* glibc directly and a single full gcc links against it:
-//!   baselayout → binutils → os-headers → glibc → gcc. The two-stage split is
+//!   baselayout → os-headers → python → perl → binutils → glibc → gcc. The two-stage split is
 //!   cross-only —
 //!   `toolchain.eclass` gates every stage1 affordance on `is_crosscompile`, so a
 //!   native gcc is always `--enable-shared` and *requires* a full in-ROOT libc.
@@ -279,6 +279,18 @@ pub fn toolchain_plan(
     // Placed before binutils: on an empty VDB, binutils's own dependency
     // closure already reaches python-consuming build tools (meson, ninja),
     // so python must be real by the time that step resolves, not just gcc's.
+    // Native headers go in before anything else is built: a gcc pulled in by the python or perl
+    // closure is configured `--with-sysroot=${EPREFIX}` and sees no host headers.
+    if matches!(kind, BootstrapKind::Native) && spec.kernel_headers.is_some() {
+        steps.push(StageStep {
+            label: "kernel headers".into(),
+            atoms: vec![kind.kernel_headers_atom()],
+            use_override: owned(&["headers-only"]),
+            nodeps: false,
+            into_sysroot: false,
+        });
+    }
+
     if is_self_contained_bootstrap {
         steps.push(StageStep {
             label: "python".into(),
@@ -324,15 +336,6 @@ pub fn toolchain_plan(
     // (and libxcrypt) into ROOT and cycles with glibc. `--nodeps` on libc
     // mirrors cross's headers-first break: use already-merged headers + BROOT.
     if let BootstrapKind::Native = kind {
-        if spec.kernel_headers.is_some() {
-            steps.push(StageStep {
-                label: "kernel headers".into(),
-                atoms: vec![kind.kernel_headers_atom()],
-                use_override: owned(&["headers-only"]),
-                nodeps: false,
-                into_sysroot: false,
-            });
-        }
         if !prefix_guest {
             steps.push(StageStep {
                 label: "libc".into(),
@@ -920,10 +923,10 @@ mod tests {
             labels(&plan),
             [
                 "baselayout",
+                "kernel headers",
                 "python",
                 "perl",
                 "binutils",
-                "kernel headers",
                 "libc",
                 "gcc"
             ]
@@ -937,18 +940,19 @@ mod tests {
         // baselayout first: lays down the /usr/lib skeleton for gcc's osdir.
         assert_eq!(atoms[0], "sys-apps/baselayout");
         assert!(plan.steps[0].use_override.contains(&"build".to_string()));
+        // Native merges the virtual (registers it in the ROOT VDB for glibc's
+        // DEPEND), not the bare linux-headers provider, and before any other
+        // build so a gcc in a later closure finds the headers under EPREFIX.
+        assert_eq!(atoms[1], "virtual/os-headers");
         // Real python next: an empty VDB means anything binutils's own
         // closure needs that's python-eclass-based must already be real,
         // not just depgraph-satisfied.
-        assert_eq!(atoms[1], "dev-lang/python");
+        assert_eq!(atoms[2], "dev-lang/python");
         // Real perl next, same reasoning: a borrowed host perl's Config.pm
         // has no EPREFIX, so Module::Build-driven installs land outside
         // ${ED} entirely.
-        assert_eq!(atoms[2], "dev-lang/perl");
-        assert_eq!(atoms[3], "sys-devel/binutils");
-        // Native merges the virtual (registers it in the ROOT VDB for glibc's
-        // DEPEND), not the bare linux-headers provider.
-        assert_eq!(atoms[4], "virtual/os-headers");
+        assert_eq!(atoms[3], "dev-lang/perl");
+        assert_eq!(atoms[4], "sys-devel/binutils");
         assert_eq!(atoms[5], "sys-libs/glibc");
         assert_eq!(atoms[6], "sys-devel/gcc");
         assert!(atoms.iter().all(|a| !a.starts_with("cross-")));
@@ -964,7 +968,7 @@ mod tests {
         // Native binutils drops debuginfod (else its elfutils→…→glibc closure
         // explodes the binutils step into the empty ROOT).
         assert!(
-            plan.steps[3]
+            plan.steps[4]
                 .use_override
                 .contains(&"-debuginfod".to_string())
         );
@@ -982,10 +986,10 @@ mod tests {
             labels(&plan),
             [
                 "baselayout",
+                "kernel headers",
                 "python",
                 "perl",
                 "binutils",
-                "kernel headers",
                 "gcc"
             ]
         );

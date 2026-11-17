@@ -646,7 +646,7 @@ fn native_toolchain_package_use() -> Vec<(Dep, Vec<UseToken>)> {
 /// (`CHOST == CBUILD`) into `--root` / `--prefix` / `--local`
 ///
 /// The native twin of crossdev `--setup`, sharing its staged driver but with the *native*
-/// plan (baselayout → binutils → os-headers → full glibc → full gcc): the seed compiler at
+/// plan (baselayout → os-headers → python → perl → binutils → full glibc → full gcc): the seed compiler at
 /// `BROOT=/` builds glibc directly, no two-stage gcc (cross-only — see [`stages`]). Plain
 /// `::gentoo` atoms, no cross overlay/wrapper ceremony.
 ///
