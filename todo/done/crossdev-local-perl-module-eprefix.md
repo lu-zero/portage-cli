@@ -1,11 +1,6 @@
 # `dev-perl/Module-Build` fperms fails under `--local` (confirmed: upstream eclass gap)
 
-Status: 🟢 root-caused and live-confirmed as an upstream Gentoo eclass
-gap, not an `em`-side bug — no fix needed in `em` itself, worth a Gentoo
-bug report instead. Found 2026-08-26 testing `--prefix`/`--local` impact of
-[[crossdev-pkg-config-sysroot-leak]] in a real crossdev-stages sandbox —
-unrelated to that fix; a completely different mechanism (perl install
-destdir vs. `fperms`'s path resolution).
+Status: ✅ closed upstream: `perl-module.eclass` now passes `--prefix "${EPREFIX}"/usr` in the Module::Build / Build::Tiny branch (tree of 2026-11-06). No `em` change was needed.
 
 ## The bug
 

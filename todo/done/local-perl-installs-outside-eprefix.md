@@ -1,10 +1,6 @@
 # Perl packages under `--local`: borrowed host perl installs outside `${ED}`
 
-Status: 🔴 not started, precisely root-caused 2026-08-24. Originally
-misdiagnosed (see below) while chasing
-[[jobs-rdepend-backwards-edge-race]] — `dev-perl/Module-Build-0.423.400-r5`
-died at `perl_fix_permissions` (`fperms -R u+w /`) with `chmod: cannot
-access '<image>/tmp/.../em-local-test2/': No such file or directory`.
+Status: ✅ closed upstream: `perl-module.eclass` passes `--prefix "${EPREFIX}"/usr` in the Module::Build branch (tree of 2026-11-06). The options below are obsolete.
 
 **Renamed from the original title** ("fperms double-prefixes an
 already-absolute argument") — that was wrong. `fperms`'s own code is

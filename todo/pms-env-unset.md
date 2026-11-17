@@ -10,13 +10,13 @@ environment (5.3.2).
 
 ## What `em` does
 
-`___eapi_has_ENV_UNSET` exists. `ENV_UNSET` is not in `INCREMENTAL_VARS`
-and is never applied around `source_ebuild` / `run_phase`.
+`___eapi_has_ENV_UNSET` exists and `ENV_UNSET` is listed as incremental
+(`build/profile.rs`, `build/settings.rs`), but nothing unsets the names:
+`Eapi::has_env_unset` has no caller, and the ebuild environment keeps them.
 
 ## How to attack
 
-1. Add `ENV_UNSET` to `INCREMENTAL_VARS`.
-2. After sourcing the profile + conf, `unset` each token before ebuild
+1. After sourcing the profile + conf, `unset` each token before ebuild
    phases (and metadata regen, so cache does not leak those vars).
-3. Synthetic profile test: parent sets `FOO=1` + `ENV_UNSET="FOO"`, child
+2. Synthetic profile test: parent sets `FOO=1` + `ENV_UNSET="FOO"`, child
    adds `BAR`; both gone in the ebuild env.

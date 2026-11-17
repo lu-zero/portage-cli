@@ -1,7 +1,6 @@
 # Under `--prefix`, baselayout's VDB entry claims `/sbin/openrc-run`
 
-Status: 🔴 not started, found 2026-09-02 by `regression-matrix.sh --full`.
-Fails `toolchain --setup --prefix` at 54/65 packages.
+Status: ✅ fixed by 46695cb6 (2026-09-27); the diagnosis below is wrong. baselayout installs a stub `/sbin/openrc-run` under `prefix-guest` (bug 858596), so it legitimately owns the path; `em setup --prefix` forced the flag. A profile that sets `prefix-guest` still collides. Not re-run live.
 
 ## Symptom
 

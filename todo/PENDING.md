@@ -31,6 +31,7 @@ Not part of the stage arc, but where the work went 2026-10-28…11-15.
 | `em search` wall time vs CPU (was ~67 ms wall for ~30 ms CPU): re-measure; now 36–67 ms wall | 🟡 | found 2026-11-07 |
 | `em search` matches `qsearch` for names, `-S`, `-H`, `-N`, regular expressions and `-R` (`--show-repo`) and `-v` (full versions); still differs: no `-F` (format), `-s`, packages in several repos are listed once (qsearch once per repo), order is by name | 🟡 | `qsearch` |
 | `em -s` matches emerge on 11 keys, sizes by enabled USE and the latest version by keywords and package.mask (`-v` adds the all-USE size and the newer masked version). Still differs: license masks are not applied | 🟡 | emerge `search.py` |
+| `EMERGE_DEFAULT_OPTS`/`EM_DEFAULT_OPTS` are not read (a host with `-j80 -l80` runs sequentially); waits on a public `winnow_args::response::split` | 🔴 | [[default-opts-and-set-search]] |
 | A real run prints the plan only with `-p`/`-a`/`-v`; candy or banners show progress (2ab5fcc2). Output of a real merge not checked live | 🟡 | `docs/user/activity.md` |
 | USE layers as `UseToken`s (e7312ec1…671f3488), nested prefix globs (26eb640c) | ✅ | — |
 
@@ -59,7 +60,7 @@ file, version atoms and `package.env` per toolchain open).
 | One resolved Portage config: `Settings` landed 2026-10-23 (envvar, --info, resolver, merge protection); build env seeding waits on FEATURES parity | 🟡 | [[portage-config-layering]], [[features-parity]] |
 | `config_changes_needed` events carry no change list; a failed build renders three times on stderr | 🔴 later | review 2026-10-25 |
 | `FEATURES=candy`: a progress-bar build display (indicatif) as an activity-bus sink, landed 2026-11-01 | ✅ | [[features-parity]] |
-| Upstream brush has 14 commits not on `for-portage-repo` (fd23ba73) | 🔴 later | [[brush-fork-push-state]] |
+| `for-portage-repo` is rebased on upstream main f550117d; master pins b80760c9 (2026-11-16, adds process substitution) | ✅ | — |
 | Parity: a target atom's USE requirement was ignored (`sys-libs/zlib[minizip]`); fixed 2026-10-27, with emerge's `Missing IUSE` and version narrowing | ✅ | — |
 | Parity: `texlive-core` pulls a perl stack via `virtual/perl-File-Temp`; firefox misses `python-3.15` | 🔴 | found 2026-10-14 by `bench-em-vs-emerge.sh`, not yet filed |
 
@@ -219,23 +220,21 @@ carry an effort estimate.
   for three unrelated reasons. Run record, including two wrong theories not
   worth re-deriving and the script's own defects:
   [[regression-matrix-run-2026-09-02]]
-- **Under `--prefix`, baselayout's VDB entry claims `/sbin/openrc-run`**
-  (found 2026-09-02), so `openrc` then correctly refuses to collide and
-  `toolchain --setup --prefix` dies at 54/65. On the host that path belongs
-  to `sys-apps/openrc` and baselayout does not ship it:
-  [[prefix-baselayout-claims-openrc-run]]
+- ✅ **Under `--prefix`, baselayout's VDB entry claimed `/sbin/openrc-run`**
+  (found 2026-09-02): baselayout installs a stub there under `prefix-guest`,
+  which `em setup --prefix` forced; 46695cb6 (2026-09-27) stopped forcing it.
+  Not re-run live: [[prefix-baselayout-claims-openrc-run]]
 - **`regression-matrix.sh`'s stage1 `--prefix` legs cannot pass as written**
   — `em stages --stage1` requires an explicit `--root` distinct from the
   host install path, and both the `-p` and `--full` legs pass only
   `--prefix DIR`, so they are rejected before anything runs. The `--full`
   leg also pairs `--prefix` with the *native toolchain* dir rather than a
   crossdev-populated one. Wants `--prefix P --root B --target T`.
-- **`crossdev --setup --prefix` aborts on a phantom blocker** (found
-  2026-09-02 by `regression-matrix.sh --full`): two uninstalled packages come
-  back as `[ebuild R]` and a `linux-headers`/`virtual/os-headers` block fires
-  for packages that are neither installed nor in the plan, while the bare run
-  resolves the same two as `[ebuild N]` and succeeds. Blocks the whole
-  `--prefix` crossdev path, so it sits upstream of the gcc-stage1 work:
+- 🟡 **`crossdev --setup --prefix` aborted on a phantom blocker** (found
+  2026-09-02 by `regression-matrix.sh --full`). The `os-headers` block came
+  from the forced `prefix-guest` and is fixed by 46695cb6; the `[ebuild R]`
+  rows may only be the bare run's packages in the shared `/` VDB. Open until a
+  `--prefix` run on an empty `/` shows `N`:
   [[crossdev-prefix-spurious-os-headers-blocker]]
 - `gentoo-stages` keeps `variant` as a `String` while `gentoo_core::Variant`
   sits in a crate it already depends on. Postponed deliberately: the crate is
@@ -613,7 +612,7 @@ blocked by the three independent findings above, tracked separately.
 
 ## Stage building (the active goal: a real stage3)
 
-- 🔴 **`em crossdev` needs a GCC version/slot pin flag** (real crossdev's
+- ⚪ **`em crossdev` needs a GCC version/slot pin flag** (superseded by the cross-sysroot spec: 9164f462, 4a8da4a9) (real crossdev's
   `--gcc VERSION`) — found 2026-08-24 auditing whether `em` can replace
   real `crossdev`/`emerge` in `~/Sources/crossdev-stages` (bootable board
   images, separate project). Everything else in that audit (`--ex-pkg`
@@ -631,16 +630,16 @@ blocked by the three independent findings above, tracked separately.
   (gcc stage2's own `--with-sysroot`/native-system-header-dir
   configuration, unrelated to pkg-config) — found 2026-08-26 testing the
   above. [[crossdev-prefix-gcc-header-dir]]
-- 🟢 **`dev-perl/Module-Build` fperms fails under `--local`** during
-  crossdev toolchain bootstrap (perl-module.eclass installs to bare
-  `${D}`, `fperms` resolves against `${ED}`) — root-caused and
-  live-confirmed 2026-08-26 as an upstream Gentoo eclass gap (the
-  `package.provided` bootstrap perl driving the build isn't itself
-  Prefix-aware), not an `em`-side bug; no `em` fix planned.
+- ✅ **`dev-perl/Module-Build` fperms failed under `--local`** during
+  crossdev toolchain bootstrap (perl-module.eclass installed to bare
+  `${D}`, `fperms` resolves against `${ED}`) — an upstream Gentoo eclass gap,
+  closed upstream: `perl-module.eclass` now passes `--prefix "${EPREFIX}"/usr`
+  (tree of 2026-11-06). No `em` fix needed.
   [[crossdev-local-perl-module-eprefix]]
-- 🔴 **`dev-python/flit-core` sysroot path doubling under `--local`**
-  (`/localtest/localtest/usr/...`) — found 2026-08-26 continuing the
-  above once unblocked; not yet root-caused.
+- 🟡 **`dev-python/flit-core` sysroot path doubling under `--local`**
+  (`/localtest/localtest/usr/...`) — `root_vars` exported SYSROOT equal to
+  EPREFIX, so distutils-r1's `--sysroot ${SYSROOT}` nested the prefix; fixed
+  in addb6cbc with a unit test, not re-run live.
   [[crossdev-local-python-sysroot-doubling]]
 - ✅ **`stages --stage1` into a disposable board `--root` couldn't find
   the crossdev toolchain's own libc headers — fixed and live-verified
@@ -927,7 +926,7 @@ blocked by the three independent findings above, tracked separately.
 - ✅ **`env_d_dir` host-fallback can double-register a host profile as a
   prefix profile — fixed 2026-08-29** (`11f585e`). Found in the same
   review. [[env-d-host-fallback-double-registration]]
-- 🔴 **`has_version` piggybacks `cross-*` atoms off the host, but the
+- ✅ **`has_version` piggybacks `cross-*` atoms off the host, but the
   consumer only ever looks under `EPREFIX`** — real `toolchain.eclass`'s
   `--with-sysroot` is always `${PREFIX}/${CTARGET}`, so a host-side
   `has_version` match for a `cross-*` atom (genuine or, as reproduced
@@ -936,8 +935,8 @@ blocked by the three independent findings above, tracked separately.
   confirms the trigger (riscv64 `crossdev --setup --prefix` now
   completes all 6 steps). Pre-existing, unrelated to the `--root`/
   `--prefix` work above. [[crossdev-gcc-stage1-missing-without-headers]] (✅ 2026-09-02)
-- 🔴 **package-level profile rules don't follow the crossdev alias
-  mapping** — root cause of the ABI_X86 stage1 mismatch below:
+- ⚪ **package-level profile rules don't follow the crossdev alias
+  mapping** (disproven: portage parity, 88c36d4b) — root cause of the ABI_X86 stage1 mismatch below:
   `real_cpn_of` is populated but never consulted, so `package.use`/
   `.force`/`.mask` entries written against the real package (e.g. real
   Gentoo's `features/multilib/package.use.force: sys-libs/glibc
@@ -1480,7 +1479,7 @@ blocked by the three independent findings above, tracked separately.
   moving config (portage `ROOT=` parity), `--local` becomes standalone (not
   overlay) so it works on a foreign host, host-python symlinks move from
   `--local` to `--prefix` (overlay borrows host tools; standalone must own
-  its python), `--prefix` sets EPREFIX=P. Design: [[root-topology]] (doc)
+  its python), `--prefix` sets EPREFIX=P. Design: `docs/design/root-topology.md`
   + [[root-topology-refactor]] (tasks).
 - 🟡 **`activate_pkgconf`'s `is_native` bool is a workaround that smells,
   needs further review (2026-08-03).** Found live testing a from-scratch

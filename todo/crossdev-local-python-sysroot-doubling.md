@@ -1,7 +1,7 @@
 # `dev-python/flit-core` prefix-doubling under `--local` (new, unfixed)
 
-Status: 🔴 not started, found incidentally, root cause not yet
-investigated. Found 2026-08-26 continuing
+Status: 🟡 fixed in addb6cbc (`root_vars` exported SYSROOT equal to EPREFIX under `--local`; distutils-r1 passes `--sysroot ${SYSROOT}`
+with `--prefix=${EPREFIX}/usr`); unit test added, not re-run live with flit-core. Found 2026-08-26 continuing
 [[crossdev-local-perl-module-eprefix]]'s live `--local` + `--target`
 `crossdev --setup` run (with the perl-module eclass patch applied,
 which got the run 36 packages further than before).

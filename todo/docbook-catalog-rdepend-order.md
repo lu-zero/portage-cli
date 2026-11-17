@@ -1,6 +1,7 @@
 # `app-text/build-docbook-catalog` RDEPEND ordering (unconfirmed real impact)
 
-Status: 🔴 not started, found incidentally 2026-08-24 while verifying
+Status: 🔴 not started. docbook-xml-dtd-4.1.2-r7 and docbook-xsl-stylesheets-1.79.1-r4 run `build-docbook-catalog` in `pkg_postinst`,
+so a wrong order can make postinst die: not harmless. Open question: why `repair_soft_inversions` left it inverted. Found incidentally 2026-08-24 while verifying
 [[jobs-rdepend-backwards-edge-race]] via the enriched `--json` output
 (`em -p --json --local DIR dev-lang/python sys-apps/gentoo-functions`).
 Not yet confirmed to cause a real build failure the way the

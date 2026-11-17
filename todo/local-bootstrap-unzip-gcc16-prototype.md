@@ -1,6 +1,7 @@
 # Stable `app-arch/unzip-6.0_p29-r2` fails to build under GCC 16.1.1 (strict prototype conflict)
 
-Status: 🔴 not started, still open. **Unrelated to
+Status: 🔴 not started, still open. Checked 2026-11-17: `p31` is the highest stable version on amd64, arm64 and ppc64; on arm, ppc and x86 only `p29-r2` is stable, so the bug
+still applies there. Not re-run. **Unrelated to
 [[eapply-stub-shadows-real-builtin]]** (landed 2026-08-23, same day): a
 fresh real `em --root DIR unzip` repro run to verify that fix resolved
 `app-arch/unzip-6.0_p31` (not `p29-r2`) and built cleanly, so it never
