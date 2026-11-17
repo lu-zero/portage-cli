@@ -632,14 +632,22 @@ async fn native_prefix_guest(globals: &Cli, roots: &portage_resolve::Roots) -> b
 /// `su? ( pam )` pulls pambase then openrc. Prefix-guest baselayout already
 /// owns a stub `/sbin/openrc-run`. `-pam -su` stops that chain; a prefix
 /// does not need its own `su`.
+///
+/// Perl's PDEPEND closure reaches `sys-apps/portage`, whose `pkg_preinst` upgrade scripts need an existing
+/// install in the prefix unless `USE=build`, as in Gentoo's own prefix bootstrap.
 fn native_toolchain_package_use() -> Vec<(Dep, Vec<UseToken>)> {
-    vec![(
-        Dep::parse("sys-apps/util-linux").expect("static atom"),
-        ["-pam", "-su"]
-            .into_iter()
-            .filter_map(UseToken::user)
-            .collect(),
-    )]
+    [
+        ("sys-apps/util-linux", ["-pam", "-su"].as_slice()),
+        ("sys-apps/portage", ["build"].as_slice()),
+    ]
+    .into_iter()
+    .map(|(atom, flags)| {
+        (
+            Dep::parse(atom).expect("static atom"),
+            flags.iter().copied().filter_map(UseToken::user).collect(),
+        )
+    })
+    .collect()
 }
 
 /// `em toolchain --setup`: bootstrap a self-hosting native toolchain
@@ -2649,15 +2657,21 @@ mod tests {
     }
 
     #[test]
-    fn native_toolchain_package_use_is_util_linux_without_pam_or_su() {
+    fn native_toolchain_package_use_trims_util_linux_and_builds_portage_minimal() {
         let entries = native_toolchain_package_use();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].0.cpn.to_string(), "sys-apps/util-linux");
-        let want: Vec<UseToken> = ["-pam", "-su"]
-            .into_iter()
-            .filter_map(UseToken::user)
-            .collect();
-        assert_eq!(entries[0].1, want);
+        let flags = |cpn: &str| -> Vec<UseToken> {
+            let (_, tokens) = entries
+                .iter()
+                .find(|(dep, _)| dep.cpn.to_string() == cpn)
+                .expect("an entry for the package");
+            tokens.clone()
+        };
+        let user = |names: &[&str]| -> Vec<UseToken> {
+            names.iter().copied().filter_map(UseToken::user).collect()
+        };
+        assert_eq!(entries.len(), 2);
+        assert_eq!(flags("sys-apps/util-linux"), user(&["-pam", "-su"]));
+        assert_eq!(flags("sys-apps/portage"), user(&["build"]));
     }
 
     #[test]
