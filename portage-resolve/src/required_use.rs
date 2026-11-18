@@ -1,5 +1,7 @@
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpv, Version};
-use portage_atom_pubgrub::{CededFlag, PortagePackage};
+use portage_atom_pubgrub::{CededFlag, PortagePackage, UseConfig, UseFlagState};
+use portage_metadata::{CacheEntry, RequiredUseExpr};
 
 use crate::effective_use::effective_use;
 use crate::repo::{RepoData, ResolvePolicy, find_cache};
@@ -44,23 +46,30 @@ pub fn find_violations(
             .is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
         let effective = effective_use(policy, pkg, ver, cache, stable, ceded);
 
-        // `effective` already has this package's IUSE defaults folded in, so
-        // an unset flag is simply Disabled — no fallback needed.
-        let enabled = |flag: &str| -> bool {
-            matches!(
-                effective.get(portage_atom::interner::Interned::intern(flag)),
-                portage_atom_pubgrub::UseFlagState::Enabled
-            )
-        };
-
-        let unmet =
-            required_use.unsatisfied_groups(&enabled, cache.metadata.eapi.empty_any_of_matches());
-        if !unmet.is_empty() {
-            out.push(RequiredUseViolation {
-                cpv,
-                unsatisfied: unmet.iter().map(|e| e.to_string()).collect(),
-            });
+        let unsatisfied = unmet_groups(required_use, cache, &effective, None);
+        if !unsatisfied.is_empty() {
+            out.push(RequiredUseViolation { cpv, unsatisfied });
         }
     }
     out
+}
+
+/// The `REQUIRED_USE` groups `effective` leaves unsatisfied, rendered, with `off` turned off
+pub(crate) fn unmet_groups(
+    required_use: &RequiredUseExpr,
+    cache: &CacheEntry,
+    effective: &UseConfig,
+    off: Option<Interned<DefaultInterner>>,
+) -> Vec<String> {
+    // `effective` already has this package's IUSE defaults folded in, so
+    // an unset flag is simply Disabled — no fallback needed.
+    let enabled = |flag: &str| -> bool {
+        let flag = Interned::intern(flag);
+        off != Some(flag) && matches!(effective.get(flag), UseFlagState::Enabled)
+    };
+    required_use
+        .unsatisfied_groups(&enabled, cache.metadata.eapi.empty_any_of_matches())
+        .iter()
+        .map(|e| e.to_string())
+        .collect()
 }

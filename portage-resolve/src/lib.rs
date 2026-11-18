@@ -22,6 +22,8 @@ mod c7;
 /// Post-solve reverse-dependency conflict detection against installed
 /// packages the plan doesn't replace
 pub mod conflicts;
+/// Whether a package on an unorderable cycle can be built once with a USE flag off
+pub mod cycle_split;
 /// Post-solve trim: drop plan entries only pulled for `DEPEND` already
 /// satisfied on the sysroot (`ESYSROOT`)
 pub mod depend_trim;
