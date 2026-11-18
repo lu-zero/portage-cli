@@ -88,7 +88,7 @@ impl RoundCtx<'_> {
         repairs: &Targets,
         widened: bool,
     ) -> anyhow::Result<Solved> {
-        let mut use_rebuilds = UseRebuilds::new();
+        let mut use_rebuilds: UseRebuilds = self.pending_rebuilds.clone();
         loop {
             let solved = self.attempt_with(targets, repairs, widened, &use_rebuilds)?;
             let found: Vec<PortagePackage> = solved

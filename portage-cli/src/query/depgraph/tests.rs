@@ -48,6 +48,7 @@ struct Solve<'a> {
     complete_graph: bool,
     exclude: &'a [String],
     resume: HashSet<(MergeRoot, Cpv)>,
+    pending_rebuilds: HashSet<(MergeRoot, Cpv)>,
     cycle_split: bool,
 }
 
@@ -66,6 +67,7 @@ impl<'a> Solve<'a> {
             complete_graph: false,
             exclude: &[],
             resume: HashSet::new(),
+            pending_rebuilds: HashSet::new(),
             cycle_split: false,
         }
     }
@@ -228,6 +230,7 @@ fn try_solve(fix: &Fix, opts: Solve<'_>) -> anyhow::Result<super::DepgraphOutcom
         binpkg_index: None,
         exclude: opts.exclude,
         resume_completed: opts.resume,
+        pending_rebuilds: opts.pending_rebuilds,
         complete_graph: opts.complete_graph,
         quiet: true,
     }))
@@ -988,6 +991,7 @@ fn a_missing_explicit_atom_is_fatal() {
             binpkg_index: None,
             exclude: &[],
             resume_completed: HashSet::new(),
+            pending_rebuilds: HashSet::new(),
             complete_graph: false,
             quiet: true,
         }));
@@ -1364,6 +1368,9 @@ fn cycle_split_builds_the_package_flag_off_first_then_rebuilds_it() {
             .any(|f| f.as_str() == "nls")
     };
     assert!(!has_nls(0) && has_nls(4));
+    // The rebuild must not be skipped as already in the VDB once the first build is merged.
+    assert!(outcome.plan[0].rebuilt_later && !outcome.plan[0].reinstall);
+    assert!(outcome.plan[4].reinstall && !outcome.plan[4].rebuilt_later);
     let mut rebuild_blockers = outcome.build_blockers[4].clone();
     rebuild_blockers.sort_unstable();
     assert_eq!(
@@ -1487,4 +1494,37 @@ fn cycle_split_turns_off_the_flags_required_use_ties_to_the_split_flag() {
     };
     assert!(flags(first).is_empty(), "{:?}", flags(first));
     assert_eq!(flags(rebuild), ["nls", "pam", "su"]);
+}
+
+#[test]
+fn a_pending_split_rebuild_is_planned_on_resume() {
+    let fix = fixture(
+        &docbook_cycle(),
+        &["sys-apps/ul-1", "app-text/bdc-1", "app-text/dxsl-1"],
+    );
+    let atoms = [TargetAtom::explicit("app-text/dxsl")];
+    let plain = solve(&fix, Solve::new(&atoms));
+    assert!(
+        !names(&plain).contains(&"sys-apps/ul-1".to_string()),
+        "{:?}",
+        names(&plain)
+    );
+
+    let ul = (MergeRoot::Target, Cpv::parse("sys-apps/ul-1").unwrap());
+    let resumed = solve(
+        &fix,
+        Solve {
+            pending_rebuilds: HashSet::from([ul]),
+            ..Solve::new(&atoms)
+        },
+    );
+    let names = names(&resumed);
+    let at = |n: &str| names.iter().position(|x| x == n);
+    let rebuild = at("sys-apps/ul-1").expect("the pending rebuild is planned");
+    assert!(
+        at("app-text/po4a-1").is_some_and(|p| p < rebuild),
+        "{names:?}"
+    );
+    let ul = &resumed.plan[rebuild];
+    assert!(ul.reinstall && ul.use_flags.iter().any(|f| f.as_str() == "nls"));
 }

@@ -511,12 +511,14 @@ pub(super) fn assemble(
                 // Root-specific for the same reason as the `order` filter
                 // above: a `Host` entry must only count as "already
                 // installed" against `base_roots()`, never the Target
-                // sysroot's unrelated same-named package.
-                reinstall: match entry.merge_root {
-                    MergeRoot::Host => host_installed_cpvs.contains(&cpv),
-                    MergeRoot::Base => base_installed_cpvs.contains(&cpv),
-                    MergeRoot::Target => target_installed_cpvs.contains(&cpv),
-                },
+                // sysroot's unrelated same-named package. A split package's rebuild replaces its own first build.
+                reinstall: plan_index.is_rebuild(index)
+                    || match entry.merge_root {
+                        MergeRoot::Host => host_installed_cpvs.contains(&cpv),
+                        MergeRoot::Base => base_installed_cpvs.contains(&cpv),
+                        MergeRoot::Target => target_installed_cpvs.contains(&cpv),
+                    },
+                rebuilt_later: plan_index.flags_off(index).is_some(),
             }
         })
         .collect();

@@ -52,6 +52,7 @@ pub(super) struct RoundCtx<'a> {
     pub(super) root_use_deps: &'a [super::RootUseDeps],
     pub(super) exclude_atoms: &'a [Dep],
     pub(super) resume_completed: &'a HashSet<(MergeRoot, Cpv)>,
+    pub(super) pending_rebuilds: &'a HashSet<PortagePackage>,
     pub(super) cross: &'a root_aware::CrossContext,
     pub(super) roots: &'a portage_resolve::Roots,
     pub(super) broot_snapshot: &'a installed::BrootSnapshot,

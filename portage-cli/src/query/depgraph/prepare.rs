@@ -43,6 +43,8 @@ pub(super) struct Prepared<'a> {
     pub(super) nodeps: bool,
     pub(super) binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
     pub(super) resume_completed: std::collections::HashSet<(MergeRoot, Cpv)>,
+    /// `DepgraphOpts::pending_rebuilds`, as the installed packages they name
+    pub(super) pending_rebuilds: std::collections::HashSet<PortagePackage>,
     pub(super) complete_graph: bool,
     pub(super) quiet: bool,
     pub(super) exclude_atoms: Vec<Dep>,
@@ -119,6 +121,7 @@ pub(super) async fn prepare<'a>(
         binpkg_index,
         exclude,
         resume_completed,
+        pending_rebuilds,
         complete_graph,
         quiet,
     } = opts;
@@ -226,6 +229,26 @@ pub(super) async fn prepare<'a>(
         provided,
     } = extras;
 
+    let pending_rebuilds: std::collections::HashSet<PortagePackage> = pending_rebuilds
+        .iter()
+        .filter_map(|(merge_root, cpv)| match merge_root {
+            MergeRoot::Target => target_installed
+                .iter()
+                .find(|e| e.cpn == cpv.cpn && e.version == cpv.version)
+                .map(|e| match e.slot {
+                    Some(slot) => PortagePackage::slotted(e.cpn, slot),
+                    None => PortagePackage::unslotted(e.cpn),
+                }),
+            _ => host_installed
+                .iter()
+                .find(|e| {
+                    *e.package.cpn() == cpv.cpn
+                        && e.version == cpv.version
+                        && e.package.merge_root() == *merge_root
+                })
+                .map(|e| e.package.clone()),
+        })
+        .collect();
     let target_installed_cpvs: std::collections::HashSet<Cpv> = target_installed
         .iter()
         .map(|e| Cpv::new(e.cpn, e.version.clone()))
@@ -465,6 +488,7 @@ pub(super) async fn prepare<'a>(
         nodeps,
         binpkg_index,
         resume_completed,
+        pending_rebuilds,
         complete_graph,
         quiet,
         exclude_atoms,

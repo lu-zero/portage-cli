@@ -200,6 +200,7 @@ mod tests {
             depend: DepEntry::parse(depend)?,
             bdepend: Vec::new(),
             reinstall: false,
+            rebuilt_later: false,
         })
     }
 

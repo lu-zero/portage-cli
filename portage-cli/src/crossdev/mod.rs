@@ -1060,6 +1060,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         binpkg_index: None,
         exclude: &[],
         resume_completed: std::collections::HashSet::new(),
+        pending_rebuilds: std::collections::HashSet::new(),
         // Single-atom --nodeps probe: no update, so the gate is off regardless.
         complete_graph: false,
         // Only the resolved `sys-devel/gcc` version is read off `outcome`

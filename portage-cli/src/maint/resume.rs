@@ -142,11 +142,19 @@ fn job_done_dir(root: &Utf8Path, job_id: &str) -> Utf8PathBuf {
 ///
 /// CPV `cat/pf` becomes `…/<job_id>/<host|target>/<cat>/<pf>`.
 fn marker_path(root: &Utf8Path, job_id: &str, merge_root: MergeRoot, cpv: &str) -> Utf8PathBuf {
+    marker_in(&job_done_dir(root, job_id), merge_root, cpv)
+}
+
+/// Marker for a split package's first build, whose rebuild with the flags on is still due
+///
+/// `…/<job_id>/pending/<host|target>/<cat>/<pf>`; `-r` rebuilds every package marked here.
+fn pending_path(root: &Utf8Path, job_id: &str, merge_root: MergeRoot, cpv: &str) -> Utf8PathBuf {
+    marker_in(&job_done_dir(root, job_id).join("pending"), merge_root, cpv)
+}
+
+fn marker_in(base: &Utf8Path, merge_root: MergeRoot, cpv: &str) -> Utf8PathBuf {
     let (cat, pf) = cpv.split_once('/').unwrap_or(("_", cpv));
-    job_done_dir(root, job_id)
-        .join(merge_root_key(merge_root))
-        .join(cat)
-        .join(pf)
+    base.join(merge_root_key(merge_root)).join(cat).join(pf)
 }
 
 fn new_job_id() -> String {
@@ -275,7 +283,43 @@ pub fn mark_completed(
     if job_id.is_empty() {
         return Ok(());
     }
-    let path = marker_path(root, job_id, merge_root, cpv);
+    touch_marker(&marker_path(root, job_id, merge_root, cpv))?;
+    remove_marker(&pending_path(root, job_id, merge_root, cpv))
+}
+
+/// Record that a split package's first build finished, so `-r` still rebuilds it with its flags on
+pub fn mark_pending_rebuild(
+    root: &Utf8Path,
+    job_id: &str,
+    merge_root: MergeRoot,
+    cpv: &str,
+) -> Result<()> {
+    if job_id.is_empty() {
+        return Ok(());
+    }
+    touch_marker(&pending_path(root, job_id, merge_root, cpv))
+}
+
+/// Split packages of the live job whose rebuild is still due
+pub fn pending_rebuilds(root: &Utf8Path) -> HashSet<(MergeRoot, Cpv)> {
+    match read_file(root).resume {
+        Some(state) if !state.job_id.is_empty() => {
+            markers_in(&job_done_dir(root, &state.job_id).join("pending"))
+        }
+        _ => HashSet::new(),
+    }
+}
+
+fn remove_marker(path: &Utf8Path) -> Result<()> {
+    match std::fs::remove_file(path.as_std_path()) {
+        Err(e) if e.kind() != ErrorKind::NotFound => {
+            Err(e).with_context(|| format!("removing resume marker {path}"))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn touch_marker(path: &Utf8Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent.as_std_path())
             .with_context(|| format!("creating resume marker dir {parent}"))?;
@@ -308,11 +352,14 @@ pub fn completed_keys(root: &Utf8Path) -> HashSet<(MergeRoot, Cpv)> {
 }
 
 fn read_markers(root: &Utf8Path, job_id: &str) -> HashSet<(MergeRoot, Cpv)> {
-    let mut keys = HashSet::new();
     if job_id.is_empty() {
-        return keys;
+        return HashSet::new();
     }
-    let base = job_done_dir(root, job_id);
+    markers_in(&job_done_dir(root, job_id))
+}
+
+fn markers_in(base: &Utf8Path) -> HashSet<(MergeRoot, Cpv)> {
+    let mut keys = HashSet::new();
     for side in [MergeRoot::Host, MergeRoot::Base, MergeRoot::Target] {
         let side_dir = base.join(merge_root_key(side));
         let Ok(cats) = std::fs::read_dir(side_dir.as_std_path()) else {
@@ -528,6 +575,25 @@ mod tests {
             atoms: atoms.iter().map(|s| s.to_string()).collect(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_split_first_build_stays_pending_until_its_rebuild_completes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let job_id = save(&root, state(&["app-text/dxsl"]), false).unwrap();
+        let ul = (MergeRoot::Target, cpv("sys-apps/ul-1"));
+
+        mark_pending_rebuild(&root, &job_id, MergeRoot::Target, "sys-apps/ul-1").unwrap();
+        assert!(pending_rebuilds(&root).contains(&ul));
+        assert!(
+            !completed_keys(&root).contains(&ul),
+            "the rebuild is still due"
+        );
+
+        mark_completed(&root, &job_id, MergeRoot::Target, "sys-apps/ul-1").unwrap();
+        assert!(pending_rebuilds(&root).is_empty());
+        assert!(completed_keys(&root).contains(&ul));
     }
 
     #[test]

@@ -639,6 +639,11 @@ async fn emerge_atoms_inner(
         } else {
             std::collections::HashSet::new()
         },
+        pending_rebuilds: if is_resume {
+            maint::resume::pending_rebuilds(roots.merge_root())
+        } else {
+            std::collections::HashSet::new()
+        },
         complete_graph: merge_flags.repair_broken_installed(),
         // A real run lists the plan only with -v (or --tree, as emerge does; --json is output a
         // caller asked for); the banners (or candy's bars) show the progress. A plan that cannot

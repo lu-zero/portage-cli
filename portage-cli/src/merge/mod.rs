@@ -968,8 +968,14 @@ fn record_package_outcome(
         Ok(()) => {
             *merged += 1;
             emit_pkg_end(&run.activity, planned, kind, pkg_started, None, phases);
+            // A split package's first build leaves its rebuild due, which `-r` must still run.
+            let mark = if planned.rebuilt_later {
+                crate::maint::resume::mark_pending_rebuild
+            } else {
+                crate::maint::resume::mark_completed
+            };
             if let Some(job) = run.resume_job
-                && let Err(e) = crate::maint::resume::mark_completed(
+                && let Err(e) = mark(
                     job.root,
                     job.job_id,
                     planned.merge_root,
@@ -1721,6 +1727,7 @@ mod entry_roots_tests {
             depend: Vec::new(),
             bdepend: Vec::new(),
             reinstall: false,
+            rebuilt_later: false,
         })
     }
 
@@ -2037,6 +2044,7 @@ mod unmerge_scheduling_tests {
             depend: Vec::new(),
             bdepend: Vec::new(),
             reinstall: false,
+            rebuilt_later: false,
         }
     }
 

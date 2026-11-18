@@ -72,6 +72,8 @@ pub struct PlannedMerge {
     /// same-version USE rebuild. The merge loop must build it rather than treat
     /// the VDB entry as a resume-skip.
     pub reinstall: bool,
+    /// The first build of a package split to open a dependency cycle; the plan rebuilds it later with its flags on
+    pub rebuilt_later: bool,
 }
 
 #[derive(Default)]
@@ -355,6 +357,9 @@ pub struct DepgraphOpts<'a> {
     /// completed work, which is required for correct `--emptytree` resume (VDB presence is not
     /// a completion marker there). Empty for every non-resume call.
     pub resume_completed: HashSet<(MergeRoot, Cpv)>,
+    /// Installed split packages of a `-r` job whose rebuild with the flags on is still due
+    /// (`maint::resume::pending_rebuilds`); solved as USE rebuilds. Empty for every non-resume call.
+    pub pending_rebuilds: HashSet<(MergeRoot, Cpv)>,
     /// Re-solve with each kept installed package whose dependencies the plan breaks as a target,
     /// so it is updated too or holds the update back
     pub complete_graph: bool,
@@ -441,6 +446,7 @@ fn resolve(
         root_use_deps: &prepared.root_use_deps,
         exclude_atoms: &prepared.exclude_atoms,
         resume_completed: &prepared.resume_completed,
+        pending_rebuilds: &prepared.pending_rebuilds,
         cross: &prepared.cross,
         roots: prepared.roots,
         broot_snapshot: &prepared.broot_snapshot,
