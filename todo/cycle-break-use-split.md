@@ -160,6 +160,18 @@ The build takes `PlannedMerge.use_flags` (`merge/mod.rs`), so a real merge would
 `export CONFIG_SHELL=${BASH}` gets an empty value, because brush sets `$BASH` from its shell name (`wellknownvars.rs`), not a bash path.
 autoconf 2.59's `SHELL=${CONFIG_SHELL-/bin/sh}` then substitutes `SHELL=''` (config.log), and make runs `-c`. Blocks the run until fixed.
 
+## Second real merge (2026-11-18, after `31b6d107`)
+
+opensp now builds. The split ran as planned: the first `util-linux` was recorded with `nls`, `pam` and `su` off (VDB `USE`), and
+`build-docbook-catalog` merged after it. Then `build-docbook-catalog`'s own postinst failed, for two reasons outside this feature:
+
+- `MAKEOPTS=-j8` in the process env: `init_build_env` copies env `MAKEOPTS` into the shell at the start of every phase, overwriting the
+  ebuild's `src_configure` `export MAKEOPTS+=" EPREFIX=${EPREFIX}"` (bug #490754 pattern), so `src_install` installed to `${D}/usr/sbin`, not
+  `${ED}`. Portage keeps a phase's changes for the next phase. Only env `MAKEOPTS` is affected; one from make.conf is not re-applied.
+  Not fixed; the runs since go without env `MAKEOPTS`.
+- The prefix had no `bin/bash` (my shortcut: `em setup --local` straight to docbook, skipping the toolchain steps), and `src_prepare`
+  rewrites the shebang to `#!${EPREFIX}/bin/bash`. Installed `app-shells/bash` into the prefix first.
+
 ## Tests
 
 - Unit, `portage-atom-pubgrub/src/provider/tests.rs` (`InMemoryRepository`): dxsl R bdc; bdc R `|| ( util-linux getopt )` with getopt absent (genuinely absent,
