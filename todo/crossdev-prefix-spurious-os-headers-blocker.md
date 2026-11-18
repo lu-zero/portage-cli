@@ -1,7 +1,8 @@
 # `crossdev --setup --prefix` aborts on a blocker between two uninstalled packages
 
 Status: 🟡 the blocker is fixed by 46695cb6 (2026-09-27: `em setup --prefix` no longer forces `prefix-guest`, test `overlay_prefix_does_not_force_prefix_guest`).
-The wrong `[ebuild R]` rows are unexplained: they may be the bare run's packages in the shared `/` VDB. Re-run on an empty `/` to close it. Found 2026-09-02 by `regression-matrix.sh --full`.
+The wrong `[ebuild R]` rows are unexplained: they may be the bare run's packages in the shared `/` VDB. Re-run on an empty `/` to close it.
+2026-11-18: `toolchain --prefix --setup` and `crossdev --setup --prefix` both pass in the regression sandbox; the `R` rows are still unexplained, not reproduced. Found 2026-09-02 by `regression-matrix.sh --full`.
 Blocks the `--prefix` crossdev path entirely — it never reaches the cross
 toolchain, so it is upstream of everything in
 [[crossdev-gcc-stage1-missing-without-headers]].

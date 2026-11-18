@@ -236,6 +236,10 @@ carry an effort estimate.
   rows may only be the bare run's packages in the shared `/` VDB. Open until a
   `--prefix` run on an empty `/` shows `N`:
   [[crossdev-prefix-spurious-os-headers-blocker]]
+- ✅ **`toolchain --prefix --setup` passes** (2026-11-18, `EXIT=0`, 44-package perl closure then binutils, glibc, gcc). Two fixes: native kernel
+  headers merge right after baselayout (a gcc in the python/perl closure is configured `--with-sysroot=${EPREFIX}` and sees no host headers), and
+  `sys-apps/portage` is built `USE=build` in `native_toolchain_package_use()` (its `pkg_preinst` upgrade scripts need an installed prefix).
+  gcc is still built twice, in the perl closure and at step 7.
 - `gentoo-stages` keeps `variant` as a `String` while `gentoo_core::Variant`
   sits in a crate it already depends on. Postponed deliberately: the crate is
   consumed by `crossdev-stages`, so this is semver-visible and wants a
