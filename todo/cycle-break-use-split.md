@@ -188,6 +188,23 @@ Fresh root in the same sandbox: `em setup --local /var/tmp/lt2`, `em --local /va
 98/98, `rc=0`: `util-linux` at 66 (VDB `USE` without `nls pam su`), `build-docbook-catalog` 89, the three docbook packages 90–92 with their
 postinsts passing, `pam` 93, `po4a` 94, and the `util-linux` rebuild at 98 (VDB `USE` with `nls pam su`), not skipped.
 
+## Benchmark (2026-11-18, release builds, hyperfine on NUMA node 3, 15 runs, 2 passes)
+
+`06da3b04` (before this work) vs `c7b5eb85` with and without `--cycle-split`, `em -p` on the host (exit 1 throughout: these host plans need
+USE/keyword changes, identically for both builds). Another session's tests shared the machine, so the noise floor is ~5–10%.
+
+| plan | base | head | head `--cycle-split` |
+|------|------|------|----------------------|
+| firefox | 841±40 / 878±193 | 837±60 / 896±207 | 861±60 / 801±53 |
+| qtbase | 1067±112 / 822±48 | 1142±132 / 810±65 | 975±98 / 831±68 |
+| texlive | 702±65 / 664±59 | 668±83 / 656±72 | 640±61 / 648±44 |
+| @world | 1069±55 / 1041±62 | 1057±63 / 1038±62 | 1080±78 / 998±71 |
+
+ms, pass 1 / pass 2. No difference resolvable: every gap is under one stddev and pass-to-pass drift is larger. On a populated host none
+of these plans has a cycle to split, so the last column is detection only. Where splits happen (`--local /var/tmp/local-test`
+`app-text/docbook-xsl-stylesheets`, empty VDB: `attr -nls`, `util-linux -pam -su`, `libxslt -crypt`), resolution goes from 338±61 to
+386±31 ms. `attr -nls` opens the `attr` ↔ `gettext` hard cycle that root listed as unbreakable before. Step 6 (order cache reuse) is not needed.
+
 ## Tests
 
 - Unit, `portage-atom-pubgrub/src/provider/tests.rs` (`InMemoryRepository`): dxsl R bdc; bdc R `|| ( util-linux getopt )` with getopt absent (genuinely absent,
@@ -208,7 +225,7 @@ postinsts passing, `pam` 93, `po4a` 94, and the `util-linux` rebuild at 98 (VDB 
 5. feat(cli): display, JSON, resume, jobs and binpkg handling (done: `393cfa09` display/JSON via `PlanIndex`; `59bdb7de` resume:
    a first build writes a pending-rebuild marker and `-r` solves it as a USE rebuild; the rebuild entry is a reinstall, else the merge
    loop's VDB check skipped it once the first build was merged. Live: see "Full run in one invocation"; resume itself not run live).
-6. perf: order cache reuse in `shape_plan`, if the bench shows a cost.
+6. perf: order cache reuse in `shape_plan`, if the bench shows a cost (measured 2026-11-18: no regression off, ~50 ms with 3 splits; not needed).
 7. docs: `docs/design/architecture.md` (resolution stages, divergences), the user docs for the new row marker, and this file moved to `todo/done/`.
 
 ## Separate smaller track: cycle-aware `||` choice
