@@ -181,6 +181,13 @@ stylesheets: the installed flag-off build satisfies everything and the rebuild i
 pam's PDEPENDs (8/8, `rc=0`; VDB `USE` has `nls pam su`). A run that is not interrupted does the rebuild itself; resume across an interruption
 is still step 5. (`-uDN` also tried rebuilding glibc/gcc in the prefix and hit the toolchain cycle, because the toolchain steps were skipped.)
 
+## Full run in one invocation (2026-11-18, `59bdb7de`)
+
+Fresh root in the same sandbox: `em setup --local /var/tmp/lt2`, `em --local /var/tmp/lt2 --oneshot app-shells/bash`, then
+`em --local /var/tmp/lt2 --cycle-split --jobs 4 app-text/docbook-xsl-stylesheets` (`GENTOO_MIRRORS` set, no env `MAKEOPTS`).
+98/98, `rc=0`: `util-linux` at 66 (VDB `USE` without `nls pam su`), `build-docbook-catalog` 89, the three docbook packages 90–92 with their
+postinsts passing, `pam` 93, `po4a` 94, and the `util-linux` rebuild at 98 (VDB `USE` with `nls pam su`), not skipped.
+
 ## Tests
 
 - Unit, `portage-atom-pubgrub/src/provider/tests.rs` (`InMemoryRepository`): dxsl R bdc; bdc R `|| ( util-linux getopt )` with getopt absent (genuinely absent,
@@ -200,7 +207,7 @@ is still step 5. (`-uDN` also tried rebuilding glibc/gcc in the prefix and hit t
 4. feat: the order split (`graph.rs`) and its use in `shape_plan`, behind a hidden flag at first, plus edge lookup that tells the two entries apart\n   (done: `081b72c5`, `09120502`, `4943646a`, `924098f2`; up to eight splits per plan).
 5. feat(cli): display, JSON, resume, jobs and binpkg handling (done: `393cfa09` display/JSON via `PlanIndex`; `59bdb7de` resume:
    a first build writes a pending-rebuild marker and `-r` solves it as a USE rebuild; the rebuild entry is a reinstall, else the merge
-   loop's VDB check skipped it once the first build was merged. Not yet run live).
+   loop's VDB check skipped it once the first build was merged. Live: see "Full run in one invocation"; resume itself not run live).
 6. perf: order cache reuse in `shape_plan`, if the bench shows a cost.
 7. docs: `docs/design/architecture.md` (resolution stages, divergences), the user docs for the new row marker, and this file moved to `todo/done/`.
 
