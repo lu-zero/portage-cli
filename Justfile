@@ -41,6 +41,16 @@ docs-check:
         exit 1
     fi
 
+# Build the em.luminem.org site from docs/ into target/site
+site:
+    python3 site/summary.py
+    mdbook build site
+
+# Serve the site at http://localhost:3000, rebuilding as docs/ changes
+site-serve:
+    python3 site/summary.py
+    mdbook serve site
+
 # Dead links and doc paths in Markdown and Rust doc comments
 docs-links:
     ./check-doc-links.py

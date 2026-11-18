@@ -11,3 +11,4 @@ __pycache__/
 
 # Local cargo patches (sibling brush/pkgcraft worktrees) — never commit
 .cargo/
+docs/SUMMARY.md

@@ -1,0 +1,22 @@
+[book]
+title = "em"
+description = "em, a Rust workalike of Gentoo's Portage package manager"
+language = "en"
+src = "../docs"
+
+[build]
+build-dir = "../target/site"
+create-missing = false
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[preprocessor.repo-links]
+command = "python3 repo-links.py"
+
+[output.html]
+site-url = "/"
+cname = "em.luminem.org"
+git-repository-url = "https://github.com/lu-zero/portage-cli"
+edit-url-template = "https://github.com/lu-zero/portage-cli/edit/master/docs/{path}"
+additional-js = ["mermaid-init.js"]

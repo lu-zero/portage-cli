@@ -1,6 +1,7 @@
 # Project websites on luminem.org: em.luminem.org first, same pattern for winnow-args
 
-Status: 🔴 planned 2026-11-18, nothing built. Hosting: GitHub Pages, one site per repo, each on its own `luminem.org` subdomain.
+Status: 🟡 em site prepared 2026-11-18 (`site/`, `just site`, `.github/workflows/pages.yml`), not deployed: needs Pages enabled with
+source "GitHub Actions" and the DNS records below. Hosting: GitHub Pages, one site per repo, each on its own `luminem.org` subdomain.
 
 ## Shape
 
@@ -10,20 +11,24 @@ Status: 🔴 planned 2026-11-18, nothing built. Hosting: GitHub Pages, one site 
 | `winnow-args.luminem.org` | `lu-zero/winnow-args` | `README.md`, `docs/*.md` (design, comparison, perf + SVGs), release notes |
 
 Both repos are public with no Pages site yet (checked 2026-11-18), so each repo gets its own Pages site and custom domain.
-`luminem.org` itself resolves to an OVH IPv6 host and stays as it is; only the two subdomains point at GitHub.
+`luminem.org` itself can move to GitHub Pages too, built with Zola from its own repo (a landing page listing the projects).
+An apex domain on Pages takes `A`/`AAAA` records to GitHub's Pages addresses instead of a `CNAME`, and replaces the current OVH host.
 
-## Building: mdBook
+## Building: mdBook (done for em)
 
-- The docs are already Markdown, and the CLI reference is generated Markdown (`just docs`), so mdBook needs no conversion step.
-- One `book.toml` plus `SUMMARY.md` per repo, in a `site/` directory that includes the existing `docs/` files; nothing moves.
-- `mdbook-mermaid` for the two mermaid diagrams in `docs/design`, keeping the winnow-args help palette (AGENTS.md).
-- API docs stay on docs.rs; the site links to them instead of hosting rustdoc.
-- `just site` builds to `target/site`; `just site-serve` previews locally.
+- `site/book.toml` builds from `docs/` itself (`src = "../docs"`) into `target/site`; nothing moved.
+- `site/SUMMARY.in.md` is the hand-written outline; `site/summary.py` writes the gitignored `docs/SUMMARY.md`, titling each page from
+  its first heading and expanding the generated command reference (`x.md` + `x/`), so `just docs` never leaves it stale.
+- `site/repo-links.py`, an mdBook preprocessor, points links that leave `docs/` (AGENTS.md, sources, other crates) at GitHub.
+- `docs/README.md` is the front page (mdBook renders it as `index.html`; the first chapter there broke its relative links).
+- Mermaid: `mdbook-mermaid` turns the blocks into `pre.mermaid`, and `site/mermaid-init.js` loads mermaid 11.4.1 from jsDelivr
+  instead of vendoring `mermaid.min.js`. Each diagram keeps its own `config:` palette header.
+- `just site` builds, `just site-serve` previews. 0 broken internal links in the built site (2026-11-18).
 
 ## Deploying: GitHub Actions, no `gh-pages` branch
 
-- Workflow `pages.yml`: on push to `master` (and manual dispatch), run `just docs-check` and `just docs-links` (portage-cli), build with
-  mdBook, upload with `actions/upload-pages-artifact`, publish with `actions/deploy-pages`. Repo Settings → Pages → Source: GitHub Actions.
+- Workflow `pages.yml`: on a push to `master` touching `docs/` or `site/` (and manual dispatch), run `./check-doc-links.py`, build with
+  mdBook (CI's `cli-reference` job already guards the generated pages), upload with `actions/upload-pages-artifact`, publish with `actions/deploy-pages`. Repo Settings → Pages → Source: GitHub Actions.
 - Custom domain set in Settings → Pages (with Actions deploys no `CNAME` file is needed), then "Enforce HTTPS" once the certificate is issued.
 
 ## DNS and domain safety (needs Luca, at the luminem.org DNS provider)
@@ -41,13 +46,13 @@ Both repos are public with no Pages site yet (checked 2026-11-18), so each repo 
 
 ## Order of work
 
-1. portage-cli: `site/` with `book.toml` + `SUMMARY.md` over the existing docs, `just site`, local preview. Check the CLI reference links.
-2. portage-cli: `pages.yml`; first deploy to the default `lu-zero.github.io/portage-cli` URL.
+1. portage-cli: `site/`, `just site`, local preview (done).
+2. portage-cli: `pages.yml` (written); enable Pages with source "GitHub Actions", first deploy.
 3. DNS records and domain verification (Luca), then the custom domain and HTTPS.
 4. winnow-args: same, copying the files; then pull the shared parts into the template repo.
+5. luminem.org: Zola landing site in its own repo, apex records to GitHub Pages.
 
 ## Open questions
 
-- Landing page: `docs/user/intro.md` as is, or a short new front page with install and a quick tour?
+- Front page: `docs/README.md` is a short placeholder; grow it into install steps and a quick tour?
 - Include `docs/design` on the public site, or keep the internals in the repo only?
-- Should a top-level `luminem.org` page list the projects (served by the existing host, not GitHub)?
