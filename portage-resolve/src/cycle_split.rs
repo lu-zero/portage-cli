@@ -1,5 +1,9 @@
-use portage_atom::{Cpv, Version};
-use portage_atom_pubgrub::{CededFlag, PortagePackage, SplitCandidate};
+use std::collections::HashSet;
+
+use portage_atom::interner::{DefaultInterner, Interned};
+use portage_atom::{Cpn, Cpv, Dep, DepEntry, UseDepKind, Version};
+use portage_atom_pubgrub::{CededFlag, PortagePackage, SplitCandidate, SplitOrder};
+use portage_metadata::CacheEntry;
 
 use crate::effective_use::{effective_use, pinned_flags};
 use crate::repo::{RepoData, ResolvePolicy, find_cache};
@@ -14,6 +18,10 @@ pub enum Rejection {
     RequiredUse(Vec<String>),
     /// The plan has the package at another merge root too, and one `package.use` entry would reach both
     OtherMergeRoot,
+    /// The flag-off build needs a `!flag? ( … )` dependency on a package the solve did not pick
+    Unsolved(Cpn),
+    /// A package merged between the two builds depends on the flag being on
+    Demanded(Cpv),
 }
 
 /// Whether `candidate` can be built with its flag off, judged before any re-solve
@@ -59,6 +67,114 @@ pub fn check(
     }
 }
 
+/// Whether the re-ordered `split` can build `candidate` with its flag off until its rebuild
+///
+/// The rebuild goes right after `split.after`; every package merged before it sees the flag-off build.
+pub fn check_order(
+    data: &RepoData,
+    split: &SplitOrder,
+    candidate: &SplitCandidate,
+) -> Result<(), Rejection> {
+    let (pkg, ver) = &candidate.package;
+    let flag = candidate.flag;
+    let planned: HashSet<Cpn> = split.order.iter().map(|(p, _)| *p.cpn()).collect();
+    if let Some(cache) = find_cache(data, pkg, ver) {
+        let mut flag_off_deps = Vec::new();
+        for entry in dep_lists(cache) {
+            negated_atoms(entry, flag, false, &mut flag_off_deps);
+        }
+        if let Some(dep) = flag_off_deps.iter().find(|d| !planned.contains(&d.cpn)) {
+            return Err(Rejection::Unsolved(dep.cpn));
+        }
+    }
+    let position = |node: &(PortagePackage, Version)| split.order.iter().position(|n| n == node);
+    let (Some(start), Some(end)) = (position(&candidate.package), position(&split.after)) else {
+        return Ok(());
+    };
+    for (other, other_ver) in split.order.iter().take(end + 1).skip(start + 1) {
+        let Some(cache) = find_cache(data, other, other_ver) else {
+            continue;
+        };
+        let mut atoms = Vec::new();
+        for entry in dep_lists(cache) {
+            all_atoms(entry, &mut atoms);
+        }
+        if atoms
+            .iter()
+            .any(|d| d.cpn == *pkg.cpn() && wants_flag(d, flag))
+        {
+            return Err(Rejection::Demanded(Cpv::new(
+                *other.cpn(),
+                other_ver.clone(),
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn dep_lists(cache: &CacheEntry) -> impl Iterator<Item = &DepEntry> {
+    let m = &cache.metadata;
+    [&m.depend, &m.rdepend, &m.bdepend, &m.pdepend, &m.idepend]
+        .into_iter()
+        .flat_map(|list| list.list().iter())
+}
+
+/// Atoms under a `!flag? ( … )` group, which apply only once `flag` is off
+fn negated_atoms<'a>(
+    entry: &'a DepEntry,
+    flag: Interned<DefaultInterner>,
+    inside: bool,
+    out: &mut Vec<&'a Dep>,
+) {
+    match entry {
+        DepEntry::Atom(dep) if inside && dep.blocker.is_none() => out.push(dep),
+        DepEntry::Atom(_) => {}
+        DepEntry::UseConditional {
+            flag: f,
+            negate,
+            children,
+        } => {
+            let inside = inside || (*negate && *f == flag);
+            for child in children {
+                negated_atoms(child, flag, inside, out);
+            }
+        }
+        DepEntry::AllOf(children)
+        | DepEntry::AnyOf(children)
+        | DepEntry::ExactlyOneOf(children)
+        | DepEntry::AtMostOneOf(children) => {
+            for child in children {
+                negated_atoms(child, flag, inside, out);
+            }
+        }
+    }
+}
+
+fn all_atoms<'a>(entry: &'a DepEntry, out: &mut Vec<&'a Dep>) {
+    match entry {
+        DepEntry::Atom(dep) => out.push(dep),
+        DepEntry::UseConditional { children, .. }
+        | DepEntry::AllOf(children)
+        | DepEntry::AnyOf(children)
+        | DepEntry::ExactlyOneOf(children)
+        | DepEntry::AtMostOneOf(children) => {
+            for child in children {
+                all_atoms(child, out);
+            }
+        }
+    }
+}
+
+/// Whether `dep` can require `flag` on: any USE dependency on it but `[-flag]`
+fn wants_flag(dep: &Dep, flag: Interned<DefaultInterner>) -> bool {
+    dep.blocker.is_none()
+        && dep
+            .use_deps
+            .iter()
+            .flatten()
+            .any(|u| u.flag == flag && u.kind != UseDepKind::Disabled)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -75,14 +191,28 @@ mod tests {
     use crate::repo::{AcceptKeywords, AcceptOverlay, PolicyMaskList};
 
     fn data(iuse: &str, required_use: &str) -> RepoData {
-        let cpv = Cpv::parse("sys-apps/ul-1").unwrap();
-        let text = format!(
-            "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\nIUSE={iuse}\nREQUIRED_USE={required_use}\n"
-        );
-        let entry = CacheEntry::parse(&text).unwrap();
+        repo(&[(
+            "sys-apps/ul-1",
+            &format!("IUSE={iuse}\nREQUIRED_USE={required_use}\n"),
+        )])
+    }
+
+    // `(cpv, extra md5-cache lines)`, one version per package
+    fn repo(entries: &[(&str, &str)]) -> RepoData {
+        let mut versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>> = HashMap::new();
+        let mut cpns = Vec::new();
+        for (cpv, extra) in entries {
+            let cpv = Cpv::parse(cpv).unwrap();
+            let text = format!("EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n{extra}");
+            cpns.push(cpv.cpn);
+            versions
+                .entry(cpv.cpn)
+                .or_default()
+                .push((cpv, CacheEntry::parse(&text).unwrap()));
+        }
         RepoData::from_parts(
-            vec![cpv.cpn],
-            HashMap::from([(cpv.cpn, vec![(cpv, entry)])]),
+            cpns,
+            versions,
             "test".into(),
             HashMap::new(),
             HashMap::new(),
@@ -188,5 +318,72 @@ mod tests {
             check_nls(&data("+nls", ""), &policy(ForceMask::default()), &order),
             Err(Rejection::OtherMergeRoot)
         );
+    }
+
+    fn node(cpv: &str) -> (PortagePackage, Version) {
+        let cpv = Cpv::parse(cpv).unwrap();
+        (
+            PortagePackage::slotted(cpv.cpn, Interned::intern("0")),
+            cpv.version,
+        )
+    }
+
+    fn split_of(order: &[&str], after: &str) -> SplitOrder {
+        SplitOrder {
+            order: order.iter().map(|c| node(c)).collect(),
+            after: node(after),
+            remaining: Vec::new(),
+        }
+    }
+
+    fn check_ul(data: &RepoData, split: &SplitOrder) -> Result<(), Rejection> {
+        let candidate = SplitCandidate {
+            package: node("sys-apps/ul-1"),
+            flag: Interned::intern("nls"),
+            build_time: true,
+        };
+        check_order(data, split, &candidate)
+    }
+
+    #[test]
+    fn a_flag_off_dependency_the_solve_did_not_pick_rejects_the_split() {
+        let data = repo(&[
+            ("sys-apps/ul-1", "IUSE=+nls\nRDEPEND=!nls? ( dev-libs/x )\n"),
+            ("app-text/po4a-1", ""),
+            ("dev-libs/x-1", ""),
+        ]);
+        let without = split_of(&["sys-apps/ul-1", "app-text/po4a-1"], "app-text/po4a-1");
+        assert_eq!(
+            check_ul(&data, &without),
+            Err(Rejection::Unsolved(Cpn::parse("dev-libs/x").unwrap()))
+        );
+        let with = split_of(
+            &["dev-libs/x-1", "sys-apps/ul-1", "app-text/po4a-1"],
+            "app-text/po4a-1",
+        );
+        assert_eq!(check_ul(&data, &with), Ok(()));
+    }
+
+    #[test]
+    fn a_flag_demand_between_the_two_builds_rejects_the_split() {
+        let data = repo(&[
+            ("sys-apps/ul-1", "IUSE=+nls\n"),
+            ("app-text/bdc-1", "RDEPEND=sys-apps/ul[nls]\n"),
+            ("app-text/po4a-1", ""),
+            ("app-text/late-1", "RDEPEND=sys-apps/ul[nls]\n"),
+        ]);
+        let demanded = split_of(
+            &["sys-apps/ul-1", "app-text/bdc-1", "app-text/po4a-1"],
+            "app-text/po4a-1",
+        );
+        assert_eq!(
+            check_ul(&data, &demanded),
+            Err(Rejection::Demanded(Cpv::parse("app-text/bdc-1").unwrap()))
+        );
+        let after_rebuild = split_of(
+            &["sys-apps/ul-1", "app-text/po4a-1", "app-text/late-1"],
+            "app-text/po4a-1",
+        );
+        assert_eq!(check_ul(&data, &after_rebuild), Ok(()));
     }
 }
