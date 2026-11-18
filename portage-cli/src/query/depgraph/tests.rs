@@ -68,7 +68,7 @@ impl<'a> Solve<'a> {
             exclude: &[],
             resume: HashSet::new(),
             pending_rebuilds: HashSet::new(),
-            cycle_split: false,
+            cycle_split: true,
         }
     }
 }
@@ -1335,7 +1335,13 @@ fn docbook_cycle() -> Vec<Pkg> {
 fn cycle_split_builds_the_package_flag_off_first_then_rebuilds_it() {
     let fix = fixture(&docbook_cycle(), &[]);
     let atoms = [TargetAtom::explicit("app-text/dxsl")];
-    let plain = solve(&fix, Solve::new(&atoms));
+    let plain = solve(
+        &fix,
+        Solve {
+            cycle_split: false,
+            ..Solve::new(&atoms)
+        },
+    );
     assert_eq!(
         names(&plain)
             .iter()
@@ -1521,6 +1527,11 @@ fn a_pending_split_rebuild_is_planned_on_resume() {
     let names = names(&resumed);
     let at = |n: &str| names.iter().position(|x| x == n);
     let rebuild = at("sys-apps/ul-1").expect("the pending rebuild is planned");
+    let builds = names.iter().filter(|n| *n == "sys-apps/ul-1").count();
+    assert_eq!(
+        builds, 1,
+        "the installed flags-off build is not built again: {names:?}"
+    );
     assert!(
         at("app-text/po4a-1").is_some_and(|p| p < rebuild),
         "{names:?}"

@@ -72,6 +72,11 @@ How the solver and build scheduler behave.
 * `--autosolve-use` — Let the solver choose USE flags to satisfy REQUIRED\_USE (Level C) rather than only reporting violations
 
   Off by default; flips are reported.
+* `--cycle-split[=<y|n>]` — Open a dependency cycle no install order satisfies by building one package twice: first with the USE flags that close the cycle off, then again with them on once the cycle is built
+
+  On unless `--cycle-split=n`.
+  * `y`: Yes
+  * `n`: No
 * `--eta` — With `-p`/`--pretend` or `-a`/`--ask`, print an "Expected time of completion" for the plan alongside the merge list, estimated from activity history (median of recent successful merges per package; wall uses the build graph + `--jobs` when blockers are available). Shown even when the plan needs USE/mask changes to proceed.
 * `--complete-graph` — Re-solve with the installed packages whose dependencies the plan breaks, even with `--complete-graph-if-new-ver n`
 

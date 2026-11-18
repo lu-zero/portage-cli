@@ -124,6 +124,24 @@ When you run `em <package>`, the following happens:
 6. **Build Execution**: Each package is fetched (if needed), unpacked, configured,
    compiled, and installed (merged) into your system
 
+### Dependency cycles
+
+Some build-time cycles have no valid order at all, typically when bootstrapping a new root. When a USE flag
+closes the cycle, `em` builds that package twice: first with the flag off, then again with it on once the
+rest of the cycle is built. The plan shows both builds:
+
+```text
+[ebuild  N     ] sys-apps/util-linux-2.42.3  USE="… -nls -pam -su …" (built again below)
+[ebuild  N     ] app-text/build-docbook-catalog-2.4
+…
+[ebuild  N     ] app-text/po4a-0.74-r1
+[ebuild   R    ] sys-apps/util-linux-2.42.3  USE="… nls pam su …"
+```
+
+Flags that `REQUIRED_USE` ties to the first one go off with it (`su? ( pam )` above), and a flag forced by the
+profile is never turned off. If a run stops between the two builds, `em -r` still does the rebuild. Pass
+`--cycle-split=n` to keep the plain order instead.
+
 ### Key Features
 
 - **Fast Dependency Resolution**: Uses the [PubGrub](https://github.com/pubgrub-rs/pubgrub)

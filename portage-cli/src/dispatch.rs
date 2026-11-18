@@ -600,7 +600,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 autounmask_persist: query::depgraph::AutounmaskPersist::Never,
                 ask: false,
                 autosolve_use: *autosolve_use,
-                cycle_split: false,
+                cycle_split: true,
                 autounmask_widen: false,
                 roots: &roots,
                 host_merge_root: host_roots.merge_root(),

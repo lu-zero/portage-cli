@@ -178,7 +178,9 @@ impl RoundCtx<'_> {
                     let split_already = accepted.iter().any(|a| {
                         a.package == candidate.package && a.flags.contains(&candidate.flag)
                     });
-                    if tried.contains(&candidate) || split_already {
+                    // A pending rebuild's flags-off build is what is installed: the cycle is already open.
+                    let built_already = self.pending_rebuilds.contains(&candidate.package.0);
+                    if tried.contains(&candidate) || split_already || built_already {
                         return None;
                     }
                     tried.push(candidate);

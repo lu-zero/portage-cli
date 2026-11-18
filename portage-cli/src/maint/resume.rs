@@ -473,7 +473,7 @@ pub fn merge_resume_flags(saved: &MergeFlags, cli: &MergeFlags) -> MergeFlags {
         keep_going: saved.keep_going || cli.keep_going,
         autounmask: saved.autounmask || cli.autounmask,
         autosolve_use: saved.autosolve_use || cli.autosolve_use,
-        cycle_split: saved.cycle_split || cli.cycle_split,
+        cycle_split: cli.cycle_split.or(saved.cycle_split),
         complete_graph: saved.complete_graph || cli.complete_graph,
         complete_graph_if_new_ver: cli
             .complete_graph_if_new_ver

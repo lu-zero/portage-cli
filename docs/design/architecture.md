@@ -424,7 +424,7 @@ Stages, in order:
    edge and repair lookups use typed node indices and reusable reachability marks.
    Explicitly-requested targets are listed last when nothing depends on them
    (emerge convention).
-8a. **Cycle split** (opt-in, hidden `--cycle-split`, `round/plan.rs`) — a cycle the
+8a. **Cycle split** (on unless `--cycle-split=n`, `round/plan.rs`) — a cycle the
     order can only break across a build-time edge has no valid order.
     `InstallOrderResult::cycle_splits` names, per such cycle, the packages whose
     USE-gated edges on it would open it. `cycle_split::check` turns the flag off
@@ -702,10 +702,10 @@ prefix, so it rejects both. Under PMS `1.0` and `1.00` are the same version, and
 no atom in the Gentoo tree depends on the difference; only a hand-written
 `package.*` glob with such a component can match more under em.
 
-**Cycle split (opt-in).** emerge never builds a package twice to open a
-dependency cycle; it reports the cycle and suggests the USE change. Under the
-hidden `--cycle-split`, em does it itself (stage 8a): the plan lists the package
-once with the flags off and again, as `[R]`, with them on.
+**Cycle split.** emerge never builds a package twice to open a dependency
+cycle; it reports the cycle and suggests the USE change. em does it itself
+unless `--cycle-split=n` (stage 8a): the plan lists the package once with the
+flags off and again, as `[R]`, with them on.
 
 Plus two **intentional** cosmetic divergences: install-*order* positions (valid
 topological order, different scheduler — emerge: target-driven DFS; here: SCC

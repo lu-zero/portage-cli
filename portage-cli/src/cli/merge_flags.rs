@@ -138,9 +138,12 @@ pub struct MergeFlags {
     #[arg(long)]
     pub autosolve_use: bool,
 
-    /// Experimental: open a dependency cycle no order satisfies by building one package with a USE flag off, then again with it on
-    #[arg(long, hide)]
-    pub cycle_split: bool,
+    /// Open a dependency cycle no install order satisfies by building one package twice: first with
+    /// the USE flags that close the cycle off, then again with them on once the cycle is built
+    ///
+    /// On unless `--cycle-split=n`.
+    #[arg(long, value_name = "y|n", default_missing = "y", require_equals)]
+    pub cycle_split: Option<YesNo>,
 
     /// With `-p`/`--pretend` or `-a`/`--ask`, print an "Expected time of
     /// completion" for the plan alongside the merge list, estimated from
@@ -218,6 +221,11 @@ impl<'de> serde::Deserialize<'de> for YesNo {
 }
 
 impl MergeFlags {
+    /// Whether the plan may build a package twice to open a dependency cycle: all but `--cycle-split=n`
+    pub fn cycle_split(&self) -> bool {
+        self.cycle_split != Some(YesNo::N)
+    }
+
     /// Whether an install follows kept packages' build-time deps: emerge's `--with-bdeps`, `auto`
     /// unless binary packages are in use
     pub fn install_bdeps(&self) -> bool {
