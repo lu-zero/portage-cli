@@ -1,6 +1,7 @@
 use std::collections::{BinaryHeap, HashMap};
 use std::time::{Duration, Instant};
 
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Version};
 
 use crate::package::PortagePackage;
@@ -65,6 +66,151 @@ pub struct InstallOrderResult {
     pub edges: Vec<DepEdge>,
     /// Graph and soft-repair measurements for this pass.
     pub stats: GraphStats,
+}
+
+/// An edge the install order places backwards inside a cycle that has a build-time edge
+///
+/// No order satisfies such a cycle; building one package with a USE flag off first can open it.
+#[derive(Debug, Clone)]
+pub struct CycleSplit {
+    /// The backwards edge: `broken.to` merges after `broken.from`
+    pub broken: DepEdge,
+    /// Flags whose removal cuts every path that closes the cycle, best first; empty when none does
+    pub candidates: Vec<SplitCandidate>,
+}
+
+/// A package whose USE flag, turned off, opens a [`CycleSplit`]'s cycle
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SplitCandidate {
+    /// The package that would be built twice, flag off and then flag on
+    pub package: (PortagePackage, Version),
+    /// The USE flag gating its dependencies on the cycle
+    pub flag: Interned<DefaultInterner>,
+    /// Whether a DEPEND or BDEPEND edge on the cycle goes away with the flag
+    pub build_time: bool,
+}
+
+impl InstallOrderResult {
+    /// The cycles the order breaks across a build-time edge, each with its split candidates
+    ///
+    /// A cycle of RDEPEND edges only is left out: dropping a runtime edge is how such a cycle
+    /// is ordered. Candidates rank build-time edges first, then by package key, then by flag.
+    pub fn cycle_splits(&self) -> Vec<CycleSplit> {
+        let pos: HashMap<(&PortagePackage, &Version), usize> = self
+            .order
+            .iter()
+            .enumerate()
+            .map(|(i, (p, v))| ((p, v), i))
+            .collect();
+        let n = self.order.len();
+        // `adj[u]` holds `(v, edge)`: u must merge before v.
+        let mut adj: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n];
+        let mut radj: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut ends: Vec<Option<(usize, usize)>> = vec![None; self.edges.len()];
+        for (e, edge) in self.edges.iter().enumerate() {
+            if !matches!(
+                edge.class,
+                DepClass::Depend | DepClass::Bdepend | DepClass::Rdepend
+            ) {
+                continue;
+            }
+            let (Some(&u), Some(&v)) = (
+                pos.get(&(&edge.to.0, &edge.to.1)),
+                pos.get(&(&edge.from.0, &edge.from.1)),
+            ) else {
+                continue;
+            };
+            if u == v {
+                continue;
+            }
+            adj[u].push((v, e));
+            radj[v].push(u);
+            ends[e] = Some((u, v));
+        }
+        let is_hard =
+            |e: usize| matches!(self.edges[e].class, DepClass::Depend | DepClass::Bdepend);
+
+        let mut splits = Vec::new();
+        for (broken, &end) in ends.iter().enumerate() {
+            let Some((dep, consumer)) = end.filter(|(u, v)| u > v) else {
+                continue;
+            };
+            let from_consumer = reachable(consumer, n, |u| adj[u].iter().map(|&(v, _)| v));
+            let to_dep = reachable(dep, n, |v| radj[v].iter().copied());
+            if !from_consumer[dep] {
+                continue;
+            }
+            // Every edge on some path consumer ⇝ dep, plus the broken edge that closes it.
+            let on_cycle: Vec<usize> = ends
+                .iter()
+                .enumerate()
+                .filter_map(|(e, end)| {
+                    let (u, v) = (*end)?;
+                    (from_consumer[u] && to_dep[v]).then_some(e)
+                })
+                .collect();
+            if !on_cycle.iter().any(|&e| is_hard(e)) {
+                continue;
+            }
+
+            let mut groups: Vec<(usize, Interned<DefaultInterner>)> = on_cycle
+                .iter()
+                .filter_map(|&e| Some((ends[e]?.1, self.edges[e].via_use_flag?)))
+                .collect();
+            groups.sort_unstable_by(|a, b| (a.0, a.1.as_str()).cmp(&(b.0, b.1.as_str())));
+            groups.dedup();
+            let mut candidates: Vec<SplitCandidate> = groups
+                .into_iter()
+                .filter_map(|(node, flag)| {
+                    let dropped = |e: usize| {
+                        ends[e].is_some_and(|(_, v)| v == node)
+                            && self.edges[e].via_use_flag == Some(flag)
+                    };
+                    let still_closed = !dropped(broken)
+                        && reachable(consumer, n, |u| {
+                            adj[u]
+                                .iter()
+                                .filter(|&&(_, e)| !dropped(e))
+                                .map(|&(v, _)| v)
+                        })[dep];
+                    (!still_closed).then(|| SplitCandidate {
+                        package: self.order[node].clone(),
+                        flag,
+                        build_time: on_cycle.iter().any(|&e| dropped(e) && is_hard(e)),
+                    })
+                })
+                .collect();
+            candidates.sort_by_cached_key(|c| {
+                let key = format!("{}-{}", c.package.0, c.package.1);
+                (!c.build_time, key, c.flag.as_str().to_owned())
+            });
+            splits.push(CycleSplit {
+                broken: self.edges[broken].clone(),
+                candidates,
+            });
+        }
+        splits
+    }
+}
+
+/// Which of `n` nodes `start` reaches through `next`, itself included
+fn reachable<I: Iterator<Item = usize>>(
+    start: usize,
+    n: usize,
+    next: impl Fn(usize) -> I,
+) -> Vec<bool> {
+    let mut seen = vec![false; n];
+    seen[start] = true;
+    let mut stack = vec![start];
+    while let Some(u) = stack.pop() {
+        for v in next(u) {
+            if !seen[v] {
+                seen[v] = true;
+                stack.push(v);
+            }
+        }
+    }
+    seen
 }
 
 impl PortageDependencyProvider {
@@ -1807,5 +1953,117 @@ mod tests {
                 "VersionSet >=6.4.0 must NOT contain {v_str}"
             );
         }
+    }
+
+    /// The docbook bootstrap cycle: dxsl -R-> bdc -R-> ul -B-> po4a -B-> dxsl, with `ul`'s deps given.
+    fn docbook_cycle(ul: PackageDeps) -> InstallOrderResult {
+        let mut repo = InMemoryRepository::new();
+        repo.add_version(
+            Cpv::parse("app-text/dxsl-1").unwrap(),
+            None,
+            None,
+            deps("app-text/bdc", ""),
+        );
+        repo.add_version(
+            Cpv::parse("app-text/bdc-1").unwrap(),
+            None,
+            None,
+            deps("|| ( sys-apps/ul app-misc/getopt )", ""),
+        );
+        repo.add_version(
+            Cpv::parse("app-text/po4a-1").unwrap(),
+            None,
+            None,
+            deps("", "app-text/dxsl"),
+        );
+        repo.add_version_with_iuse(
+            Cpv::parse("sys-apps/ul-1").unwrap(),
+            None,
+            None,
+            vec![slot("nls")],
+            ul,
+        );
+        let mut config = crate::use_config::UseConfig::new();
+        config.enable(slot("nls"));
+        repo.set_use_config(config);
+
+        let mut provider = PortageDependencyProvider::new(repo);
+        let target = PortagePackage::unslotted(Cpn::parse("app-text/dxsl").unwrap());
+        let solution = provider
+            .resolve_targets(vec![(target, PortageVersionSet::any())])
+            .unwrap_or_else(|e| panic!("resolution failed: {e:?}"));
+        provider.install_order_with_stats(&solution)
+    }
+
+    fn deps(rdepend: &str, bdepend: &str) -> PackageDeps {
+        PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: DepEntry::parse(rdepend).unwrap().into(),
+            bdepend: DepEntry::parse(bdepend).unwrap().into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        }
+    }
+
+    #[test]
+    fn a_flag_gated_build_dep_on_a_broken_cycle_is_a_split_candidate() {
+        let result = docbook_cycle(deps("", "nls? ( app-text/po4a )"));
+        let splits = result.cycle_splits();
+        assert_eq!(splits.len(), 1, "{splits:?}");
+        assert_eq!(splits[0].broken.class, DepClass::Rdepend);
+        let candidates: Vec<(&str, &str, bool)> = splits[0]
+            .candidates
+            .iter()
+            .map(|c| {
+                (
+                    c.package.0.cpn().package.as_str(),
+                    c.flag.as_str(),
+                    c.build_time,
+                )
+            })
+            .collect();
+        assert_eq!(candidates, [("ul", "nls", true)]);
+    }
+
+    #[test]
+    fn a_cycle_without_a_gated_edge_has_no_candidate() {
+        let splits = docbook_cycle(deps("", "app-text/po4a")).cycle_splits();
+        assert_eq!(splits.len(), 1, "{splits:?}");
+        assert!(splits[0].candidates.is_empty());
+    }
+
+    #[test]
+    fn a_flag_that_leaves_another_path_closed_is_not_a_candidate() {
+        let splits = docbook_cycle(deps("app-text/po4a", "nls? ( app-text/po4a )")).cycle_splits();
+        assert_eq!(splits.len(), 1, "{splits:?}");
+        assert!(splits[0].candidates.is_empty(), "{splits:?}");
+    }
+
+    #[test]
+    fn a_runtime_only_cycle_is_not_a_split() {
+        let mut repo = InMemoryRepository::new();
+        repo.add_version(
+            Cpv::parse("dev-libs/a-1").unwrap(),
+            None,
+            None,
+            rdepend(&["dev-libs/b"]),
+        );
+        repo.add_version(
+            Cpv::parse("dev-libs/b-1").unwrap(),
+            None,
+            None,
+            rdepend(&["dev-libs/a"]),
+        );
+        let mut provider = PortageDependencyProvider::new(repo);
+        let a = PortagePackage::unslotted(Cpn::parse("dev-libs/a").unwrap());
+        let solution = provider
+            .resolve_targets(vec![(a, PortageVersionSet::any())])
+            .unwrap();
+        assert!(
+            provider
+                .install_order_with_stats(&solution)
+                .cycle_splits()
+                .is_empty()
+        );
     }
 }
