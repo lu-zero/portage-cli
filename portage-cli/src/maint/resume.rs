@@ -47,6 +47,7 @@ use serde::{Deserialize, Serialize};
 use crate::cli::{DepgraphFlags, MergeFlags};
 use crate::query::depgraph::MergeRoot;
 use crate::util::write_atomic;
+use portage_atom::Cpv;
 
 /// Legacy JSON-embedded completion entry (pre-marker layout)
 ///
@@ -292,21 +293,21 @@ pub fn mark_completed(
 
 /// Completed `(MergeRoot, cpv)` keys for filtering a re-resolved plan —
 /// markers for the live job, plus any still-unmigrated legacy JSON list.
-pub fn completed_keys(root: &Utf8Path) -> HashSet<(MergeRoot, String)> {
+pub fn completed_keys(root: &Utf8Path) -> HashSet<(MergeRoot, Cpv)> {
     let file = read_file(root);
     let Some(state) = file.resume.as_ref() else {
         return HashSet::new();
     };
     let mut keys = read_markers(root, &state.job_id);
     for c in &state.completed {
-        if let Some(mr) = parse_merge_root(&c.merge_root) {
-            keys.insert((mr, c.cpv.clone()));
+        if let (Some(mr), Ok(cpv)) = (parse_merge_root(&c.merge_root), Cpv::parse(&c.cpv)) {
+            keys.insert((mr, cpv));
         }
     }
     keys
 }
 
-fn read_markers(root: &Utf8Path, job_id: &str) -> HashSet<(MergeRoot, String)> {
+fn read_markers(root: &Utf8Path, job_id: &str) -> HashSet<(MergeRoot, Cpv)> {
     let mut keys = HashSet::new();
     if job_id.is_empty() {
         return keys;
@@ -335,7 +336,9 @@ fn read_markers(root: &Utf8Path, job_id: &str) -> HashSet<(MergeRoot, String)> {
                 let Some(pf) = pf_ent.file_name().to_str().map(str::to_owned) else {
                     continue;
                 };
-                keys.insert((side, format!("{cat}/{pf}")));
+                if let Ok(cpv) = Cpv::parse(&format!("{cat}/{pf}")) {
+                    keys.insert((side, cpv));
+                }
             }
         }
     }
@@ -515,6 +518,10 @@ fn format_slot_report(root: &Utf8Path, name: &str, s: &ResumeState) -> String {
 mod tests {
     use super::*;
 
+    fn cpv(s: &str) -> Cpv {
+        Cpv::parse(s).expect("test cpv parses")
+    }
+
     fn state(atoms: &[&str]) -> ResumeState {
         ResumeState {
             atoms: atoms.iter().map(|s| s.to_string()).collect(),
@@ -678,8 +685,8 @@ mod tests {
 
         let keys = completed_keys(&root);
         assert_eq!(keys.len(), 2);
-        assert!(keys.contains(&(MergeRoot::Target, "sys-libs/glibc-2.39-r1".into())));
-        assert!(keys.contains(&(MergeRoot::Host, "dev-lang/python-3.12.0".into())));
+        assert!(keys.contains(&(MergeRoot::Target, cpv("sys-libs/glibc-2.39-r1"))));
+        assert!(keys.contains(&(MergeRoot::Host, cpv("dev-lang/python-3.12.0"))));
 
         // A resume re-save of atoms/flags must not wipe markers.
         let job_id2 = save(&root, state(&["@system"]), true).unwrap();
@@ -814,7 +821,7 @@ mod tests {
         let job_id = save(&root, state(&["@system"]), true).unwrap();
         assert!(!job_id.is_empty());
         assert!(
-            completed_keys(&root).contains(&(MergeRoot::Target, "sys-libs/glibc-2.39-r1".into()))
+            completed_keys(&root).contains(&(MergeRoot::Target, cpv("sys-libs/glibc-2.39-r1")))
         );
         assert!(marker_path(&root, &job_id, MergeRoot::Target, "sys-libs/glibc-2.39-r1").exists());
     }

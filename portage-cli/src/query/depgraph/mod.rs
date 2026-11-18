@@ -351,7 +351,7 @@ pub struct DepgraphOpts<'a> {
     /// Dropped from `order` the same way `--exclude` is — so `-p` and the merge plan omit
     /// completed work, which is required for correct `--emptytree` resume (VDB presence is not
     /// a completion marker there). Empty for every non-resume call.
-    pub resume_completed: HashSet<(MergeRoot, String)>,
+    pub resume_completed: HashSet<(MergeRoot, Cpv)>,
     /// Re-solve with each kept installed package whose dependencies the plan breaks as a target,
     /// so it is updated too or holds the update back
     pub complete_graph: bool,
@@ -677,7 +677,7 @@ fn apply_order_filters(
     mut order: Vec<(PortagePackage, Version)>,
     reinstall_deps: &[&UseFlagRequirement],
     exclude_atoms: &[Dep],
-    resume_completed: &std::collections::HashSet<(MergeRoot, String)>,
+    resume_completed: &std::collections::HashSet<(MergeRoot, Cpv)>,
     cross_arch_host_stage: bool,
 ) -> (Vec<(PortagePackage, Version)>, usize, usize) {
     // Fallback: any reinstall the solver didn't route through install_order
@@ -716,8 +716,7 @@ fn apply_order_filters(
     if !resume_completed.is_empty() {
         let before = order.len();
         order.retain(|(pkg, ver)| {
-            let cpv = Cpv::new(*pkg.cpn(), ver.clone()).to_string();
-            !resume_completed.contains(&(pkg.merge_root(), cpv))
+            !resume_completed.contains(&(pkg.merge_root(), Cpv::new(*pkg.cpn(), ver.clone())))
         });
         resume_omitted = before.saturating_sub(order.len());
     }

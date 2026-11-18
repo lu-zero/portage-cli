@@ -41,7 +41,7 @@ pub(super) struct Prepared<'a> {
     pub(super) update: bool,
     pub(super) nodeps: bool,
     pub(super) binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
-    pub(super) resume_completed: std::collections::HashSet<(MergeRoot, String)>,
+    pub(super) resume_completed: std::collections::HashSet<(MergeRoot, Cpv)>,
     pub(super) complete_graph: bool,
     pub(super) quiet: bool,
     pub(super) exclude_atoms: Vec<Dep>,

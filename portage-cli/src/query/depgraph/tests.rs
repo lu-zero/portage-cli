@@ -46,7 +46,7 @@ struct Solve<'a> {
     with_bdeps: bool,
     complete_graph: bool,
     exclude: &'a [String],
-    resume: HashSet<(MergeRoot, String)>,
+    resume: HashSet<(MergeRoot, Cpv)>,
 }
 
 impl<'a> Solve<'a> {
@@ -365,7 +365,7 @@ fn resume_omits_a_package_already_completed() {
     let mut opts = Solve::new(&atoms);
     opts.empty = true;
     opts.resume
-        .insert((MergeRoot::Target, "app-misc/bar-1".to_string()));
+        .insert((MergeRoot::Target, Cpv::parse("app-misc/bar-1").unwrap()));
     let planned = names(&solve(&fix, opts));
     assert_eq!(planned, ["app-misc/foo-1"]);
 }
@@ -1022,7 +1022,7 @@ fn apply_order_filters_counts_exclude_and_resume_and_drops_host_rows() {
     let order = vec![(target.clone(), ver.clone()), (host, ver.clone())];
     let exclude = [Dep::parse("app-misc/foo").unwrap()];
     let mut resume = HashSet::new();
-    resume.insert((MergeRoot::Host, "app-misc/tool-1".to_string()));
+    resume.insert((MergeRoot::Host, Cpv::parse("app-misc/tool-1").unwrap()));
     let (kept, excluded, resumed) = apply_order_filters(order, &[], &exclude, &resume, true);
     assert!(kept.is_empty());
     assert_eq!((excluded, resumed), (1, 1));
