@@ -55,12 +55,16 @@ Done in `d4f0d78f` as `InstallOrderResult::cycle_splits()`, called on demand rat
 
 ### 2. Validate the flag (new `portage-resolve/src/cycle_split.rs`)
 
-Turning `f` off for `P` is allowed only if all of these hold, else try the next candidate; with none left keep today's plan and say so:
+Turning `f` off for `P` is allowed only if all of these hold, else try the next candidate; with none left keep today's plan and say so.
+`cycle_split::check` (`02150913`) covers the first three, before any re-solve; the last two need phase A's solve (§3):
 
-- `f` is not forced or masked (`force_mask.rs`) and is not `-f` already.
-- `P`'s REQUIRED_USE still holds (`required_use.rs`).
-- No package ordered before the rebuild demands `P[f]`. This is checked after phase A solves (§3), because the cosolve fixpoint quietly turns `f` back on.
-- The `!f? ( … )` dependencies the flag-off build gains do not close another cycle.
+- `f` is not pinned by `use.force`/`use.mask` (`effective_use::pinned_flags`). "Not `-f` already" needs no check: an edge gated by `f` exists
+  only while `f` is on.
+- No REQUIRED_USE group newly fails with `f` off. A group the plan already fails is left out, since it is reported on its own.
+- `P` sits at one merge root in the plan (see §5, cross builds).
+- After phase A, `P` really has `f` off: the cosolve fixpoint turns it back on when something demands `P[f]`.
+- After phase A, `cycle_splits()` on its order no longer lists the cycle, and lists no new one. This also covers the `!f? ( … )` dependencies
+  the flag-off build gains.
 
 ### 3. Build the two-phase plan (`portage-cli/src/query/depgraph/round/{solve,plan}.rs`)
 
@@ -126,7 +130,7 @@ These key by `PortagePackage` or `(pkg, version)` and must key by plan index or 
 1. refactor(cli): resume progress keyed by `Cpv` (done, `82b9cb32`). The phase-slice lookup for `index_of`/`edge_order_ok` moves to step 4: with
    one phase it would be an unused parameter.
 2. feat(pubgrub): cycle witness with candidate `(package, version, flag)` edges (done, `d4f0d78f`).
-3. feat(resolve): `cycle_split.rs` validation.
+3. feat(resolve): `cycle_split.rs` validation (done, `02150913`).
 4. feat(cli): the two-phase solve and concatenation, behind a flag at first, plus edge lookup per phase slice (own phase first, then earlier ones).
 5. feat(cli): display, JSON, resume, jobs and binpkg handling.
 6. perf: order cache reuse in `shape_plan`, if the bench shows a cost.
