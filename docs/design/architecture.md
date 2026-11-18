@@ -175,6 +175,7 @@ PubGrub-based dependency solver bridge — the solver `em` uses by default.
 - `struct SlotOperatorBinding` — `:=` binding tracking for rebuild detection
 - `struct BlockerHit`, `struct BlockerVictim` — detailed blocker reporting
 - `enum DepClass`, `struct DepEdge` — Dependency classification and graph edges
+- `struct InstallOrderResult` — `cycle_splits()`, `split()`; `struct CycleSplit`, `SplitCandidate`, `SplitBuild`, `SplitOrder` — cycle splits
 - `fn resolve_effective_use()` — Per-package USE fold (re-export from `portage-solver`)
 - Re-exports `DefaultInterner`, `Interned` from `portage_atom::interner`
 
@@ -293,6 +294,7 @@ anstream dependency (argv parsing and rendering stay in `portage-cli`).
   `BrootSnapshot` captures ordered BROOT/prefix rows once per resolve.
 - `mod root_aware` / `bdepend_trim` / `depend_trim` / `root_closure` — root-aware plan
 - `mod package_use` / `required_use` / `download_size` / `bdepend_avail`
+- `mod cycle_split` — whether a split package can be built with its flags off (`check`, `check_order`)
 
 CLI-only pieces that stay in `portage-cli`: plan rendering (`output.rs`),
 autounmask write UX, and the `em query depgraph` command shape.
@@ -422,6 +424,20 @@ Stages, in order:
    edge and repair lookups use typed node indices and reusable reachability marks.
    Explicitly-requested targets are listed last when nothing depends on them
    (emerge convention).
+8a. **Cycle split** (opt-in, hidden `--cycle-split`, `round/plan.rs`) — a cycle the
+    order can only break across a build-time edge has no valid order.
+    `InstallOrderResult::cycle_splits` names, per such cycle, the packages whose
+    USE-gated edges on it would open it. `cycle_split::check` turns the flag off
+    (plus any flag whose `x? ( … )` REQUIRED_USE group needs it, unless pinned).
+    `InstallOrderResult::split` re-orders without those edges and lists the package
+    again, flags on, after what the edges need; `check_order` rejects a `!flag?`
+    dependency outside the solve or a `[flag]` demand between the two builds. Up to
+    eight splits per plan, each kept only while the cycle count drops. No re-solve:
+    the normal solve already holds every package the flag-on build needs.
+    `PlanIndex` tells the two builds apart for `--jobs` blockers and `--json`; the
+    first build's `PlannedMerge` drops the flags, the rebuild is a reinstall, and a
+    finished first build leaves a pending-rebuild resume marker that `-r` solves as
+    a USE rebuild.
 8b. **Post-order rewrite** — for everything except native `--emptytree` and `-uD`,
     the within-run BDEPEND trim (`bdepend_trim.rs`) runs,
     dropping edges already satisfied on BROOT or by earlier plan entries. Native
@@ -685,6 +701,11 @@ zero compares by Algorithm 3.3: `=1.0*` matches `1.00` and `=1.01*` matches
 prefix, so it rejects both. Under PMS `1.0` and `1.00` are the same version, and
 no atom in the Gentoo tree depends on the difference; only a hand-written
 `package.*` glob with such a component can match more under em.
+
+**Cycle split (opt-in).** emerge never builds a package twice to open a
+dependency cycle; it reports the cycle and suggests the USE change. Under the
+hidden `--cycle-split`, em does it itself (stage 8a): the plan lists the package
+once with the flags off and again, as `[R]`, with them on.
 
 Plus two **intentional** cosmetic divergences: install-*order* positions (valid
 topological order, different scheduler — emerge: target-driven DFS; here: SCC
