@@ -126,6 +126,25 @@ which the toolchain steps and `package.provided` handle, not this feature.
   `meson-format-array` fails `REQUIRED_USE`.
 - Both libxslt rows display `USE="crypt"`: the display path computes USE on its own (step 5).
 
+## Sandbox run on a bootstrapped `--local` root (2026-11-18, `924098f2`)
+
+Fresh crossdev-stages sandbox `em-cycle-split` (`setup` + `prepare --bare`), `em setup --local /var/tmp/lt`, then
+`em -p -v [--json] [--cycle-split] --local /var/tmp/lt app-text/docbook-xsl-stylesheets` (103 packages).
+
+- Without the flag, three docbook RDEPEND edges point backwards (`docbook-xml-dtd`, `docbook-xsl-stylesheets`, `docbook-xsl-ns-stylesheets`
+  → `build-docbook-catalog`), the live failure.
+- With it: `util-linux` (-nls), `build-docbook-catalog`, …, the stylesheets, `po4a`, then the `util-linux` rebuild. Two of the three are fixed.
+- `docbook-xsl-ns-stylesheets` closes a second cycle: ns -R-> `build-docbook-catalog` -R-> `util-linux` -D(pam)-> `sys-libs/pam`
+  -B-> ns (pam's docs, unconditional). The only candidate, `util-linux` `pam`, is rightly rejected: `REQUIRED_USE="su? ( pam )"`.
+  Its postinst runs `build-docbook-catalog || die` too, so a real build still fails, at ns instead.
+  Opening it needs a flag *set* per candidate (`-pam -su`): when REQUIRED_USE fails, also turn off the flags whose groups force `f` on.
+- The `--json` edge `build-docbook-catalog` → `util-linux` shows `order_ok: false` although the flag-off build precedes it: `output.rs`
+  `edge_order_ok` keys by `(pkg, version)`, so the rebuild wins (step 5).
+- The PDEPEND `setuptools` → `trove-classifiers` `order_ok: false` appears without the flag too; unrelated.
+- Unrelated gap found on the way: with no `GENTOO_MIRRORS` anywhere, portage falls back to `make.globals`' `http://distfiles.gentoo.org` and
+  tries it before SRC_URI; em has no such default (`gentoo_mirrors_list`, `ebuild/mod.rs`), so `em setup --local` failed on a gitweb 502 for
+  baselayout. Worked around with `env GENTOO_MIRRORS=http://distfiles.gentoo.org`.
+
 ## Tests
 
 - Unit, `portage-atom-pubgrub/src/provider/tests.rs` (`InMemoryRepository`): dxsl R bdc; bdc R `|| ( util-linux getopt )` with getopt absent (genuinely absent,
@@ -142,7 +161,7 @@ which the toolchain steps and `package.provided` handle, not this feature.
    one phase it would be an unused parameter.
 2. feat(pubgrub): cycle witness with candidate `(package, version, flag)` edges (done, `d4f0d78f`).
 3. feat(resolve): `cycle_split.rs` validation (done, `02150913`).
-4. feat: the order split (`graph.rs`) and its use in `shape_plan`, behind a hidden flag at first, plus edge lookup that tells the two entries apart\n   (done: `081b72c5`, `09120502`, `4943646a`; one split per plan so far).
+4. feat: the order split (`graph.rs`) and its use in `shape_plan`, behind a hidden flag at first, plus edge lookup that tells the two entries apart\n   (done: `081b72c5`, `09120502`, `4943646a`, `924098f2`; up to eight splits per plan).
 5. feat(cli): display, JSON, resume, jobs and binpkg handling.
 6. perf: order cache reuse in `shape_plan`, if the bench shows a cost.
 7. docs: `docs/design/architecture.md` (resolution stages, divergences), the user docs for the new row marker, and this file moved to `todo/done/`.
