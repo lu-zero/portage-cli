@@ -3,6 +3,7 @@
 2026-11-18: confirmed to break a real build. In a `--local` bootstrap `docbook-xsl-stylesheets`' `pkg_postinst` dies (`build-docbook-catalog` not installed yet).
 Cause: the cycle `docbook-xsl-stylesheets` -R-> `build-docbook-catalog` -R-> `util-linux` -B-> `po4a` -B-> `docbook-xsl-stylesheets` (util-linux `nls`).
 No order is valid; em drops the first RDEPEND edge. `build-docbook-catalog`'s RDEPEND is `|| ( util-linux app-misc/getopt )`; em takes the first branch.
+Plan: [[cycle-break-use-split]] (getopt is masked on Linux, so the `||` choice alone cannot fix it).
 Direction (no per-package workaround): at resolution level, (1) choose the other `||` branch when the first closes a cycle (Portage's `dep_zapdeps`
 demotes a choice that recreates a known circular dependency unless it is installed), (2) break a hard cycle by building one package with a flag off, then rebuilding it with the flag on.
 
