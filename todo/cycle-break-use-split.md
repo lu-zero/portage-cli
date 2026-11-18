@@ -198,7 +198,9 @@ is still step 5. (`-uDN` also tried rebuilding glibc/gcc in the prefix and hit t
 2. feat(pubgrub): cycle witness with candidate `(package, version, flag)` edges (done, `d4f0d78f`).
 3. feat(resolve): `cycle_split.rs` validation (done, `02150913`).
 4. feat: the order split (`graph.rs`) and its use in `shape_plan`, behind a hidden flag at first, plus edge lookup that tells the two entries apart\n   (done: `081b72c5`, `09120502`, `4943646a`, `924098f2`; up to eight splits per plan).
-5. feat(cli): display, JSON, resume, jobs and binpkg handling.
+5. feat(cli): display, JSON, resume, jobs and binpkg handling (done: `393cfa09` display/JSON via `PlanIndex`; `59bdb7de` resume:
+   a first build writes a pending-rebuild marker and `-r` solves it as a USE rebuild; the rebuild entry is a reinstall, else the merge
+   loop's VDB check skipped it once the first build was merged. Not yet run live).
 6. perf: order cache reuse in `shape_plan`, if the bench shows a cost.
 7. docs: `docs/design/architecture.md` (resolution stages, divergences), the user docs for the new row marker, and this file moved to `todo/done/`.
 
