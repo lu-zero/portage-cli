@@ -68,8 +68,6 @@ pub fn check(
 }
 
 /// Whether the re-ordered `split` can build `candidate` with its flag off until its rebuild
-///
-/// The rebuild goes right after `split.after`; every package merged before it sees the flag-off build.
 pub fn check_order(
     data: &RepoData,
     split: &SplitOrder,
@@ -87,11 +85,10 @@ pub fn check_order(
             return Err(Rejection::Unsolved(dep.cpn));
         }
     }
-    let position = |node: &(PortagePackage, Version)| split.order.iter().position(|n| n == node);
-    let (Some(start), Some(end)) = (position(&candidate.package), position(&split.after)) else {
+    let Some(first) = split.order.iter().position(|n| *n == candidate.package) else {
         return Ok(());
     };
-    for (other, other_ver) in split.order.iter().take(end + 1).skip(start + 1) {
+    for (other, other_ver) in &split.order[first + 1..split.rebuild] {
         let Some(cache) = find_cache(data, other, other_ver) else {
             continue;
         };
@@ -328,10 +325,13 @@ mod tests {
         )
     }
 
-    fn split_of(order: &[&str], after: &str) -> SplitOrder {
+    /// `order` ends with the rebuild of `sys-apps/ul-1`
+    fn split_of(order: &[&str]) -> SplitOrder {
+        let mut order: Vec<_> = order.iter().map(|c| node(c)).collect();
+        order.push(node("sys-apps/ul-1"));
         SplitOrder {
-            order: order.iter().map(|c| node(c)).collect(),
-            after: node(after),
+            rebuild: order.len() - 1,
+            order,
             remaining: Vec::new(),
         }
     }
@@ -352,15 +352,12 @@ mod tests {
             ("app-text/po4a-1", ""),
             ("dev-libs/x-1", ""),
         ]);
-        let without = split_of(&["sys-apps/ul-1", "app-text/po4a-1"], "app-text/po4a-1");
+        let without = split_of(&["sys-apps/ul-1", "app-text/po4a-1"]);
         assert_eq!(
             check_ul(&data, &without),
             Err(Rejection::Unsolved(Cpn::parse("dev-libs/x").unwrap()))
         );
-        let with = split_of(
-            &["dev-libs/x-1", "sys-apps/ul-1", "app-text/po4a-1"],
-            "app-text/po4a-1",
-        );
+        let with = split_of(&["dev-libs/x-1", "sys-apps/ul-1", "app-text/po4a-1"]);
         assert_eq!(check_ul(&data, &with), Ok(()));
     }
 
@@ -372,18 +369,13 @@ mod tests {
             ("app-text/po4a-1", ""),
             ("app-text/late-1", "RDEPEND=sys-apps/ul[nls]\n"),
         ]);
-        let demanded = split_of(
-            &["sys-apps/ul-1", "app-text/bdc-1", "app-text/po4a-1"],
-            "app-text/po4a-1",
-        );
+        let demanded = split_of(&["sys-apps/ul-1", "app-text/bdc-1", "app-text/po4a-1"]);
         assert_eq!(
             check_ul(&data, &demanded),
             Err(Rejection::Demanded(Cpv::parse("app-text/bdc-1").unwrap()))
         );
-        let after_rebuild = split_of(
-            &["sys-apps/ul-1", "app-text/po4a-1", "app-text/late-1"],
-            "app-text/po4a-1",
-        );
+        let mut after_rebuild = split_of(&["sys-apps/ul-1", "app-text/po4a-1"]);
+        after_rebuild.order.push(node("app-text/late-1"));
         assert_eq!(check_ul(&data, &after_rebuild), Ok(()));
     }
 }

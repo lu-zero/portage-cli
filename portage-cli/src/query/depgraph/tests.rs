@@ -47,6 +47,7 @@ struct Solve<'a> {
     complete_graph: bool,
     exclude: &'a [String],
     resume: HashSet<(MergeRoot, Cpv)>,
+    cycle_split: bool,
 }
 
 impl<'a> Solve<'a> {
@@ -64,6 +65,7 @@ impl<'a> Solve<'a> {
             complete_graph: false,
             exclude: &[],
             resume: HashSet::new(),
+            cycle_split: false,
         }
     }
 }
@@ -203,6 +205,7 @@ fn try_solve(fix: &Fix, opts: Solve<'_>) -> anyhow::Result<super::DepgraphOutcom
         autounmask_persist: AutounmaskPersist::Never,
         ask: false,
         autosolve_use: false,
+        cycle_split: opts.cycle_split,
         autounmask_widen: opts.widen,
         roots: &fix.roots,
         host_merge_root: &fix.root,
@@ -949,6 +952,7 @@ fn a_missing_explicit_atom_is_fatal() {
             autounmask_persist: AutounmaskPersist::Never,
             ask: false,
             autosolve_use: false,
+            cycle_split: false,
             autounmask_widen: false,
             roots: &fix.roots,
             host_merge_root: &fix.root,
@@ -1270,4 +1274,80 @@ fn newuse_rebuilds_when_the_best_version_drops_a_disabled_flag() {
         names(&solve(&fix, newuse(&json, false))),
         ["app-misc/json-2"]
     );
+}
+
+/// The docbook bootstrap cycle: dxsl -R-> bdc -R-> ul -B(nls)-> po4a -B-> dxsl.
+fn docbook_cycle() -> Vec<Pkg> {
+    let pkg = |cpv, rdepend, bdepend, iuse| Pkg {
+        cpv,
+        keywords: "amd64",
+        depend: "",
+        rdepend,
+        bdepend,
+        iuse,
+        slot: "0",
+    };
+    vec![
+        pkg("app-text/dxsl-1", "app-text/bdc", "", ""),
+        pkg(
+            "app-text/bdc-1",
+            "|| ( sys-apps/ul app-misc/getopt )",
+            "",
+            "",
+        ),
+        pkg("sys-apps/ul-1", "", "nls? ( app-text/po4a )", "+nls"),
+        pkg("app-text/po4a-1", "", "app-text/dxsl", ""),
+    ]
+}
+
+#[test]
+fn cycle_split_builds_the_package_flag_off_first_then_rebuilds_it() {
+    let fix = fixture(&docbook_cycle(), &[]);
+    let atoms = [TargetAtom::explicit("app-text/dxsl")];
+    let plain = solve(&fix, Solve::new(&atoms));
+    assert_eq!(
+        names(&plain)
+            .iter()
+            .filter(|n| *n == "sys-apps/ul-1")
+            .count(),
+        1
+    );
+
+    let outcome = solve(
+        &fix,
+        Solve {
+            cycle_split: true,
+            ..Solve::new(&atoms)
+        },
+    );
+    assert_eq!(
+        names(&outcome),
+        [
+            "sys-apps/ul-1",
+            "app-text/bdc-1",
+            "app-text/dxsl-1",
+            "app-text/po4a-1",
+            "sys-apps/ul-1"
+        ]
+    );
+    let has_nls = |i: usize| {
+        outcome.plan[i]
+            .use_flags
+            .iter()
+            .any(|f| f.as_str() == "nls")
+    };
+    assert!(!has_nls(0) && has_nls(4));
+    let mut rebuild_blockers = outcome.build_blockers[4].clone();
+    rebuild_blockers.sort_unstable();
+    assert_eq!(
+        rebuild_blockers,
+        [0, 3],
+        "the rebuild waits for the first build and po4a"
+    );
+    for (i, blockers) in outcome.build_blockers.iter().enumerate() {
+        assert!(
+            blockers.iter().all(|&b| b < i),
+            "entry {i} waits on a later one: {blockers:?}"
+        );
+    }
 }

@@ -138,6 +138,10 @@ pub struct MergeFlags {
     #[arg(long)]
     pub autosolve_use: bool,
 
+    /// Experimental: open a dependency cycle no order satisfies by building one package with a USE flag off, then again with it on
+    #[arg(long, hide)]
+    pub cycle_split: bool,
+
     /// With `-p`/`--pretend` or `-a`/`--ask`, print an "Expected time of
     /// completion" for the plan alongside the merge list, estimated from
     /// activity history (median of recent successful merges per package;

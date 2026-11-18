@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use portage_atom::{Cpn, Cpv};
-use portage_atom_pubgrub::{DepClass, MergeRoot, PortagePackage, UseFlagRequirement};
+use portage_atom_pubgrub::{DepClass, DepEdge, MergeRoot, PortagePackage, UseFlagRequirement};
 
 use portage_resolve::{conflicts, download_size, effective_use, repo, required_use, root_aware};
 
@@ -96,6 +96,7 @@ pub(super) fn assemble(
         proposed,
         exclude_omitted,
         resume_omitted,
+        split_build,
         round_metrics: _,
         provider_key: _,
     } = outcome;
@@ -447,10 +448,21 @@ pub(super) fn assemble(
         let name = repo::repo_name_of(&data, cpv);
         set.by_name(name.as_str()).unwrap_or(set.main())
     };
+    // Indices into the non-virtual entries, which `plan`, `index_of` and `build_blockers` share.
+    let split_at = split_build.as_ref().and_then(|s| {
+        let mut at = plan_entries
+            .iter()
+            .filter(|e| !e.pkg.is_virtual())
+            .enumerate()
+            .filter(|(_, e)| (&e.pkg, &e.version) == (&s.package.0, &s.package.1))
+            .map(|(i, _)| i);
+        Some((at.next()?, at.next()?, s.flag))
+    });
     let plan: Vec<PlannedMerge> = plan_entries
         .iter()
         .filter(|e| !e.pkg.is_virtual())
-        .map(|entry| {
+        .enumerate()
+        .map(|(index, entry)| {
             let pkg = &entry.pkg;
             let ver = &entry.version;
             let cpn = pkg.cpn();
@@ -472,6 +484,11 @@ pub(super) fn assemble(
                 effective_use::apply_ceded(&mut effective, *cpn, &ceded);
                 (Vec::new(), Vec::new(), effective.enabled_flags())
             };
+            if let Some((flag_off, _, flag)) = split_at
+                && flag_off == index
+            {
+                flags.retain(|f| *f != flag);
+            }
             flags.sort_by(|a, b| a.as_str().cmp(b.as_str()));
             flags.dedup();
             // A cross-derived cpn (`cross-<tuple>/gcc`) has no on-disk tree of
@@ -518,23 +535,42 @@ pub(super) fn assemble(
     // Keyed by the full `PortagePackage` (carries slot), not `(MergeRoot,
     // Cpn)` alone: a CPN present at two slots would otherwise collapse to
     // "last wins", which can misreport a satisfied edge as backwards.
-    let index_of: HashMap<PortagePackage, usize> = plan_entries
+    let mut index_of: HashMap<PortagePackage, usize> = HashMap::new();
+    for (i, entry) in plan_entries
         .iter()
         .filter(|e| !e.pkg.is_virtual())
         .enumerate()
-        .map(|(i, entry)| (entry.pkg.clone(), i))
-        .collect();
+    {
+        index_of.entry(entry.pkg.clone()).or_insert(i);
+    }
+    // The twice-built package's flag-gated edges belong to its rebuild, and so do dependents placed after it.
+    let endpoints = |e: &DepEdge| -> Option<(usize, usize)> {
+        let mut from = *index_of.get(&e.from.0)?;
+        let mut to = *index_of.get(&e.to.0)?;
+        if let Some((flag_off, rebuild, flag)) = split_at {
+            if from == flag_off && e.via_use_flag == Some(flag) {
+                from = rebuild;
+            }
+            if to == flag_off && from > rebuild {
+                to = rebuild;
+            }
+        }
+        Some((from, to))
+    };
     // `to > from` on a hard edge means the dependency is scheduled *after*
     // the dependent — never true for a real DAG edge, so it only fires
     // inside a genuine hard cycle; recorded into `hard_cycle_edges` below.
     let mut build_blockers: Vec<Vec<usize>> = vec![Vec::new(); plan.len()];
+    if let Some((flag_off, rebuild, _)) = split_at {
+        build_blockers[rebuild].push(flag_off);
+    }
     let mut hard_cycle_edges: Vec<(Cpv, Cpv)> = Vec::new();
     for e in &edges {
         let hard = matches!(e.class, DepClass::Depend | DepClass::Bdepend);
         if !hard && !matches!(e.class, DepClass::Rdepend) {
             continue;
         }
-        let (Some(&from), Some(&to)) = (index_of.get(&e.from.0), index_of.get(&e.to.0)) else {
+        let Some((from, to)) = endpoints(e) else {
             continue;
         };
         if to < from && !build_blockers[from].contains(&to) {

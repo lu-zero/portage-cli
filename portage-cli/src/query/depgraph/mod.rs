@@ -249,6 +249,8 @@ pub struct DepgraphOpts<'a> {
     /// offers that non-interactively via `--autounmask-write`.
     pub ask: bool,
     pub autosolve_use: bool,
+    /// Build one package twice, flag off then on, to open a cycle no order satisfies
+    pub cycle_split: bool,
     /// Widened candidate supply (`--autounmask`-style): masked/unkeyworded
     /// versions stay visible to the solver, tagged and strictly tiered below
     /// accepted ones. Two-phase internally — the solve first runs strict and
@@ -456,6 +458,7 @@ fn resolve(
         root_deps_rdeps: prepared.root_deps_rdeps,
         onlydeps: prepared.onlydeps,
         autosolve_use: prepared.autosolve_use,
+        cycle_split: prepared.cycle_split,
         host_config_stage: prepared.host_config_stage,
         autounmask_widen: prepared.autounmask_widen,
         use_reinstall_mode: prepared.use_reinstall_mode,

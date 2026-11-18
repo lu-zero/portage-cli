@@ -192,9 +192,10 @@ impl InstallOrderResult {
         splits
     }
 
-    /// This order again with `candidate`'s flag-gated edges dropped, and where its flag-on rebuild goes
+    /// This order again with `candidate`'s flag-gated edges dropped, and its flag-on rebuild inserted
     ///
-    /// `None` when none of the package's edges carries the flag.
+    /// The rebuild goes right after the last package those edges need. `None` when none of the package's edges
+    /// carries the flag.
     pub fn split(&self, candidate: &SplitCandidate) -> Option<SplitOrder> {
         let gated =
             |e: &DepEdge| e.from == candidate.package && e.via_use_flag == Some(candidate.flag);
@@ -207,7 +208,7 @@ impl InstallOrderResult {
         );
         let position =
             |node: &(PortagePackage, Version)| reordered.order.iter().position(|n| n == node);
-        let after = dropped
+        let last_dep = dropped
             .iter()
             .filter(|e| {
                 matches!(
@@ -215,13 +216,16 @@ impl InstallOrderResult {
                     DepClass::Depend | DepClass::Bdepend | DepClass::Rdepend
                 )
             })
-            .filter_map(|e| Some((position(&e.to)?, e.to.clone())))
-            .max_by_key(|(i, _)| *i)?
-            .1;
+            .filter_map(|e| position(&e.to))
+            .max()?;
+        let rebuild = last_dep.max(position(&candidate.package)?) + 1;
+        let remaining = reordered.cycle_splits();
+        let mut order = reordered.order;
+        order.insert(rebuild, candidate.package.clone());
         Some(SplitOrder {
-            remaining: reordered.cycle_splits(),
-            order: reordered.order,
-            after,
+            order,
+            rebuild,
+            remaining,
         })
     }
 }
@@ -229,10 +233,10 @@ impl InstallOrderResult {
 /// An install order with one package built twice, flag off and then flag on; see [`InstallOrderResult::split`]
 #[derive(Debug, Clone)]
 pub struct SplitOrder {
-    /// The order with the package at its flag-off position; the rebuild is not in it
+    /// The order, listing the package at its flag-off position and again at `rebuild`
     pub order: Vec<(PortagePackage, Version)>,
-    /// The last package the flag-gated edges need, which the flag-on rebuild must follow
-    pub after: (PortagePackage, Version),
+    /// Where the flag-on rebuild sits in `order`
+    pub rebuild: usize,
     /// The cycles the order still breaks with the flag off
     pub remaining: Vec<CycleSplit>,
 }
@@ -2087,8 +2091,8 @@ mod tests {
             .iter()
             .map(|(p, _)| p.cpn().package.as_str())
             .collect();
-        assert_eq!(names, ["ul", "bdc", "dxsl", "po4a"]);
-        assert_eq!(split.after.0.cpn().package.as_str(), "po4a");
+        assert_eq!(names, ["ul", "bdc", "dxsl", "po4a", "ul"]);
+        assert_eq!(split.rebuild, 4);
     }
 
     #[test]

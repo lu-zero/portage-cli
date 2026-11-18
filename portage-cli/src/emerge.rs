@@ -613,6 +613,7 @@ async fn emerge_atoms_inner(
         // never prompt.
         ask: merge_flags.ask && !cli.pretend(),
         autosolve_use: merge_flags.autosolve_use,
+        cycle_split: merge_flags.cycle_split,
         autounmask_widen: autounmask_widen || cli.target().is_some() || cross_alias_targets,
         roots: &roots,
         host_merge_root: host_roots.merge_root(),

@@ -8,12 +8,12 @@ use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
     CededFlag, DepEdge, GraphStats, InstallOrderResult, InstalledPolicy, MergeRoot,
-    PortageDependencyProvider, PortagePackage, PortageVersionSet,
+    PortageDependencyProvider, PortagePackage, PortageVersionSet, SplitCandidate, SplitOrder,
 };
-use portage_resolve::{bdepend_trim, depend_trim, repo, root_closure, subslot};
+use portage_resolve::{bdepend_trim, cycle_split, depend_trim, repo, root_closure, subslot};
 
 use super::solve::Solved;
-use super::{RoundCtx, RoundOutcome};
+use super::{RoundCtx, RoundOutcome, SplitBuild};
 use crate::query::depgraph::{
     ResolveMetrics, apply_order_filters, best_rebuild_version, installed_as_solved,
     target_conflicts, widened_autounmask_candidates,
@@ -60,11 +60,20 @@ impl RoundCtx<'_> {
         let (reinstall_cpns, upgrades) = rebuild_sets(&provider);
 
         let install_order_start = Instant::now();
+        let mut ordered = provider.install_order_with_stats(&solution);
+        let split = if self.cycle_split {
+            self.split_cycle(&ordered, &policy, &ceded)
+        } else {
+            None
+        };
+        if let Some((split, _)) = &split {
+            ordered.order = split.order.clone();
+        }
         let InstallOrderResult {
             order: graph_order,
             edges,
             stats,
-        } = provider.install_order_with_stats(&solution);
+        } = ordered;
         // Every selected real package, `virtual/*` included: the trims need the RDEPEND of
         // packages the display then drops as already installed.
         let full_order: Order = graph_order
@@ -110,6 +119,7 @@ impl RoundCtx<'_> {
         }
         let slot_op_cpns = self.slot_operator_rebuilds(&mut order);
         let (order, closure_blockers) = self.root_closures(order, &adapter);
+        let split_build = split.and_then(|(_, candidate)| survived(&order, candidate));
 
         // Decided before anything is printed, so the repair loop can run another round.
         let (proposed, dep_conflicts) = target_conflicts(
@@ -137,8 +147,54 @@ impl RoundCtx<'_> {
             proposed,
             exclude_omitted,
             resume_omitted,
+            split_build,
             round_metrics: metrics,
         }
+    }
+
+    /// The first split candidate, best first, whose flag-off build orders a cycle no order satisfies
+    fn split_cycle(
+        &self,
+        ordered: &InstallOrderResult,
+        policy: &repo::ResolvePolicy<'_>,
+        ceded: &[CededFlag],
+    ) -> Option<(SplitOrder, SplitCandidate)> {
+        let splits = ordered.cycle_splits();
+        let mut tried: Vec<&SplitCandidate> = Vec::new();
+        for candidate in splits.iter().flat_map(|s| &s.candidates) {
+            if tried.contains(&candidate) {
+                continue;
+            }
+            tried.push(candidate);
+            let (pkg, ver) = &candidate.package;
+            let verdict = cycle_split::check(self.data, &ordered.order, policy, ceded, candidate)
+                .map_err(|r| format!("{r:?}"))
+                .and_then(|()| {
+                    let split = ordered.split(candidate).ok_or("no flag-gated edge")?;
+                    if split.remaining.len() >= splits.len() {
+                        return Err("the cycle stays".to_string());
+                    }
+                    cycle_split::check_order(self.data, &split, candidate)
+                        .map_err(|r| format!("{r:?}"))?;
+                    Ok(split)
+                });
+            match verdict {
+                Ok(split) => {
+                    tracing::info!(
+                        "splitting {pkg}-{ver}: built with -{} first",
+                        candidate.flag
+                    );
+                    return Some((split, candidate.clone()));
+                }
+                Err(why) => {
+                    tracing::info!("not splitting {pkg}-{ver} on {}: {why}", candidate.flag)
+                }
+            }
+        }
+        if !splits.is_empty() {
+            tracing::info!("{} dependency cycle edge(s) left unsplit", splits.len());
+        }
+        None
     }
 
     /// The selected packages that need merging, at their upgrade version when one was recorded
@@ -291,6 +347,14 @@ impl RoundCtx<'_> {
         blockers.extend(base_plan.blockers);
         (base_plan.order, blockers)
     }
+}
+
+/// The split, when both builds of its package are still in the trimmed `order`
+fn survived(order: &Order, candidate: SplitCandidate) -> Option<SplitBuild> {
+    (order.iter().filter(|n| **n == candidate.package).count() == 2).then_some(SplitBuild {
+        package: candidate.package,
+        flag: candidate.flag,
+    })
 }
 
 /// `package.use` plus the values the solver chose for ceded `REQUIRED_USE` flags

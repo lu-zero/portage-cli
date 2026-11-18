@@ -1041,6 +1041,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         // never prompts.
         ask: false,
         autosolve_use: false,
+        cycle_split: false,
         autounmask_widen: false,
         roots: &roots,
         host_merge_root: host_roots.merge_root(),
