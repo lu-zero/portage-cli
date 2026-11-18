@@ -249,6 +249,22 @@ impl Cli {
         }
     }
 
+    /// The `--local` directory the dispatched applet names that `em setup --local` hasn't configured
+    ///
+    /// `setup` and `active` are exempt: one creates the configuration, the other only registers a path.
+    pub(crate) fn unconfigured_local(&self) -> Option<camino::Utf8PathBuf> {
+        if matches!(self.applet, Some(Applet::Setup(_) | Applet::Active(_))) {
+            return None;
+        }
+        let local = self.applet_topology()?.local?;
+        let dir = if local.is_empty() {
+            crate::xdg::home().join(".gentoo")
+        } else {
+            camino::Utf8PathBuf::from(local)
+        };
+        (!dir.join("etc/portage/make.conf").is_file()).then_some(dir)
+    }
+
     /// The dispatched applet's own `--root`, if it carries one at all
     /// ([`RootedTopology`] applets only — `Crossdev`/`Active` have no root
     /// field to bind to, which is what keeps `--root` a hard parse error for
@@ -1197,6 +1213,25 @@ mod tests {
         ]);
         let r = cli.roots();
         assert_eq!(r.merge_root(), cli.host_roots().merge_root());
+    }
+
+    #[test]
+    fn a_local_prefix_without_setup_is_reported() {
+        let (_tmp, _g) = crate::test_support::isolate_active_state();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+        let cli = emerge(["--local", path, "-p", "sys-libs/zlib"]);
+        assert_eq!(
+            cli.unconfigured_local().as_deref().map(|d| d.as_str()),
+            Some(path)
+        );
+
+        std::fs::create_dir_all(dir.path().join("etc/portage")).unwrap();
+        std::fs::write(dir.path().join("etc/portage/make.conf"), "").unwrap();
+        assert_eq!(cli.unconfigured_local(), None);
+
+        let prefix = emerge(["--prefix", path, "-p", "sys-libs/zlib"]);
+        assert_eq!(prefix.unconfigured_local(), None);
     }
 
     // The actual guard: bare `--local`, bare `--prefix`, and bare host all

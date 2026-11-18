@@ -35,6 +35,11 @@ pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     if info_wins(cli) {
         return crate::info::run(cli).await;
     }
+    if let Some(dir) = cli.unconfigured_local() {
+        anyhow::bail!(
+            "{dir} is not set up as a --local prefix; run `em setup --local {dir}` first"
+        );
+    }
     // `run_async` takes the applet by value; accessors still read `cli.applet`.
     match cli.applet.clone() {
         Some(applet) => applet.run_async(cli).await,

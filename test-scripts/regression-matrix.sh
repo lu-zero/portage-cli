@@ -142,8 +142,10 @@ gdbm_line=$(sbx "grep -n 'sys-libs/gdbm' $LOCAL_LOG | head -1 | cut -d: -f1")
 elt_line=$(sbx "grep -n 'app-portage/elt-patches' $LOCAL_LOG | head -1 | cut -d: -f1")
 if [[ -n "$cycles" && "$cycles" != "0" ]]; then
     record "toolchain --setup --local" FAIL "$cycles hard-dependency cycle(s) on a bootstrapped --local root — SCC repair regressed (see $LOCAL_LOG)"
-elif [[ -z "$gdbm_line" || -z "$elt_line" || "$gdbm_line" -le "$elt_line" ]]; then
-    record "toolchain --setup --local" FAIL "gdbm/elt-patches ordering regressed (SCC tie-break bug back?)"
+elif [[ -n "$(sbx "grep -l 'is not set up as a --local prefix' $LOCAL_LOG")" ]]; then
+    record "toolchain --setup --local" FAIL "bootstrap_local left the root unconfigured (see $LOCAL_LOG)"
+elif [[ -n "$gdbm_line" && -n "$elt_line" && "$gdbm_line" -le "$elt_line" ]]; then
+    record "toolchain --setup --local" FAIL "gdbm planned before elt-patches (SCC tie-break bug back?)"
 else
     # Cycles are gone and the ordering guard holds. Any remaining preflight
     # failure is a genuine unmet dependency, not a phantom — report the detail
