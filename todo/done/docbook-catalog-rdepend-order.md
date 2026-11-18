@@ -1,5 +1,7 @@
 # `app-text/build-docbook-catalog` RDEPEND ordering (unconfirmed real impact)
 
+Resolved 2026-11-18 by the split build ([[cycle-break-use-split]]): the docbook postinsts pass on a fresh `--local` root.
+
 2026-11-18: confirmed to break a real build. In a `--local` bootstrap `docbook-xsl-stylesheets`' `pkg_postinst` dies (`build-docbook-catalog` not installed yet).
 Cause: the cycle `docbook-xsl-stylesheets` -R-> `build-docbook-catalog` -R-> `util-linux` -B-> `po4a` -B-> `docbook-xsl-stylesheets` (util-linux `nls`).
 No order is valid; em drops the first RDEPEND edge. `build-docbook-catalog`'s RDEPEND is `|| ( util-linux app-misc/getopt )`; em takes the first branch.

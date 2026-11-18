@@ -236,8 +236,8 @@ carry an effort estimate.
   rows may only be the bare run's packages in the shared `/` VDB. Open until a
   `--prefix` run on an empty `/` shows `N`:
   [[crossdev-prefix-spurious-os-headers-blocker]]
-- 🔴 **A hard dependency cycle with no alternative is not broken by a split build** (flag off, build, flag on). Live case: `docbook-xsl-stylesheets` →
-  `build-docbook-catalog` → `util-linux` →(nls) `po4a` → `docbook-xsl-stylesheets` kills the stylesheets' `pkg_postinst` on `--local`. Designed, not started: [[cycle-break-use-split]]
+- ✅ **Hard dependency cycles open with a split build** (flag off, build, flag on), on by default (`--cycle-split=n` to opt out). The live
+  docbook case (`util-linux` `-nls -pam -su`) merged 98/98 on a fresh `--local` root, 2026-11-18: [[cycle-break-use-split]]
 - ✅ **`toolchain --prefix --setup` passes** (2026-11-18, `EXIT=0`, 44-package perl closure then binutils, glibc, gcc). Two fixes: native kernel
   headers merge right after baselayout (a gcc in the python/perl closure is configured `--with-sysroot=${EPREFIX}` and sees no host headers), and
   `sys-apps/portage` is built `USE=build` in `native_toolchain_package_use()` (its `pkg_preinst` upgrade scripts need an installed prefix).

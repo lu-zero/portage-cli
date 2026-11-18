@@ -1,6 +1,8 @@
 # Break a hard dependency cycle by building a package twice: flag off, then flag on
 
-Status: 🔴 designed, not started. Found 2026-11-18 on `em toolchain --local --setup` ([[docbook-catalog-rdepend-order]]).
+Status: ✅ landed 2026-11-18, on by default (`9b1f466b`); a full fresh `--local` docbook run merged 98/98 with the rebuild.
+Found 2026-11-18 on `em toolchain --local --setup` ([[docbook-catalog-rdepend-order]]). Still open, tracked here: Host nodes taking target
+USE (§5), the cycle-aware `||` choice track, and the build-shell variables reset each phase (PATH, TERM, DISTDIR, …).
 Written from an Opus plan and a Fable adversarial review; nothing here was built or run. The review's unverified items were checked against the code on 2026-11-18; the findings are inline.
 
 ## Problem
