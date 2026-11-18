@@ -1662,7 +1662,9 @@ impl EbuildShell {
         self.set_var("DISTDIR", &distdir);
         self.set_var("PORTAGE_RO_DISTDIRS", &ro.join(" "));
 
-        // Pass through build-tool variables from the caller's environment.
+        // Pass through build-tool variables from the caller's environment, before the
+        // package's first phase only: later phases keep what an earlier one changed (PMS 11.2).
+        let first_phase = self.phase_sourced_ebuild.is_none();
         for var in &[
             "MAKEOPTS",
             "CFLAGS",
@@ -1678,7 +1680,7 @@ impl EbuildShell {
             "STRIP",
             "PKG_CONFIG",
         ] {
-            if let Ok(val) = std::env::var(var) {
+            if first_phase && let Ok(val) = std::env::var(var) {
                 self.set_var(var, &val);
             }
         }

@@ -1016,6 +1016,24 @@ async fn cross_toolchain_selection_no_op_when_tool_unreachable() {
     assert!(shell.get_var("CC").unwrap_or_default().is_empty());
 }
 
+// A package's later phases keep what an earlier phase did to a build-tool variable, even when the
+// caller's environment sets it too (PMS 11.2).
+#[tokio::test]
+async fn env_passthrough_does_not_undo_a_phase_change() {
+    // SAFETY: nextest runs each test in its own process; nothing else reads MAKEOPTS meanwhile.
+    unsafe { std::env::set_var("MAKEOPTS", "-j8") };
+    let dir = tempdir().unwrap();
+    let mut shell = minimal_shell(dir.path()).await;
+
+    shell.init_build_env().await.unwrap();
+    assert_eq!(shell.get_var("MAKEOPTS").as_deref(), Some("-j8"));
+
+    shell.set_var("MAKEOPTS", "-j8 EPREFIX=/p");
+    shell.phase_sourced_ebuild = Some(Utf8PathBuf::from("/r/cat/pkg/pkg-1.ebuild"));
+    shell.init_build_env().await.unwrap();
+    assert_eq!(shell.get_var("MAKEOPTS").as_deref(), Some("-j8 EPREFIX=/p"));
+}
+
 // Do not set `PKG_CONFIG` to a missing `${chost}-pkg-config` just because
 // `${chost}-gcc` exists — leave it unset so `tc-getPKG_CONFIG` can fall back.
 #[tokio::test]
