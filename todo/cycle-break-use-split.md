@@ -153,6 +153,13 @@ second cycle through an already split package adds its flags to that build. Sand
 No cycle left unsplit; the only `order_ok: false` edges are the `output.rs` keying artifact and the unrelated PDEPEND.
 The build takes `PlannedMerge.use_flags` (`merge/mod.rs`), so a real merge would build the first copy flag-off. Not yet run for real.
 
+## First real merge (2026-11-18, sandbox `em-cycle-split`)
+
+`env GENTOO_MIRRORS=http://distfiles.gentoo.org MAKEOPTS=-j8 em --local /var/tmp/lt --cycle-split --jobs 4 app-text/docbook-xsl-stylesheets`:
+76 of 103 merged, then `app-text/opensp-1.5.2-r10` failed (entry 70), before any split package. Not a split problem: the ebuild's
+`export CONFIG_SHELL=${BASH}` gets an empty value, because brush sets `$BASH` from its shell name (`wellknownvars.rs`), not a bash path.
+autoconf 2.59's `SHELL=${CONFIG_SHELL-/bin/sh}` then substitutes `SHELL=''` (config.log), and make runs `-c`. Blocks the run until fixed.
+
 ## Tests
 
 - Unit, `portage-atom-pubgrub/src/provider/tests.rs` (`InMemoryRepository`): dxsl R bdc; bdc R `|| ( util-linux getopt )` with getopt absent (genuinely absent,
