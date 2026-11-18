@@ -49,38 +49,37 @@ Done in `d4f0d78f` as `InstallOrderResult::cycle_splits()`, called on demand rat
 - A candidate is a `(package, version, f)` whose `f`-gated edges, dropped, cut every path that closes the cycle; a flag that leaves another
   path closed is not one. A witness with no candidate is still returned, for the "say so" message.
 - Ranking: build-time edges first, then package key (`{pkg}-{ver}`), then flag. "Fewest nodes the split adds" is not knowable in the graph
-  layer; if it matters, step 3 ranks by it after solving phase A.
+  layer; if it matters, rank by it after the re-order (§3).
 - Witnesses are per backwards edge, so the three docbook consumers of `build-docbook-catalog` give three witnesses with one candidate; dedupe in step 3.
 - Mechanism 1's `via_choice` edge field (below) is independent; this piece only needs `via_use_flag`.
 
 ### 2. Validate the flag (new `portage-resolve/src/cycle_split.rs`)
 
 Turning `f` off for `P` is allowed only if all of these hold, else try the next candidate; with none left keep today's plan and say so.
-`cycle_split::check` (`02150913`) covers the first three, before any re-solve; the last two need phase A's solve (§3):
+`cycle_split::check` (`02150913`) covers the first three; the last two are checked on the re-ordered plan (§3):
 
 - `f` is not pinned by `use.force`/`use.mask` (`effective_use::pinned_flags`). "Not `-f` already" needs no check: an edge gated by `f` exists
   only while `f` is on.
 - No REQUIRED_USE group newly fails with `f` off. A group the plan already fails is left out, since it is reported on its own.
 - `P` sits at one merge root in the plan (see §5, cross builds).
-- After phase A, `P` really has `f` off: the cosolve fixpoint turns it back on when something demands `P[f]`.
-- After phase A, `cycle_splits()` on its order no longer lists the cycle, and lists no new one. This also covers the `!f? ( … )` dependencies
-  the flag-off build gains.
+- No package between the two builds demands `P[f]`.
+- The re-ordered plan has fewer `cycle_splits()`.
+- `P` has no `!f? ( … )` dependency outside the solution: the flag-off build would need a package nobody solved for.
 
-### 3. Build the two-phase plan (`portage-cli/src/query/depgraph/round/{solve,plan}.rs`)
+### 3. Split the node in the install order (`graph.rs`, `round/plan.rs`)
 
-- Where: in `solve_round` (`round.rs`), between `ctx.solve` and `ctx.shape_plan`, not inside `resolve_with_repairs`. The install order and edges come from
-  `install_order_with_stats` in `shape_plan` (`round/plan.rs`), after the solve and its pin loop have finished, so there is no pin-loop interleaving.
-  A different `package_use` is a different `ProviderKey`, so phase A is a fresh `ctx.solve` that runs the whole cosolve fixpoint and pin loop itself.
-- Phase A: `ctx.solve` with `=cpv -f` appended to the base `package_use` that `cosolve_use_deps` starts from. The fixpoint appends forced `[f]` entries
-  after the base, so a `P[f]` demand turns the flag back on without any error. After the solve, check that `P`'s solved USE really has `f` off. If not, reject
-  the candidate. This check replaces a separate `UseDemand` pre-check.
-- Phase B: solve the original targets again with phase A's packages as a synthetic installed overlay (the same shape as the `provided_avail` →
-  `InstalledVersion` injection in `build_provider`). It lists only `P(+f)` and the new closure (po4a), ordered after phase A, `reinstall = true`.
-- Concatenate A then B.
-- Bound it: at most one split per cycle, `MAX_CYCLE_SPLITS` overall, accepted only when the cycle's bad-edge count drops; otherwise revert and reject that candidate.
-- Performance: detection reads the edges `shape_plan` already builds, so a plan without a witness costs nothing extra. A split costs two more full solves
-  (A and B), each with its own provider build. Measure with `portage-bench` / `bench-em-vs-emerge.sh`. The detection step needs the order before
-  `shape_plan` trims it, so split `shape_plan` or have it return the witness rather than computing the order twice.
+Revised 2026-11-18, as an experiment: no second solve. The two-solve shape (phase A with `=cpv -f` in `package_use`, phase B over a synthetic installed
+overlay) needed every assembly step to handle two providers, solutions and policies: `RoundOutcome` and `assemble.rs`'s single `final_policy` assume one.
+The normal solve already holds every package the final plan needs (util-linux with `nls`, po4a); only the order is wrong.
+
+- Order again with `P`'s `f`-gated edges removed. `P` stays one node, the flag-off build.
+- Insert the flag-on rebuild of `P` right after the last package its `f`-gated edges point to; its other deps already precede the first build.
+- Accept only when the re-ordered plan has fewer `cycle_splits()` than before.
+- Reject the candidate when the order cannot express the split: `P` has `!f? ( … )` deps outside the solution (util-linux has none for `nls`),
+  or a package placed between the two builds has a `P[f]` USE dependency.
+- The flag-off entry's USE is `final_policy`'s minus `f`, so `cycle_split::check`'s REQUIRED_USE test is evaluated on the right set.
+- Cost: one extra ordering pass when a split happens. Candidates needing packages the normal solve did not pick are rejected, not re-solved;
+  if real cases need that, the re-solve comes back.
 
 ### 4. Plan identity: the same package appears twice
 
@@ -92,12 +91,12 @@ These key by `PortagePackage` or `(pkg, version)` and must key by plan index or 
   `order_ok` per phase.
 - `resume_completed: HashSet<(MergeRoot, String)>` (filtered in `depgraph/mod.rs:716`): the rebuild must not be skipped on resume. The `String` is a CPV;
   make it `Cpv` while changing the key.
-- `--jobs`: phase B waits for all of phase A.
+- `--jobs`: the rebuild waits for everything before it that its `f`-gated deps need, like any entry.
 - Display: the `USE="-nls" (bootstrap, rebuilt below)` marker and the totals.
 - VDB: a same-version replace, the existing `[R]` path.
 - Binpkg: no change needed, provided each `PlannedMerge.use_flags` holds its own phase's USE. Reuse (`find_binpkg_reuse` → `use_compatible` in
   `portage-binpkg/src/index.rs`) requires USE∩IUSE to match, and `--buildpkg` writes a new build-id instance (`reserve_container`).
-  The `-f` binpkg is never picked for the `+f` rebuild, and a later bootstrap can reuse it for its own phase A.
+  The `-f` binpkg is never picked for the `+f` rebuild, and a later bootstrap can reuse it for its own flag-off build.
 - `preflight.rs` already evaluates `use_flags` per entry, so duplicates work there.
 - `DepEdge` is public in a publishable crate, and `output.rs` builds it as a struct literal, so any new field changes both.
 
@@ -108,7 +107,7 @@ These key by `PortagePackage` or `(pkg, version)` and must key by plan index or 
   Code reading confirms Host nodes take all their plan-time USE from the target's config: `host_native_deps` (`provider/solve.rs` ~556) only re-stamps
   the Target `VersionData`, and the plan's `use_flags` come from the one `final_policy` (`assemble.rs` ~454). That contradicts `root-topology.md`
   ("builds against BROOT's config"). It is a separate gap, not fixed here; what USE the Host build actually gets at merge time was not traced.
-- A sub-slot change between the two builds triggers slot-operator rebuilds in phase B.
+- A sub-slot change between the two builds triggers slot-operator rebuilds after the flag-on rebuild.
 - `--root-deps=rdeps` drops the DEPEND edges, so the feature stays idle there: correct.
 - `package.provided` nodes have no edges, so they never appear in a witness.
 - The toolchain staged plan needs no change in `crossdev/`. Each step goes through `crate::emerge_atoms` (`crossdev/mod.rs` ~486) and the normal depgraph,
@@ -131,7 +130,7 @@ These key by `PortagePackage` or `(pkg, version)` and must key by plan index or 
    one phase it would be an unused parameter.
 2. feat(pubgrub): cycle witness with candidate `(package, version, flag)` edges (done, `d4f0d78f`).
 3. feat(resolve): `cycle_split.rs` validation (done, `02150913`).
-4. feat(cli): the two-phase solve and concatenation, behind a flag at first, plus edge lookup per phase slice (own phase first, then earlier ones).
+4. feat: the order split (`graph.rs`) and its use in `shape_plan`, behind a hidden flag at first, plus edge lookup that tells the two entries apart.
 5. feat(cli): display, JSON, resume, jobs and binpkg handling.
 6. perf: order cache reuse in `shape_plan`, if the bench shows a cost.
 7. docs: `docs/design/architecture.md` (resolution stages, divergences), the user docs for the new row marker, and this file moved to `todo/done/`.
