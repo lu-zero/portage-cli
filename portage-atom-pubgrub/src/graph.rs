@@ -192,16 +192,12 @@ impl InstallOrderResult {
         splits
     }
 
-    /// This order again with each candidate's flag-gated edges dropped, and a flag-on rebuild inserted per candidate
+    /// This order again with each build's flag-gated edges dropped, and a flags-on rebuild inserted per build
     ///
-    /// Each rebuild goes right after the last package its dropped edges need. `None` when a candidate has no
-    /// edge carrying its flag.
-    pub fn split(&self, candidates: &[SplitCandidate]) -> Option<SplitOrder> {
-        let gated = |e: &DepEdge| {
-            candidates
-                .iter()
-                .any(|c| e.from == c.package && e.via_use_flag == Some(c.flag))
-        };
+    /// Each rebuild goes right after the last package its dropped edges need. `None` when a build has no
+    /// edge carrying one of its flags.
+    pub fn split(&self, builds: &[SplitBuild]) -> Option<SplitOrder> {
+        let gated = |e: &DepEdge| builds.iter().any(|b| b.gates(e));
         let (dropped, kept): (Vec<DepEdge>, Vec<DepEdge>) =
             self.edges.iter().cloned().partition(|e| gated(e));
         let reordered = order_graph(
@@ -211,11 +207,11 @@ impl InstallOrderResult {
         );
         let position =
             |node: &(PortagePackage, Version)| reordered.order.iter().position(|n| n == node);
-        let mut inserts: Vec<(usize, usize)> = Vec::with_capacity(candidates.len());
-        for (i, c) in candidates.iter().enumerate() {
+        let mut inserts: Vec<(usize, usize)> = Vec::with_capacity(builds.len());
+        for (i, c) in builds.iter().enumerate() {
             let last_dep = dropped
                 .iter()
-                .filter(|e| e.from == c.package && e.via_use_flag == Some(c.flag))
+                .filter(|e| c.gates(e))
                 .filter(|e| {
                     matches!(
                         e.class,
@@ -231,9 +227,9 @@ impl InstallOrderResult {
         // From the back, so earlier insert points stay valid; a later candidate goes after an earlier one at the same point.
         inserts.sort_unstable();
         for &(at, i) in inserts.iter().rev() {
-            order.insert(at, candidates[i].package.clone());
+            order.insert(at, builds[i].package.clone());
         }
-        let mut rebuilds = vec![0; candidates.len()];
+        let mut rebuilds = vec![0; builds.len()];
         for (shift, &(at, i)) in inserts.iter().enumerate() {
             rebuilds[i] = at + shift;
         }
@@ -245,12 +241,28 @@ impl InstallOrderResult {
     }
 }
 
-/// An install order with packages built twice, flag off and then flag on; see [`InstallOrderResult::split`]
+/// A package built twice: first with `flags` off, then again with them on
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SplitBuild {
+    /// The package built twice
+    pub package: (PortagePackage, Version),
+    /// The flags off in the first build: the candidate's own, then any its `REQUIRED_USE` turns off with it
+    pub flags: Vec<Interned<DefaultInterner>>,
+}
+
+impl SplitBuild {
+    /// Whether `edge` is one of the package's own, gated by one of the flags
+    pub fn gates(&self, edge: &DepEdge) -> bool {
+        edge.from == self.package && edge.via_use_flag.is_some_and(|f| self.flags.contains(&f))
+    }
+}
+
+/// An install order with packages built twice, flags off and then on; see [`InstallOrderResult::split`]
 #[derive(Debug, Clone)]
 pub struct SplitOrder {
     /// The order, listing each split package at its flag-off position and again at its rebuild
     pub order: Vec<(PortagePackage, Version)>,
-    /// Where each candidate's flag-on rebuild sits in `order`, in candidate order
+    /// Where each build's flags-on rebuild sits in `order`, in the order of the builds
     pub rebuilds: Vec<usize>,
     /// The cycles the order still breaks with the flags off
     pub remaining: Vec<CycleSplit>,
@@ -2099,9 +2111,11 @@ mod tests {
     fn splitting_orders_the_cycle_and_places_the_rebuild_after_the_gated_deps() {
         let result = docbook_cycle(deps("", "nls? ( app-text/po4a )"));
         let candidate = result.cycle_splits()[0].candidates[0].clone();
-        let split = result
-            .split(std::slice::from_ref(&candidate))
-            .expect("ul has nls-gated edges");
+        let build = SplitBuild {
+            package: candidate.package,
+            flags: vec![candidate.flag],
+        };
+        let split = result.split(&[build]).expect("ul has nls-gated edges");
         assert!(split.remaining.is_empty(), "{:?}", split.remaining);
         let names: Vec<&str> = split
             .order
@@ -2137,15 +2151,16 @@ mod tests {
         let solution = provider.resolve_targets(targets.to_vec()).unwrap();
         let result = provider.install_order_with_stats(&solution);
 
-        let candidates: Vec<SplitCandidate> = result
+        let builds: Vec<SplitBuild> = result
             .cycle_splits()
             .into_iter()
-            .map(|s| s.candidates[0].clone())
+            .map(|s| SplitBuild {
+                package: s.candidates[0].package.clone(),
+                flags: vec![s.candidates[0].flag],
+            })
             .collect();
-        assert_eq!(candidates.len(), 2);
-        let split = result
-            .split(&candidates)
-            .expect("both have nls-gated edges");
+        assert_eq!(builds.len(), 2);
+        let split = result.split(&builds).expect("both have nls-gated edges");
         assert!(split.remaining.is_empty(), "{:?}", split.remaining);
         let names: Vec<&str> = split
             .order

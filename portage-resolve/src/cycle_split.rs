@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, DepEntry, UseDepKind, Version};
-use portage_atom_pubgrub::{CededFlag, PortagePackage, SplitCandidate, SplitOrder};
-use portage_metadata::CacheEntry;
+use portage_atom_pubgrub::{CededFlag, PortagePackage, SplitBuild, SplitCandidate, SplitOrder};
+use portage_metadata::{CacheEntry, RequiredUseExpr};
 
 use crate::effective_use::{effective_use, pinned_flags};
 use crate::repo::{RepoData, ResolvePolicy, find_cache};
@@ -14,28 +14,31 @@ use crate::required_use::unmet_groups;
 pub enum Rejection {
     /// The profile's `use.force`/`use.mask` pins the flag
     Pinned,
-    /// `REQUIRED_USE` fails with the flag off; the failing groups, rendered
+    /// `REQUIRED_USE` fails with the flags off, and turning more off cannot fix it; the failing groups, rendered
     RequiredUse(Vec<String>),
     /// The plan has the package at another merge root too, and one `package.use` entry would reach both
     OtherMergeRoot,
     /// The flag-off build needs a `!flag? ( … )` dependency on a package the solve did not pick
     Unsolved(Cpn),
-    /// A package merged between the two builds depends on the flag being on
+    /// A package merged between the two builds depends on one of the flags being on
     Demanded(Cpv),
 }
 
-/// Whether `candidate` can be built with its flag off, judged before any re-solve
+/// The flags `candidate`'s package can be built with off, its own first, judged on the plan's order
 ///
-/// What the flag-off build pulls in, and whether a `[flag]` USE dependency turns the flag back on,
-/// is only known after solving with it, so the caller checks those on that solve.
+/// When turning a flag off breaks a `x? ( … )` `REQUIRED_USE` group, `x` goes off too, unless it is pinned.
 pub fn check(
     data: &RepoData,
     order: &[(PortagePackage, Version)],
     policy: &ResolvePolicy,
     ceded: &[CededFlag],
     candidate: &SplitCandidate,
-) -> Result<(), Rejection> {
+) -> Result<SplitBuild, Rejection> {
     let (pkg, ver) = &candidate.package;
+    let mut build = SplitBuild {
+        package: candidate.package.clone(),
+        flags: vec![candidate.flag],
+    };
     if order
         .iter()
         .any(|(p, v)| p.cpn() == pkg.cpn() && v == ver && p.merge_root() != pkg.merge_root())
@@ -43,50 +46,75 @@ pub fn check(
         return Err(Rejection::OtherMergeRoot);
     }
     let Some(cache) = find_cache(data, pkg, ver) else {
-        return Ok(());
+        return Ok(build);
     };
     let cpv = Cpv::new(*pkg.cpn(), ver.clone());
     let stable = policy
         .accept_keywords
         .is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
-    if pinned_flags(policy, pkg, ver, cache, stable).contains(&candidate.flag) {
+    let pinned = pinned_flags(policy, pkg, ver, cache, stable);
+    if pinned.contains(&candidate.flag) {
         return Err(Rejection::Pinned);
     }
     let Some(required_use) = cache.metadata.required_use.as_ref() else {
-        return Ok(());
+        return Ok(build);
     };
     let effective = effective_use(policy, pkg, ver, cache, stable, ceded);
-    // A group the plan already fails is reported on its own; only what turning the flag off breaks counts.
-    let before = unmet_groups(required_use, cache, &effective, None);
-    let mut unmet = unmet_groups(required_use, cache, &effective, Some(candidate.flag));
-    unmet.retain(|g| !before.contains(g));
-    if unmet.is_empty() {
-        Ok(())
-    } else {
-        Err(Rejection::RequiredUse(unmet))
+    // A group the plan already fails is reported on its own; only what turning flags off breaks counts.
+    let before = unmet_groups(required_use, cache, &effective, &[]);
+    loop {
+        let broken: Vec<&RequiredUseExpr> =
+            unmet_groups(required_use, cache, &effective, &build.flags)
+                .into_iter()
+                .filter(|g| !before.contains(g))
+                .collect();
+        if broken.is_empty() {
+            return Ok(build);
+        }
+        let more: Vec<Interned<DefaultInterner>> = broken
+            .iter()
+            .filter_map(|g| match g {
+                RequiredUseExpr::UseConditional {
+                    flag,
+                    negated: false,
+                    ..
+                } => Some(Interned::intern(flag)),
+                _ => None,
+            })
+            .filter(|f| !build.flags.contains(f) && !pinned.contains(f))
+            .collect();
+        if more.is_empty() {
+            return Err(Rejection::RequiredUse(
+                broken.iter().map(|g| g.to_string()).collect(),
+            ));
+        }
+        for f in more {
+            if !build.flags.contains(&f) {
+                build.flags.push(f);
+            }
+        }
     }
 }
 
-/// Whether the re-ordered `split` can build `candidate` with its flag off until its rebuild at `rebuild`
+/// Whether the re-ordered `split` can build `build` with its flags off until its rebuild at `rebuild`
 pub fn check_order(
     data: &RepoData,
     split: &SplitOrder,
     rebuild: usize,
-    candidate: &SplitCandidate,
+    build: &SplitBuild,
 ) -> Result<(), Rejection> {
-    let (pkg, ver) = &candidate.package;
-    let flag = candidate.flag;
+    let (pkg, ver) = &build.package;
     let planned: HashSet<Cpn> = split.order.iter().map(|(p, _)| *p.cpn()).collect();
     if let Some(cache) = find_cache(data, pkg, ver) {
-        let mut flag_off_deps = Vec::new();
+        let mut flags_off_deps = Vec::new();
         for entry in dep_lists(cache) {
-            negated_atoms(entry, flag, false, &mut flag_off_deps);
+            negated_atoms(entry, &build.flags, false, &mut flags_off_deps);
         }
-        if let Some(dep) = flag_off_deps.iter().find(|d| !planned.contains(&d.cpn)) {
+        if let Some(dep) = flags_off_deps.iter().find(|d| !planned.contains(&d.cpn)) {
             return Err(Rejection::Unsolved(dep.cpn));
         }
     }
-    let Some(first) = split.order.iter().position(|n| *n == candidate.package) else {
+    let Some(first) = split.order.iter().position(|n| *n == build.package) else {
         return Ok(());
     };
     for (other, other_ver) in split.order.get(first + 1..rebuild).unwrap_or_default() {
@@ -99,7 +127,7 @@ pub fn check_order(
         }
         if atoms
             .iter()
-            .any(|d| d.cpn == *pkg.cpn() && wants_flag(d, flag))
+            .any(|d| d.cpn == *pkg.cpn() && build.flags.iter().any(|&f| wants_flag(d, f)))
         {
             return Err(Rejection::Demanded(Cpv::new(
                 *other.cpn(),
@@ -117,10 +145,10 @@ fn dep_lists(cache: &CacheEntry) -> impl Iterator<Item = &DepEntry> {
         .flat_map(|list| list.list().iter())
 }
 
-/// Atoms under a `!flag? ( … )` group, which apply only once `flag` is off
+/// Atoms under a `!flag? ( … )` group for one of `flags`, which apply only once it is off
 fn negated_atoms<'a>(
     entry: &'a DepEntry,
-    flag: Interned<DefaultInterner>,
+    flags: &[Interned<DefaultInterner>],
     inside: bool,
     out: &mut Vec<&'a Dep>,
 ) {
@@ -128,13 +156,13 @@ fn negated_atoms<'a>(
         DepEntry::Atom(dep) if inside && dep.blocker.is_none() => out.push(dep),
         DepEntry::Atom(_) => {}
         DepEntry::UseConditional {
-            flag: f,
+            flag,
             negate,
             children,
         } => {
-            let inside = inside || (*negate && *f == flag);
+            let inside = inside || (*negate && flags.contains(flag));
             for child in children {
-                negated_atoms(child, flag, inside, out);
+                negated_atoms(child, flags, inside, out);
             }
         }
         DepEntry::AllOf(children)
@@ -142,7 +170,7 @@ fn negated_atoms<'a>(
         | DepEntry::ExactlyOneOf(children)
         | DepEntry::AtMostOneOf(children) => {
             for child in children {
-                negated_atoms(child, flag, inside, out);
+                negated_atoms(child, flags, inside, out);
             }
         }
     }
@@ -247,17 +275,30 @@ mod tests {
         (pkg, Version::parse("1").unwrap())
     }
 
+    /// The flags `sys-apps/ul-1`'s first build turns off for an `nls` split, by name
     fn check_nls(
         data: &RepoData,
         policy: &ResolvePolicy,
         order: &[(PortagePackage, Version)],
-    ) -> Result<(), Rejection> {
+    ) -> Result<Vec<&'static str>, Rejection> {
         let candidate = SplitCandidate {
             package: ul(MergeRoot::Target),
             flag: Interned::intern("nls"),
             build_time: true,
         };
-        check(data, order, policy, &[], &candidate)
+        let build = check(data, order, policy, &[], &candidate)?;
+        Ok(build
+            .flags
+            .iter()
+            .map(|f| -> &'static str { Box::leak(f.as_str().into()) })
+            .collect())
+    }
+
+    fn forcing(flag: &str) -> ForceMask {
+        ForceMask::one(ForceMaskLayer {
+            use_force: fold_signed(vec![flag.into()]),
+            ..Default::default()
+        })
     }
 
     #[test]
@@ -265,33 +306,53 @@ mod tests {
         let order = [ul(MergeRoot::Target)];
         assert_eq!(
             check_nls(&data("+nls", ""), &policy(ForceMask::default()), &order),
-            Ok(())
+            Ok(vec!["nls"])
         );
     }
 
     #[test]
     fn a_forced_flag_is_pinned() {
-        let force_mask = ForceMask::one(ForceMaskLayer {
-            use_force: fold_signed(vec!["nls".into()]),
-            ..Default::default()
-        });
         let order = [ul(MergeRoot::Target)];
         assert_eq!(
-            check_nls(&data("+nls", ""), &policy(force_mask), &order),
+            check_nls(&data("+nls", ""), &policy(forcing("nls")), &order),
             Err(Rejection::Pinned)
         );
     }
 
     #[test]
-    fn required_use_broken_by_the_flag_rejects_it() {
+    fn a_flag_whose_conditional_group_needs_it_goes_off_too() {
+        let order = [ul(MergeRoot::Target)];
+        let data = data("+nls +doc +man", "doc? ( nls ) man? ( doc )");
+        assert_eq!(
+            check_nls(&data, &policy(ForceMask::default()), &order),
+            Ok(vec!["nls", "doc", "man"])
+        );
+    }
+
+    #[test]
+    fn a_pinned_flag_its_group_would_turn_off_rejects_the_split() {
         let order = [ul(MergeRoot::Target)];
         let result = check_nls(
             &data("+nls +doc", "doc? ( nls )"),
+            &policy(forcing("doc")),
+            &order,
+        );
+        assert!(
+            matches!(&result, Err(Rejection::RequiredUse(g)) if g.len() == 1),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_group_no_flag_off_can_satisfy_rejects_the_split() {
+        let order = [ul(MergeRoot::Target)];
+        let result = check_nls(
+            &data("+nls doc", "|| ( nls doc )"),
             &policy(ForceMask::default()),
             &order,
         );
         assert!(
-            matches!(&result, Err(Rejection::RequiredUse(groups)) if groups.len() == 1),
+            matches!(&result, Err(Rejection::RequiredUse(g)) if g.len() == 1),
             "{result:?}"
         );
     }
@@ -305,7 +366,7 @@ mod tests {
                 &policy(ForceMask::default()),
                 &order
             ),
-            Ok(())
+            Ok(vec!["nls"])
         );
     }
 
@@ -338,12 +399,11 @@ mod tests {
     }
 
     fn check_ul(data: &RepoData, split: &SplitOrder) -> Result<(), Rejection> {
-        let candidate = SplitCandidate {
+        let build = SplitBuild {
             package: node("sys-apps/ul-1"),
-            flag: Interned::intern("nls"),
-            build_time: true,
+            flags: vec![Interned::intern("nls")],
         };
-        check_order(data, split, split.rebuilds[0], &candidate)
+        check_order(data, split, split.rebuilds[0], &build)
     }
 
     #[test]

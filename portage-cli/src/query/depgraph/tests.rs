@@ -25,6 +25,7 @@ struct Pkg {
     bdepend: &'static str,
     iuse: &'static str,
     slot: &'static str,
+    required_use: &'static str,
 }
 
 struct Fix {
@@ -83,6 +84,9 @@ fn cache_text(pkg: &Pkg) -> String {
     }
     if !pkg.bdepend.is_empty() {
         text.push_str(&format!("BDEPEND={}\n", pkg.bdepend));
+    }
+    if !pkg.required_use.is_empty() {
+        text.push_str(&format!("REQUIRED_USE={}\n", pkg.required_use));
     }
     text
 }
@@ -243,6 +247,7 @@ fn pair() -> Vec<Pkg> {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
         Pkg {
             cpv: "app-misc/bar-1",
@@ -252,6 +257,7 @@ fn pair() -> Vec<Pkg> {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
     ]
 }
@@ -269,6 +275,7 @@ fn pinned_consumer() -> Vec<Pkg> {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
         Pkg {
             cpv: "app-misc/bar-2",
@@ -278,6 +285,7 @@ fn pinned_consumer() -> Vec<Pkg> {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
         Pkg {
             cpv: "app-misc/consumer-1",
@@ -287,6 +295,7 @@ fn pinned_consumer() -> Vec<Pkg> {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
         Pkg {
             cpv: "app-misc/consumer-2",
@@ -296,6 +305,7 @@ fn pinned_consumer() -> Vec<Pkg> {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
     ]
 }
@@ -310,6 +320,7 @@ fn masked_dep() -> Vec<Pkg> {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
         Pkg {
             cpv: "app-misc/masked-1",
@@ -319,6 +330,7 @@ fn masked_dep() -> Vec<Pkg> {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
     ]
 }
@@ -416,6 +428,7 @@ fn plain(cpv: &'static str, depend: &'static str, iuse: &'static str) -> Pkg {
         bdepend: "",
         iuse,
         slot: "0",
+        required_use: "",
     }
 }
 
@@ -672,6 +685,7 @@ fn flagged() -> Vec<Pkg> {
         bdepend: "",
         iuse,
         slot: "0",
+        required_use: "",
     };
     vec![
         pkg("app-misc/flagged-1", "foo"),
@@ -728,6 +742,7 @@ fn a_target_use_requirement_no_version_has_is_unsatisfiable() {
 fn a_target_sub_slot_pins_the_version() {
     let subslotted = |cpv, slot| Pkg {
         slot,
+        required_use: "",
         ..plain(cpv, "", "")
     };
     let pkgs = [
@@ -783,6 +798,7 @@ fn every_fatal_unsatisfiable_target_is_reported() {
             bdepend: "",
             iuse: "foo",
             slot: "0",
+            required_use: "",
         },
         Pkg {
             cpv: "app-misc/gone-1",
@@ -792,6 +808,7 @@ fn every_fatal_unsatisfiable_target_is_reported() {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
     ];
     let fix = fixture(&pkgs, &[]);
@@ -1051,6 +1068,7 @@ fn a_masked_installed_package_is_reported_when_nothing_replaces_it() {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
         Pkg {
             cpv: "app-misc/bar-1",
@@ -1060,6 +1078,7 @@ fn a_masked_installed_package_is_reported_when_nothing_replaces_it() {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
     ];
     let fix = fixture(&pkgs, &[]);
@@ -1084,6 +1103,7 @@ fn a_masked_installed_package_is_not_reported_when_its_slot_is_upgraded() {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
         Pkg {
             cpv: "app-misc/bar-1",
@@ -1093,6 +1113,7 @@ fn a_masked_installed_package_is_not_reported_when_its_slot_is_upgraded() {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
         Pkg {
             cpv: "app-misc/bar-2",
@@ -1102,6 +1123,7 @@ fn a_masked_installed_package_is_not_reported_when_its_slot_is_upgraded() {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
     ];
     let fix = fixture(&pkgs, &[]);
@@ -1133,6 +1155,7 @@ fn a_masked_installed_package_in_another_slot_is_not_reported() {
             bdepend: "",
             iuse: "",
             slot: "0",
+            required_use: "",
         },
         Pkg {
             cpv: "app-misc/bar-1",
@@ -1142,6 +1165,7 @@ fn a_masked_installed_package_in_another_slot_is_not_reported() {
             bdepend: "",
             iuse: "",
             slot: "1",
+            required_use: "",
         },
     ];
     let fix = fixture(&pkgs, &[]);
@@ -1200,6 +1224,7 @@ fn a_blocked_package_only_the_installed_record_still_needs_is_unmerged() {
         bdepend: "",
         iuse: "",
         slot: "0",
+        required_use: "",
     };
     let fix = fixture(
         &[
@@ -1224,6 +1249,7 @@ fn a_blocked_package_only_the_installed_record_still_needs_is_unmerged() {
 fn deep_without_update_keeps_an_installed_any_slot_choice() {
     let slotted = |cpv, slot| Pkg {
         slot,
+        required_use: "",
         ..plain(cpv, "", "")
     };
     let pkgs = [
@@ -1286,6 +1312,7 @@ fn docbook_cycle() -> Vec<Pkg> {
         bdepend,
         iuse,
         slot: "0",
+        required_use: "",
     };
     vec![
         pkg("app-text/dxsl-1", "app-text/bdc", "", ""),
@@ -1366,6 +1393,7 @@ fn cycle_split_opens_two_independent_cycles() {
                 bdepend: leak(bdepend),
                 iuse,
                 slot: "0",
+                required_use: "",
             };
             [
                 pkg("top", format!("app-misc/{p}mid"), String::new(), ""),
@@ -1408,4 +1436,55 @@ fn cycle_split_opens_two_independent_cycles() {
         };
         assert!(!has_nls(first) && has_nls(rebuild), "{names:?}");
     }
+}
+
+#[test]
+fn cycle_split_turns_off_the_flags_required_use_ties_to_the_split_flag() {
+    let mut pkgs = docbook_cycle();
+    let ul = pkgs.iter_mut().find(|p| p.cpv == "sys-apps/ul-1").unwrap();
+    ul.depend = "pam? ( sys-libs/pam )";
+    ul.iuse = "+nls +pam +su";
+    ul.required_use = "su? ( pam )";
+    pkgs.push(Pkg {
+        cpv: "sys-libs/pam-1",
+        bdepend: "app-text/ns",
+        ..plain("sys-libs/pam-1", "", "")
+    });
+    pkgs.push(Pkg {
+        rdepend: "app-text/bdc",
+        ..plain("app-text/ns-1", "", "")
+    });
+    let fix = fixture(&pkgs, &[]);
+    let atoms = [
+        TargetAtom::explicit("app-text/dxsl"),
+        TargetAtom::explicit("app-text/ns"),
+    ];
+    let outcome = solve(
+        &fix,
+        Solve {
+            cycle_split: true,
+            ..Solve::new(&atoms)
+        },
+    );
+    let names = names(&outcome);
+    let at = |n: &str| names.iter().position(|x| x == n).unwrap();
+    let first = at("sys-apps/ul-1");
+    let rebuild = names.iter().rposition(|n| n == "sys-apps/ul-1").unwrap();
+    assert!(
+        first < at("app-text/bdc-1") && at("app-text/bdc-1") < at("app-text/ns-1"),
+        "{names:?}"
+    );
+    assert!(
+        at("sys-libs/pam-1") < rebuild && at("app-text/po4a-1") < rebuild,
+        "{names:?}"
+    );
+    let flags = |i: usize| -> Vec<&str> {
+        outcome.plan[i]
+            .use_flags
+            .iter()
+            .map(|f| f.as_str())
+            .collect()
+    };
+    assert!(flags(first).is_empty(), "{:?}", flags(first));
+    assert_eq!(flags(rebuild), ["nls", "pam", "su"]);
 }

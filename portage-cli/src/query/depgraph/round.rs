@@ -7,7 +7,6 @@ use gentoo_core::UseToken;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
     CededFlag, DepEdge, MergeRoot, PortageDependencyProvider, PortagePackage, PortageVersionSet,
@@ -111,17 +110,9 @@ pub(super) struct RoundOutcome {
     pub(super) proposed: Vec<conflicts::ProposedPkg>,
     pub(super) exclude_omitted: usize,
     pub(super) resume_omitted: usize,
-    /// The packages `order` lists twice: first built with their flag off, then again with it on
-    pub(super) split_builds: Vec<SplitBuild>,
+    /// The packages `order` lists twice: first built with their flags off, then again with them on
+    pub(super) split_builds: Vec<portage_atom_pubgrub::SplitBuild>,
     pub(super) round_metrics: ResolveMetrics,
-}
-
-/// A package the plan builds twice to open a dependency cycle no order satisfies
-#[derive(Debug, Clone)]
-pub(super) struct SplitBuild {
-    pub(super) package: (PortagePackage, Version),
-    /// Off in the first build, on in the rebuild
-    pub(super) flag: Interned<DefaultInterner>,
 }
 
 impl RoundCtx<'_> {

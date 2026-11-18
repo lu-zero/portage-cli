@@ -8,12 +8,13 @@ use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
     CededFlag, DepEdge, GraphStats, InstallOrderResult, InstalledPolicy, MergeRoot,
-    PortageDependencyProvider, PortagePackage, PortageVersionSet, SplitCandidate, SplitOrder,
+    PortageDependencyProvider, PortagePackage, PortageVersionSet, SplitBuild, SplitCandidate,
+    SplitOrder,
 };
 use portage_resolve::{bdepend_trim, cycle_split, depend_trim, repo, root_closure, subslot};
 
 use super::solve::Solved;
-use super::{RoundCtx, RoundOutcome, SplitBuild};
+use super::{RoundCtx, RoundOutcome};
 use crate::query::depgraph::{
     ResolveMetrics, apply_order_filters, best_rebuild_version, installed_as_solved,
     target_conflicts, widened_autounmask_candidates,
@@ -119,10 +120,10 @@ impl RoundCtx<'_> {
         }
         let slot_op_cpns = self.slot_operator_rebuilds(&mut order);
         let (order, closure_blockers) = self.root_closures(order, &adapter);
-        let split_builds = split.map_or_else(Vec::new, |(_, accepted)| {
+        let split_builds: Vec<SplitBuild> = split.map_or_else(Vec::new, |(_, accepted)| {
             accepted
                 .into_iter()
-                .filter_map(|c| survived(&order, c))
+                .filter(|b| survived(&order, b))
                 .collect()
         });
 
@@ -163,9 +164,9 @@ impl RoundCtx<'_> {
         ordered: &InstallOrderResult,
         policy: &repo::ResolvePolicy<'_>,
         ceded: &[CededFlag],
-    ) -> Option<(SplitOrder, Vec<SplitCandidate>)> {
+    ) -> Option<(SplitOrder, Vec<SplitBuild>)> {
         const MAX_CYCLE_SPLITS: usize = 8;
-        let mut accepted: Vec<SplitCandidate> = Vec::new();
+        let mut accepted: Vec<SplitBuild> = Vec::new();
         let mut split = None;
         let mut cycles = ordered.cycle_splits();
         while accepted.len() < MAX_CYCLE_SPLITS {
@@ -174,22 +175,25 @@ impl RoundCtx<'_> {
                 .iter()
                 .flat_map(|s| &s.candidates)
                 .find_map(|candidate| {
-                    if tried.contains(&candidate)
-                        || accepted.iter().any(|a| a.package == candidate.package)
-                    {
+                    let split_already = accepted.iter().any(|a| {
+                        a.package == candidate.package && a.flags.contains(&candidate.flag)
+                    });
+                    if tried.contains(&candidate) || split_already {
                         return None;
                     }
                     tried.push(candidate);
                     let (pkg, ver) = &candidate.package;
-                    let mut with = accepted.clone();
-                    with.push(candidate.clone());
-                    match self.try_split(ordered, policy, ceded, &with, cycles.len()) {
-                        Ok(split) => {
+                    match self.try_split(ordered, policy, ceded, &accepted, candidate, cycles.len())
+                    {
+                        Ok((with, split)) => {
+                            let build = with.iter().find(|b| b.package == candidate.package)?;
+                            let flags: Vec<String> =
+                                build.flags.iter().map(|f| format!("-{f}")).collect();
                             tracing::info!(
-                                "splitting {pkg}-{ver}: built with -{} first",
-                                candidate.flag
+                                "splitting {pkg}-{ver}: built with {} first",
+                                flags.join(" ")
                             );
-                            Some((candidate.clone(), split))
+                            Some((with, split))
                         }
                         Err(why) => {
                             tracing::info!(
@@ -200,10 +204,10 @@ impl RoundCtx<'_> {
                         }
                     }
                 });
-            let Some((candidate, next)) = next else {
+            let Some((with, next)) = next else {
                 break;
             };
-            accepted.push(candidate);
+            accepted = with;
             cycles = next.remaining.clone();
             split = Some(next);
         }
@@ -213,29 +217,41 @@ impl RoundCtx<'_> {
         split.map(|split| (split, accepted))
     }
 
-    /// `ordered` split on every candidate in `with`, if the last one passes and the cycle count drops below `cycles`
+    /// `ordered` split on `accepted` plus `candidate`, if that passes and the cycle count drops below `cycles`
+    ///
+    /// A candidate on an already split package adds its flags to that package's first build.
     fn try_split(
         &self,
         ordered: &InstallOrderResult,
         policy: &repo::ResolvePolicy<'_>,
         ceded: &[CededFlag],
-        with: &[SplitCandidate],
+        accepted: &[SplitBuild],
+        candidate: &SplitCandidate,
         cycles: usize,
-    ) -> Result<SplitOrder, String> {
-        if let Some(candidate) = with.last() {
-            cycle_split::check(self.data, &ordered.order, policy, ceded, candidate)
-                .map_err(|r| format!("{r:?}"))?;
+    ) -> Result<(Vec<SplitBuild>, SplitOrder), String> {
+        let build = cycle_split::check(self.data, &ordered.order, policy, ceded, candidate)
+            .map_err(|r| format!("{r:?}"))?;
+        let mut with = accepted.to_vec();
+        match with.iter_mut().find(|b| b.package == build.package) {
+            Some(same) => {
+                for f in build.flags {
+                    if !same.flags.contains(&f) {
+                        same.flags.push(f);
+                    }
+                }
+            }
+            None => with.push(build),
         }
-        let split = ordered.split(with).ok_or("no flag-gated edge")?;
+        let split = ordered.split(&with).ok_or("no flag-gated edge")?;
         if split.remaining.len() >= cycles {
             return Err("the cycle stays".to_string());
         }
         // Re-ordering moves every rebuild, so each earlier split is checked again.
-        for (candidate, &rebuild) in with.iter().zip(&split.rebuilds) {
-            cycle_split::check_order(self.data, &split, rebuild, candidate)
+        for (build, &rebuild) in with.iter().zip(&split.rebuilds) {
+            cycle_split::check_order(self.data, &split, rebuild, build)
                 .map_err(|r| format!("{r:?}"))?;
         }
-        Ok(split)
+        Ok((with, split))
     }
 
     /// The selected packages that need merging, at their upgrade version when one was recorded
@@ -390,12 +406,9 @@ impl RoundCtx<'_> {
     }
 }
 
-/// The split, when both builds of its package are still in the trimmed `order`
-fn survived(order: &Order, candidate: SplitCandidate) -> Option<SplitBuild> {
-    (order.iter().filter(|n| **n == candidate.package).count() == 2).then_some(SplitBuild {
-        package: candidate.package,
-        flag: candidate.flag,
-    })
+/// Whether both builds of `build`'s package are still in the trimmed `order`
+fn survived(order: &Order, build: &SplitBuild) -> bool {
+    order.iter().filter(|n| **n == build.package).count() == 2
 }
 
 /// `package.use` plus the values the solver chose for ceded `REQUIRED_USE` flags

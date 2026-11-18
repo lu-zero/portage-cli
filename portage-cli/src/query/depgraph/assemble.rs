@@ -449,9 +449,9 @@ pub(super) fn assemble(
         let name = repo::repo_name_of(&data, cpv);
         set.by_name(name.as_str()).unwrap_or(set.main())
     };
-    // `(flag-off build, rebuild, flag)`, as indices into the non-virtual entries that `plan`, `index_of` and
+    // `(flags-off build, rebuild, flags)`, as indices into the non-virtual entries that `plan`, `index_of` and
     // `build_blockers` share.
-    let split_at: Vec<(usize, usize, Interned<DefaultInterner>)> = split_builds
+    let split_at: Vec<(usize, usize, &[Interned<DefaultInterner>])> = split_builds
         .iter()
         .filter_map(|s| {
             let mut at = plan_entries
@@ -460,7 +460,7 @@ pub(super) fn assemble(
                 .enumerate()
                 .filter(|(_, e)| (&e.pkg, &e.version) == (&s.package.0, &s.package.1))
                 .map(|(i, _)| i);
-            Some((at.next()?, at.next()?, s.flag))
+            Some((at.next()?, at.next()?, s.flags.as_slice()))
         })
         .collect();
     let plan: Vec<PlannedMerge> = plan_entries
@@ -489,8 +489,8 @@ pub(super) fn assemble(
                 effective_use::apply_ceded(&mut effective, *cpn, &ceded);
                 (Vec::new(), Vec::new(), effective.enabled_flags())
             };
-            if let Some(&(_, _, flag)) = split_at.iter().find(|(off, _, _)| *off == index) {
-                flags.retain(|f| *f != flag);
+            if let Some(&(_, _, off)) = split_at.iter().find(|(at, _, _)| *at == index) {
+                flags.retain(|f| !off.contains(f));
             }
             flags.sort_by(|a, b| a.as_str().cmp(b.as_str()));
             flags.dedup();
@@ -550,8 +550,8 @@ pub(super) fn assemble(
     let endpoints = |e: &DepEdge| -> Option<(usize, usize)> {
         let mut from = *index_of.get(&e.from.0)?;
         let mut to = *index_of.get(&e.to.0)?;
-        for &(flag_off, rebuild, flag) in &split_at {
-            if from == flag_off && e.via_use_flag == Some(flag) {
+        for &(flag_off, rebuild, flags) in &split_at {
+            if from == flag_off && e.via_use_flag.is_some_and(|f| flags.contains(&f)) {
                 from = rebuild;
             }
             if to == flag_off && from > rebuild {

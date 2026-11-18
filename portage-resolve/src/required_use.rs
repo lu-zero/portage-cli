@@ -46,7 +46,10 @@ pub fn find_violations(
             .is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
         let effective = effective_use(policy, pkg, ver, cache, stable, ceded);
 
-        let unsatisfied = unmet_groups(required_use, cache, &effective, None);
+        let unsatisfied: Vec<String> = unmet_groups(required_use, cache, &effective, &[])
+            .iter()
+            .map(|g| g.to_string())
+            .collect();
         if !unsatisfied.is_empty() {
             out.push(RequiredUseViolation { cpv, unsatisfied });
         }
@@ -54,22 +57,18 @@ pub fn find_violations(
     out
 }
 
-/// The `REQUIRED_USE` groups `effective` leaves unsatisfied, rendered, with `off` turned off
-pub(crate) fn unmet_groups(
-    required_use: &RequiredUseExpr,
+/// The top-level `REQUIRED_USE` groups `effective` leaves unsatisfied once the `off` flags are turned off
+pub(crate) fn unmet_groups<'a>(
+    required_use: &'a RequiredUseExpr,
     cache: &CacheEntry,
     effective: &UseConfig,
-    off: Option<Interned<DefaultInterner>>,
-) -> Vec<String> {
+    off: &[Interned<DefaultInterner>],
+) -> Vec<&'a RequiredUseExpr> {
     // `effective` already has this package's IUSE defaults folded in, so
     // an unset flag is simply Disabled — no fallback needed.
     let enabled = |flag: &str| -> bool {
         let flag = Interned::intern(flag);
-        off != Some(flag) && matches!(effective.get(flag), UseFlagState::Enabled)
+        !off.contains(&flag) && matches!(effective.get(flag), UseFlagState::Enabled)
     };
-    required_use
-        .unsatisfied_groups(&enabled, cache.metadata.eapi.empty_any_of_matches())
-        .iter()
-        .map(|e| e.to_string())
-        .collect()
+    required_use.unsatisfied_groups(&enabled, cache.metadata.eapi.empty_any_of_matches())
 }
