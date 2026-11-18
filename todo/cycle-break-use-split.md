@@ -114,6 +114,18 @@ These key by `PortagePackage` or `(pkg, version)` and must key by plan index or 
   so the split applies per step. A step's `use_override` is a make.conf-layer USE, and the split's `package.use` entry overrides it.
   `--nodeps` steps never build a graph, so they never split.
 
+## First live run (2026-11-18, `4943646a`)
+
+`em -p -v --cycle-split --local /var/tmp/local-test app-text/docbook-xsl-stylesheets`: profile set, empty VDB, no `package.provided` seed,
+so it is not the bootstrapped root the docbook failure came from. 225 packages; eight genuine hard cycles remain (glibc ↔ gcc, xz ↔ elt-patches, …),
+which the toolchain steps and `package.provided` handle, not this feature.
+
+- The split fired, on `dev-libs/libxslt` with `-crypt`, not on the docbook cycle: only the first accepted candidate is applied per plan, and the
+  witnesses come in edge order. Several cycles need several splits, so `MAX_CYCLE_SPLITS` is needed after all.
+- Rejections looked right: `elibc_glibc` on `virtual/libcrypt` and `libgcrypt` is `Pinned`; `python_targets_python3_14` on
+  `meson-format-array` fails `REQUIRED_USE`.
+- Both libxslt rows display `USE="crypt"`: the display path computes USE on its own (step 5).
+
 ## Tests
 
 - Unit, `portage-atom-pubgrub/src/provider/tests.rs` (`InMemoryRepository`): dxsl R bdc; bdc R `|| ( util-linux getopt )` with getopt absent (genuinely absent,
@@ -130,7 +142,7 @@ These key by `PortagePackage` or `(pkg, version)` and must key by plan index or 
    one phase it would be an unused parameter.
 2. feat(pubgrub): cycle witness with candidate `(package, version, flag)` edges (done, `d4f0d78f`).
 3. feat(resolve): `cycle_split.rs` validation (done, `02150913`).
-4. feat: the order split (`graph.rs`) and its use in `shape_plan`, behind a hidden flag at first, plus edge lookup that tells the two entries apart.
+4. feat: the order split (`graph.rs`) and its use in `shape_plan`, behind a hidden flag at first, plus edge lookup that tells the two entries apart\n   (done: `081b72c5`, `09120502`, `4943646a`; one split per plan so far).
 5. feat(cli): display, JSON, resume, jobs and binpkg handling.
 6. perf: order cache reuse in `shape_plan`, if the bench shows a cost.
 7. docs: `docs/design/architecture.md` (resolution stages, divergences), the user docs for the new row marker, and this file moved to `todo/done/`.
