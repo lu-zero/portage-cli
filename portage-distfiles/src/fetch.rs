@@ -185,6 +185,8 @@ impl Fetcher {
         // portage's default wget/curl FETCHCOMMAND always identifies itself.
         let client = reqwest::Client::builder()
             .user_agent(concat!("em/", env!("CARGO_PKG_VERSION")))
+            // SourceForge answers a mirror hop that carries the redirect's Referer with its HTML download page.
+            .referer(false)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
