@@ -16,8 +16,10 @@ use crate::cli::Cli;
 /// Portage's defaults for a host install; a prefix has none of its own yet
 const MAKE_GLOBALS: &str = "/usr/share/portage/config/make.globals";
 
-/// The globals layer without a make.globals: what em does by default that a switch can turn off
-const EM_GLOBALS: &str = "FEATURES=\"preserve-libs\"\n";
+/// The globals layer without a make.globals: what em does by default that a switch can turn off,
+/// and the `GENTOO_MIRRORS` default make.globals ships
+const EM_GLOBALS: &str =
+    "FEATURES=\"preserve-libs\"\nGENTOO_MIRRORS=\"http://distfiles.gentoo.org\"\n";
 
 /// The profile stack of `config_root`, its user profiles included; `None` without a `make.profile`
 pub(crate) fn profile_stack(
@@ -318,6 +320,49 @@ mod tests {
         assert_eq!(
             provided_features("test", false, true),
             "binpkg-multi-instance test"
+        );
+    }
+
+    async fn mirrors_with(conf: &str) -> Option<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "").unwrap();
+        std::fs::create_dir_all(root.join("profiles/test")).unwrap();
+        let repo = Repository::builder().in_memory_cache().open(root).unwrap();
+        let stack = ProfileStack::build(root.join("profiles/test")).unwrap();
+        let confs = [ConfSource::Str(conf)];
+        let mut shell = repo.shell().await.unwrap();
+        let settings = Settings::evaluate(
+            &mut shell,
+            SettingsSources {
+                stack: &stack,
+                env_d: None,
+                globals: Some(ConfSource::Str(EM_GLOBALS)),
+                confs: &confs,
+                env: &Environment::default(),
+            },
+        )
+        .await
+        .unwrap();
+        settings.get("GENTOO_MIRRORS").map(str::to_owned)
+    }
+
+    #[tokio::test]
+    async fn gentoo_mirrors_default_applies_unless_make_conf_sets_it() {
+        assert_eq!(
+            mirrors_with("").await.as_deref(),
+            Some("http://distfiles.gentoo.org")
+        );
+        assert_eq!(
+            mirrors_with("GENTOO_MIRRORS=\"https://m.example/gentoo\"\n")
+                .await
+                .as_deref(),
+            Some("https://m.example/gentoo")
+        );
+        assert_eq!(
+            mirrors_with("GENTOO_MIRRORS=\"\"\n").await.as_deref(),
+            Some("")
         );
     }
 
