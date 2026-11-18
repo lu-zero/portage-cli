@@ -10,6 +10,7 @@ mod tests;
 pub use portage_atom_pubgrub::MergeRoot;
 pub(crate) mod output;
 mod package_use;
+mod plan_index;
 mod targets;
 
 pub use targets::{TargetAtom, TargetOrigin};

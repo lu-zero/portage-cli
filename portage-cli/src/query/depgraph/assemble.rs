@@ -2,12 +2,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv};
-use portage_atom_pubgrub::{DepClass, DepEdge, MergeRoot, PortagePackage, UseFlagRequirement};
+use portage_atom_pubgrub::{DepClass, MergeRoot, PortagePackage, UseFlagRequirement};
 
 use portage_resolve::{conflicts, download_size, effective_use, repo, required_use, root_aware};
 
+use super::plan_index::PlanIndex;
 use super::prepare::Prepared;
 use super::{
     AutounmaskPersist, DepgraphOutcome, PlannedMerge, ResolveMetrics, Resolved,
@@ -236,6 +236,7 @@ pub(super) fn assemble(
         resolve_secs,
         selected: &selected,
         requested: &root_cpns,
+        splits: &split_builds,
     };
 
     // Computed before the plan prints so a plan that cannot be merged as it stands is always shown:
@@ -259,7 +260,7 @@ pub(super) fn assemble(
                 output::print_pretty_rooted(&pretty_ctx, &plan_entries, &cross)
             }
             DepgraphFormat::Json => {
-                output::print_json(&data, &order, &edges, &installed, &flag_reqs)?
+                output::print_json(&data, &order, &edges, &installed, &flag_reqs, &split_builds)?
             }
             DepgraphFormat::Tree => {
                 let roots: Vec<_> = root_pkgs
@@ -449,20 +450,14 @@ pub(super) fn assemble(
         let name = repo::repo_name_of(&data, cpv);
         set.by_name(name.as_str()).unwrap_or(set.main())
     };
-    // `(flags-off build, rebuild, flags)`, as indices into the non-virtual entries that `plan`, `index_of` and
-    // `build_blockers` share.
-    let split_at: Vec<(usize, usize, &[Interned<DefaultInterner>])> = split_builds
-        .iter()
-        .filter_map(|s| {
-            let mut at = plan_entries
-                .iter()
-                .filter(|e| !e.pkg.is_virtual())
-                .enumerate()
-                .filter(|(_, e)| (&e.pkg, &e.version) == (&s.package.0, &s.package.1))
-                .map(|(i, _)| i);
-            Some((at.next()?, at.next()?, s.flags.as_slice()))
-        })
-        .collect();
+    // Over the non-virtual entries, which `plan` and `build_blockers` index too.
+    let plan_index = PlanIndex::new(
+        plan_entries
+            .iter()
+            .filter(|e| !e.pkg.is_virtual())
+            .map(|e| &e.pkg),
+        &split_builds,
+    );
     let plan: Vec<PlannedMerge> = plan_entries
         .iter()
         .filter(|e| !e.pkg.is_virtual())
@@ -489,7 +484,7 @@ pub(super) fn assemble(
                 effective_use::apply_ceded(&mut effective, *cpn, &ceded);
                 (Vec::new(), Vec::new(), effective.enabled_flags())
             };
-            if let Some(&(_, _, off)) = split_at.iter().find(|(at, _, _)| *at == index) {
+            if let Some(off) = plan_index.flags_off(index) {
                 flags.retain(|f| !off.contains(f));
             }
             flags.sort_by(|a, b| a.as_str().cmp(b.as_str()));
@@ -538,34 +533,12 @@ pub(super) fn assemble(
     // Keyed by the full `PortagePackage` (carries slot), not `(MergeRoot,
     // Cpn)` alone: a CPN present at two slots would otherwise collapse to
     // "last wins", which can misreport a satisfied edge as backwards.
-    let mut index_of: HashMap<PortagePackage, usize> = HashMap::new();
-    for (i, entry) in plan_entries
-        .iter()
-        .filter(|e| !e.pkg.is_virtual())
-        .enumerate()
-    {
-        index_of.entry(entry.pkg.clone()).or_insert(i);
-    }
-    // The twice-built package's flag-gated edges belong to its rebuild, and so do dependents placed after it.
-    let endpoints = |e: &DepEdge| -> Option<(usize, usize)> {
-        let mut from = *index_of.get(&e.from.0)?;
-        let mut to = *index_of.get(&e.to.0)?;
-        for &(flag_off, rebuild, flags) in &split_at {
-            if from == flag_off && e.via_use_flag.is_some_and(|f| flags.contains(&f)) {
-                from = rebuild;
-            }
-            if to == flag_off && from > rebuild {
-                to = rebuild;
-            }
-        }
-        Some((from, to))
-    };
     // `to > from` on a hard edge means the dependency is scheduled *after*
     // the dependent — never true for a real DAG edge, so it only fires
     // inside a genuine hard cycle; recorded into `hard_cycle_edges` below.
     let mut build_blockers: Vec<Vec<usize>> = vec![Vec::new(); plan.len()];
-    for &(flag_off, rebuild, _) in &split_at {
-        build_blockers[rebuild].push(flag_off);
+    for (flags_off, rebuild) in plan_index.split_pairs() {
+        build_blockers[rebuild].push(flags_off);
     }
     let mut hard_cycle_edges: Vec<(Cpv, Cpv)> = Vec::new();
     for e in &edges {
@@ -573,7 +546,7 @@ pub(super) fn assemble(
         if !hard && !matches!(e.class, DepClass::Rdepend) {
             continue;
         }
-        let Some((from, to)) = endpoints(e) else {
+        let Some((from, to)) = plan_index.endpoints(e) else {
             continue;
         };
         if to < from && !build_blockers[from].contains(&to) {
@@ -589,7 +562,7 @@ pub(super) fn assemble(
     // `root_closure`'s blocker-only edges, which already point strictly
     // backwards; same guard as the real-edge loop above, kept for symmetry.
     for (from_pkg, to_pkg) in &closure_blockers {
-        let (Some(&from), Some(&to)) = (index_of.get(from_pkg), index_of.get(to_pkg)) else {
+        let (Some(from), Some(to)) = (plan_index.get(from_pkg), plan_index.get(to_pkg)) else {
             continue;
         };
         if to < from && !build_blockers[from].contains(&to) {

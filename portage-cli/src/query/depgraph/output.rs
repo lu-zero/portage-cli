@@ -58,6 +58,7 @@ pub(super) const C_STATUS_R: Style = Style::new()
     .effects(Effects::BOLD);
 
 use super::installed::action_tag;
+use super::plan_index::PlanIndex;
 use super::repo::{FilterReason, RepoData, find_cache};
 
 /// One USE-flag group produced by [`group_use_flags`]: either the base
@@ -1509,6 +1510,18 @@ pub(super) struct PrettyCtx<'a> {
     /// without a marker column — a dependency pulled in to satisfy one of
     /// these stays in the ordinary palette.
     pub requested: &'a std::collections::HashSet<portage_atom::Cpn>,
+    /// Packages the plan builds twice, flags off and then on, to open a dependency cycle
+    pub splits: &'a [portage_atom_pubgrub::SplitBuild],
+}
+
+/// A plan row's part in a split build
+#[derive(Clone, Copy)]
+enum SplitRole<'a> {
+    None,
+    /// The first build, with these flags off
+    FlagsOff(&'a [Interned<DefaultInterner>]),
+    /// The build with the flags back on
+    Rebuild,
 }
 
 /// Print the emerge-style pretty plan, honouring each entry's
@@ -1558,6 +1571,7 @@ fn format_plan_parts(
     merge_root: portage_atom_pubgrub::MergeRoot,
     cross: &super::root_aware::CrossContext,
     in_plan: bool,
+    split: SplitRole,
 ) -> (String, String) {
     let &PrettyCtx {
         data,
@@ -1575,14 +1589,22 @@ fn format_plan_parts(
         resolve_secs: _,
         selected,
         requested,
+        splits: _,
     } = ctx;
 
-    let dest_suffix = match super::root_aware::display_root(merge_root, &cross.target, cross) {
+    let mut dest_suffix = match super::root_aware::display_root(merge_root, &cross.target, cross) {
         r if r.as_str() == "/" => String::new(),
         r => format!(" to {}/", r),
     };
+    if let SplitRole::FlagsOff(_) = split {
+        dest_suffix.push_str(&format!(" {C_DIM}(built again below){C_DIM:#}"));
+    }
     let cpn = pkg.cpn();
-    let (tag, old_ver) = action_tag(pkg, ver, installed);
+    // The rebuild replaces the first build, so it is a reinstall whatever is installed now.
+    let (tag, old_ver) = match split {
+        SplitRole::Rebuild => ("R", None),
+        _ => action_tag(pkg, ver, installed),
+    };
     let req = flag_reqs.get(pkg).copied();
     let cache = find_cache(data, pkg, ver);
 
@@ -1590,7 +1612,7 @@ fn format_plan_parts(
     // :slot/subslot::repo suffix and download size.
     let cpv = Cpv::new(*cpn, ver.clone());
     // The USE the build gets, and the use.force ∪ use.mask flags emerge shows in parentheses.
-    let (effective_use, forced_display) = match cache {
+    let (mut effective_use, forced_display) = match cache {
         Some(c) => {
             let stable = policy
                 .accept_keywords
@@ -1607,6 +1629,12 @@ fn format_plan_parts(
             (cfg, HashSet::new())
         }
     };
+
+    if let SplitRole::FlagsOff(flags) = split {
+        for &f in flags {
+            effective_use.disable(f);
+        }
+    }
 
     // Would `-k`/`-K` reuse a local binpkg for this exact (cpv, USE)?
     // Same `use_compatible` rule `run_merge_plan` uses to actually pick
@@ -1743,8 +1771,14 @@ fn print_pretty_with_roots(
     )
     .ok();
 
-    for ((pkg, ver), merge_root) in order.iter().zip(merge_roots) {
-        let (bracket, rest) = format_plan_parts(ctx, pkg, ver, *merge_root, cross, true);
+    let index = PlanIndex::new(order.iter().map(|(pkg, _)| pkg), ctx.splits);
+    for (i, ((pkg, ver), merge_root)) in order.iter().zip(merge_roots).enumerate() {
+        let split = match index.flags_off(i) {
+            Some(flags) => SplitRole::FlagsOff(flags),
+            None if index.is_rebuild(i) => SplitRole::Rebuild,
+            None => SplitRole::None,
+        };
+        let (bracket, rest) = format_plan_parts(ctx, pkg, ver, *merge_root, cross, true, split);
         writeln!(out, "{bracket} {rest}").ok();
     }
 }
@@ -1764,28 +1798,13 @@ fn class_str(c: DepClass) -> &'static str {
 /// direction `install_order`/`build_blockers` require). PDEPEND is the
 /// opposite by design (merged *after* its parent) and IDEPEND constrains
 /// nothing — both always "ok", same as an endpoint missing from `order`.
-fn edge_order_ok(
-    order: &[(PortagePackage, Version)],
-    edges: &[portage_atom_pubgrub::DepEdge],
-) -> Vec<bool> {
-    let order_index: HashMap<(&PortagePackage, &Version), usize> = order
-        .iter()
-        .enumerate()
-        .map(|(i, (pkg, ver))| ((pkg, ver), i))
-        .collect();
+fn edge_order_ok(index: &PlanIndex, edges: &[portage_atom_pubgrub::DepEdge]) -> Vec<bool> {
     edges
         .iter()
-        .map(|e| {
-            if matches!(e.class, DepClass::Idepend) {
-                return true;
-            }
-            let from = order_index.get(&(&e.from.0, &e.from.1));
-            let to = order_index.get(&(&e.to.0, &e.to.1));
-            match (from, to) {
-                (Some(&from), Some(&to)) if matches!(e.class, DepClass::Pdepend) => from < to,
-                (Some(&from), Some(&to)) => to < from,
-                _ => true,
-            }
+        .map(|e| match (e.class, index.endpoints(e)) {
+            (DepClass::Idepend, _) | (_, None) => true,
+            (DepClass::Pdepend, Some((from, to))) => from < to,
+            (_, Some((from, to))) => to < from,
         })
         .collect()
 }
@@ -1793,7 +1812,7 @@ fn edge_order_ok(
 /// Edges that are both hard (DEPEND/BDEPEND) and order-violating — a
 /// genuine, irreducible dependency cycle, not just a soft (RDEPEND)
 /// ordering choice. Mirrors `DepgraphOutcome::hard_cycle_edges`'s own
-/// semantics. `order_ok` must be `edge_order_ok(order, edges)` for the same
+/// semantics. `order_ok` must be `edge_order_ok(index, edges)` for the same
 /// `edges` slice.
 fn hard_cycle_edges<'a>(
     edges: &'a [portage_atom_pubgrub::DepEdge],
@@ -1812,12 +1831,19 @@ pub(super) fn print_json(
     edges: &[portage_atom_pubgrub::DepEdge],
     installed: &HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>>,
     flag_reqs: &HashMap<&PortagePackage, &UseFlagRequirement>,
+    splits: &[portage_atom_pubgrub::SplitBuild],
 ) -> anyhow::Result<()> {
+    let index = PlanIndex::new(order.iter().map(|(pkg, _)| pkg), splits);
     let packages: Vec<serde_json::Value> = order
         .iter()
-        .map(|(pkg, ver)| {
+        .enumerate()
+        .map(|(i, (pkg, ver))| {
             let cpn = pkg.cpn();
-            let (tag, old_ver) = action_tag(pkg, ver, installed);
+            let (tag, old_ver) = if index.is_rebuild(i) {
+                ("R", None)
+            } else {
+                action_tag(pkg, ver, installed)
+            };
             let status = match tag {
                 "U" => "upgrade",
                 "D" => "downgrade",
@@ -1834,6 +1860,10 @@ pub(super) fn print_json(
             });
             if let Some(old) = old_ver {
                 obj["old_version"] = serde_json::Value::String(old.to_string());
+            }
+            if let Some(flags) = index.flags_off(i) {
+                let flags: Vec<&str> = flags.iter().map(|f| f.as_str()).collect();
+                obj["split_flags_off"] = serde_json::json!(flags);
             }
             if let Some(cache) = find_cache(data, pkg, ver) {
                 let slot = &cache.metadata.slot;
@@ -1876,7 +1906,7 @@ pub(super) fn print_json(
     // (`query/depgraph/mod.rs`) to decide whether an edge is respected,
     // recomputed here (not threaded from there) since `print_json` runs
     // before that later, differently-filtered pass.
-    let order_ok = edge_order_ok(order, edges);
+    let order_ok = edge_order_ok(&index, edges);
 
     let dep_edges: Vec<serde_json::Value> = edges
         .iter()
@@ -2232,6 +2262,7 @@ fn render_tree(
                 node.pkg.merge_root(),
                 cross,
                 node.ordered,
+                SplitRole::None,
             ),
             None => continue,
         };
@@ -2763,6 +2794,54 @@ mod tests {
         }
     }
 
+    fn order_ok(
+        order: &[(PortagePackage, Version)],
+        edges: &[portage_atom_pubgrub::DepEdge],
+    ) -> Vec<bool> {
+        edge_order_ok(&PlanIndex::new(order.iter().map(|(p, _)| p), &[]), edges)
+    }
+
+    #[test]
+    fn edge_order_ok_resolves_each_edge_to_the_split_build_it_means() {
+        let nls = Interned::intern("nls");
+        let order = [
+            (pkg("sys-apps/ul"), ver("1")),
+            (pkg("app-text/bdc"), ver("1")),
+            (pkg("app-text/po4a"), ver("1")),
+            (pkg("sys-apps/ul"), ver("1")),
+            (pkg("app-text/late"), ver("1")),
+        ];
+        let gated = portage_atom_pubgrub::DepEdge {
+            via_use_flag: Some(nls),
+            ..edge(
+                ("sys-apps/ul", "1"),
+                ("app-text/po4a", "1"),
+                DepClass::Bdepend,
+            )
+        };
+        let edges = [
+            edge(
+                ("app-text/bdc", "1"),
+                ("sys-apps/ul", "1"),
+                DepClass::Rdepend,
+            ),
+            gated,
+            edge(
+                ("app-text/late", "1"),
+                ("sys-apps/ul", "1"),
+                DepClass::Depend,
+            ),
+        ];
+        let splits = [portage_atom_pubgrub::SplitBuild {
+            package: (pkg("sys-apps/ul"), ver("1")),
+            flags: vec![nls],
+        }];
+        let index = PlanIndex::new(order.iter().map(|(p, _)| p), &splits);
+        assert_eq!(edge_order_ok(&index, &edges), [true, true, true]);
+        assert!(index.flags_off(0).is_some() && index.is_rebuild(3));
+        assert_eq!(order_ok(&order, &edges), [true, false, true]);
+    }
+
     #[test]
     fn edge_order_ok_true_when_dependency_precedes_dependent() {
         let order = [
@@ -2774,7 +2853,7 @@ mod tests {
             ("dev-lang/python", "3.14"),
             DepClass::Rdepend,
         )];
-        assert_eq!(edge_order_ok(&order, &edges), [true]);
+        assert_eq!(order_ok(&order, &edges), [true]);
     }
 
     #[test]
@@ -2790,7 +2869,7 @@ mod tests {
             ("dev-lang/python", "3.14"),
             DepClass::Rdepend,
         )];
-        assert_eq!(edge_order_ok(&order, &edges), [false]);
+        assert_eq!(order_ok(&order, &edges), [false]);
     }
 
     #[test]
@@ -2802,7 +2881,7 @@ mod tests {
             ("virtual/os-headers", "0"),
             DepClass::Depend,
         )];
-        assert_eq!(edge_order_ok(&order, &edges), [true]);
+        assert_eq!(order_ok(&order, &edges), [true]);
     }
 
     #[test]
@@ -2818,7 +2897,7 @@ mod tests {
             ("dev-python/ensurepip-pip", "26.1.2"),
             DepClass::Pdepend,
         )];
-        assert_eq!(edge_order_ok(&order, &edges), [true]);
+        assert_eq!(order_ok(&order, &edges), [true]);
     }
 
     #[test]
@@ -2832,7 +2911,7 @@ mod tests {
             ("app-misc/tool", "1"),
             DepClass::Idepend,
         )];
-        assert_eq!(edge_order_ok(&order, &edges), [true]);
+        assert_eq!(order_ok(&order, &edges), [true]);
     }
 
     #[test]
@@ -2856,7 +2935,7 @@ mod tests {
                 DepClass::Bdepend,
             ),
         ];
-        let ok = edge_order_ok(&order, &edges);
+        let ok = order_ok(&order, &edges);
         assert_eq!(ok, [false, false]);
         let hard_cycle: Vec<_> = hard_cycle_edges(&edges, &ok).collect();
         assert_eq!(hard_cycle.len(), 1, "only the BDEPEND edge is a hard cycle");
