@@ -1,7 +1,7 @@
 # Break a hard dependency cycle by building a package twice: flag off, then flag on
 
 Status: 🔴 designed, not started. Found 2026-11-18 on `em toolchain --local --setup` ([[docbook-catalog-rdepend-order]]).
-Written from an Opus plan and a Fable adversarial review; nothing here was built or run. Items marked **unverified** need a check before coding.
+Written from an Opus plan and a Fable adversarial review; nothing here was built or run. The review's unverified items were checked against the code on 2026-11-18; the findings are inline.
 
 ## Problem
 
@@ -15,6 +15,10 @@ Both BDEPEND edges are hard, so `repair_soft_inversions` (`portage-atom-pubgrub/
 runs before `build-docbook-catalog` exists. `build-docbook-catalog`'s `|| ( util-linux app-misc/getopt )` has no usable second branch on Linux:
 `app-misc/getopt` is keyworded only `~arm64-macos ~x64-macos ~x64-solaris`, so it is masked here and in prefix Linux profiles.
 Choosing the other `||` branch (the separate, smaller track below) cannot fix this case; a split build can.
+
+Dropping the other RDEPEND edge does not help either. Host `emerge -pe app-text/docbook-xsl-stylesheets` does exactly that (`build-docbook-catalog`, then
+the stylesheets, `po4a`, `util-linux` last). On a fresh root `build-docbook-catalog`'s `src_prepare` then finds no util-linux
+(`has_version sys-apps/util-linux || sed … getopt-long`), so its script calls a `getopt-long` nobody installs and the stylesheets' postinst still dies.
 
 The fix is the Gentoo bootstrap pattern, done by the resolver for any cycle and never per package: build one package with a USE flag off so the loop opens,
 then rebuild it later with the flag on. Portage does not do this itself; its circular-dependency message only suggests the USE change
@@ -50,41 +54,55 @@ Turning `f` off for `P` is allowed only if all of these hold, else try the next 
 
 - `f` is not forced or masked (`force_mask.rs`) and is not `-f` already.
 - `P`'s REQUIRED_USE still holds (`required_use.rs`).
-- No package ordered before the rebuild demands `P[f]` (`UseDemand`).
+- No package ordered before the rebuild demands `P[f]`. This is checked after phase A solves (§3), because the cosolve fixpoint quietly turns `f` back on.
 - The `!f? ( … )` dependencies the flag-off build gains do not close another cycle.
 
 ### 3. Build the two-phase plan (`portage-cli/src/query/depgraph/round/{solve,plan}.rs`)
 
-- Phase A: re-solve with a synthetic `package.use` entry `=cpv -f` (`package_use` is already part of `ProviderKey`; the cosolve fixpoint uses the same route).
+- Where: in `solve_round` (`round.rs`), between `ctx.solve` and `ctx.shape_plan`, not inside `resolve_with_repairs`. The install order and edges come from
+  `install_order_with_stats` in `shape_plan` (`round/plan.rs`), after the solve and its pin loop have finished, so there is no pin-loop interleaving.
+  A different `package_use` is a different `ProviderKey`, so phase A is a fresh `ctx.solve` that runs the whole cosolve fixpoint and pin loop itself.
+- Phase A: `ctx.solve` with `=cpv -f` appended to the base `package_use` that `cosolve_use_deps` starts from. The fixpoint appends forced `[f]` entries
+  after the base, so a `P[f]` demand turns the flag back on without any error. After the solve, check that `P`'s solved USE really has `f` off. If not, reject
+  the candidate. This check replaces a separate `UseDemand` pre-check.
 - Phase B: solve the original targets again with phase A's packages as a synthetic installed overlay (the same shape as the `provided_avail` →
   `InstalledVersion` injection in `build_provider`). It lists only `P(+f)` and the new closure (po4a), ordered after phase A, `reinstall = true`.
-- Concatenate A then B. The re-solve runs inside `resolve_with_repairs`; a changed USE can need new pins, so interleave it with the pin loop or state that it
-  does not (**unverified**: `selected_virtuals` is set after the pin loop at `provider/mod.rs` ~1263, so compute the in-loop order from the filtered solution).
+- Concatenate A then B.
 - Bound it: at most one split per cycle, `MAX_CYCLE_SPLITS` overall, accepted only when the cycle's bad-edge count drops; otherwise revert and reject that candidate.
-- Performance: one extra graph build per `resolve_with_repairs` call, and it is called many times. Skip when no cycle has a hard edge, and cache the
-  `InstallOrderResult` for `shape_plan` to reuse. Measure with `portage-bench` / `bench-em-vs-emerge.sh`.
+- Performance: detection reads the edges `shape_plan` already builds, so a plan without a witness costs nothing extra. A split costs two more full solves
+  (A and B), each with its own provider build. Measure with `portage-bench` / `bench-em-vs-emerge.sh`. The detection step needs the order before
+  `shape_plan` trims it, so split `shape_plan` or have it return the witness rather than computing the order twice.
 
 ### 4. Plan identity: the same package appears twice
 
-These key by `PortagePackage` or `(pkg, version)` and must key by plan index or instance (**unverified**, from reading `assemble.rs` and `output.rs`):
+These key by `PortagePackage` or `(pkg, version)` and must key by plan index or instance (checked):
 
-- `query/depgraph/assemble.rs` `index_of` (feeds `build_blockers` and `hard_cycle_edges`).
-- `output.rs` `edge_order_ok` and the JSON edges: add `instance`, `bootstrap_use`, from/to indices; `order_ok` per phase.
-- `resume_completed: HashSet<(MergeRoot, String)>`: the rebuild must not be skipped on resume.
+- `query/depgraph/assemble.rs:521` `index_of: HashMap<PortagePackage, usize>`, without even the version, so a second entry silently overwrites the first
+  (feeds `build_blockers` and `hard_cycle_edges`).
+- `output.rs:1767` `edge_order_ok` keys by `(&PortagePackage, &Version)`, and the JSON edges do too: add `instance`, `bootstrap_use`, from/to indices;
+  `order_ok` per phase.
+- `resume_completed: HashSet<(MergeRoot, String)>` (filtered in `depgraph/mod.rs:716`): the rebuild must not be skipped on resume. The `String` is a CPV;
+  make it `Cpv` while changing the key.
 - `--jobs`: phase B waits for all of phase A.
 - Display: the `USE="-nls" (bootstrap, rebuilt below)` marker and the totals.
 - VDB: a same-version replace, the existing `[R]` path.
-- Binpkg: do not `--buildpkg` the phase-A copy and do not reuse it through `--usepkg` (**unverified**: whether binpkg selection checks USE).
+- Binpkg: no change needed, provided each `PlannedMerge.use_flags` holds its own phase's USE. Reuse (`find_binpkg_reuse` → `use_compatible` in
+  `portage-binpkg/src/index.rs`) requires USE∩IUSE to match, and `--buildpkg` writes a new build-id instance (`reserve_container`).
+  The `-f` binpkg is never picked for the `+f` rebuild, and a later bootstrap can reuse it for its own phase A.
 - `preflight.rs` already evaluates `use_flags` per entry, so duplicates work there.
 - `DepEdge` is public in a publishable crate, and `output.rs` builds it as a struct literal, so any new field changes both.
 
 ### 5. Risks
 
-- `package.use` applies to both Host and Target instances of one CPV in cross builds.
+- Cross builds: configs are per root, but the provider evaluates one `package_use` per solve, and `set_cross_active` points each Host node at its
+  Target node's `VersionData` (`host_aliases`). So `=cpv -f` reaches both instances. Accept a candidate only when `P` sits at one merge root in the plan.
+  (Whether Host nodes evaluate their USE conditionals under the target's config today is not checked, and is out of scope here.)
 - A sub-slot change between the two builds triggers slot-operator rebuilds in phase B.
 - `--root-deps=rdeps` drops the DEPEND edges, so the feature stays idle there: correct.
 - `package.provided` nodes have no edges, so they never appear in a witness.
-- The toolchain staged plan resolves each step alone, so the split applies per step; no change in `crossdev/stages.rs` is needed (**unverified**).
+- The toolchain staged plan needs no change in `crossdev/`. Each step goes through `crate::emerge_atoms` (`crossdev/mod.rs` ~486) and the normal depgraph,
+  so the split applies per step. A step's `use_override` is a make.conf-layer USE, and the split's `package.use` entry overrides it.
+  `--nodeps` steps never build a graph, so they never split.
 
 ## Tests
 
