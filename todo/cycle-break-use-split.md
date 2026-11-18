@@ -145,6 +145,14 @@ Fresh crossdev-stages sandbox `em-cycle-split` (`setup` + `prepare --bare`), `em
   tries it before SRC_URI; em has no such default (`gentoo_mirrors_list`, `ebuild/mod.rs`), so `em setup --local` failed on a gitweb 502 for
   baselayout. Worked around with `env GENTOO_MIRRORS=http://distfiles.gentoo.org`.
 
+## Flag sets (2026-11-18, `003325fe`)
+
+`cycle_split::check` now turns off `x` too when turning a flag off breaks a `x? ( … )` REQUIRED_USE group (unless `x` is pinned), and a
+second cycle through an already split package adds its flags to that build. Sandbox re-run, same command:
+`util-linux` (`-nls -pam -su`), `build-docbook-catalog`, both stylesheets, `pam`, …, `docbook-xml-dtd`, `po4a`, `util-linux` rebuild.
+No cycle left unsplit; the only `order_ok: false` edges are the `output.rs` keying artifact and the unrelated PDEPEND.
+The build takes `PlannedMerge.use_flags` (`merge/mod.rs`), so a real merge would build the first copy flag-off. Not yet run for real.
+
 ## Tests
 
 - Unit, `portage-atom-pubgrub/src/provider/tests.rs` (`InMemoryRepository`): dxsl R bdc; bdc R `|| ( util-linux getopt )` with getopt absent (genuinely absent,
