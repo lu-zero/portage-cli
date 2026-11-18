@@ -42,10 +42,15 @@ Every `--json` edge has `order_ok: true`; `hard_cycle_edges` is empty. Without t
 
 ### 1. Detect the cycle and pick the flag (`portage-atom-pubgrub/src/graph.rs`)
 
-- A witness is a cycle left with at least one inverted RDEPEND edge after `repair_soft_inversions`, plus a path through the cycle containing a DEPEND/BDEPEND edge.
-  Pure-soft cycles (gtk+ ↔ icon-theme) are out of scope and stay as today.
-- Candidates are the hard or soft edges on the cycle with `via_use_flag = Some(f)` (already recorded on `DepEdge`), as `(package, version, f)`; prefer BDEPEND edges.
-- Rank deterministically: fewest nodes the split adds, then package key. Never by name.
+Done in `d4f0d78f` as `InstallOrderResult::cycle_splits()`, called on demand rather than computed in every `install_order`:
+
+- A witness is any DEPEND/BDEPEND/RDEPEND edge the final order places backwards, whose cycle (every edge on a path consumer ⇝ dep, plus the
+  backwards edge) has a DEPEND/BDEPEND edge. Inverted hard edges count too. Pure-soft cycles (gtk+ ↔ icon-theme) are skipped.
+- A candidate is a `(package, version, f)` whose `f`-gated edges, dropped, cut every path that closes the cycle; a flag that leaves another
+  path closed is not one. A witness with no candidate is still returned, for the "say so" message.
+- Ranking: build-time edges first, then package key (`{pkg}-{ver}`), then flag. "Fewest nodes the split adds" is not knowable in the graph
+  layer; if it matters, step 3 ranks by it after solving phase A.
+- Witnesses are per backwards edge, so the three docbook consumers of `build-docbook-catalog` give three witnesses with one candidate; dedupe in step 3.
 - Mechanism 1's `via_choice` edge field (below) is independent; this piece only needs `via_use_flag`.
 
 ### 2. Validate the flag (new `portage-resolve/src/cycle_split.rs`)
@@ -120,7 +125,7 @@ These key by `PortagePackage` or `(pkg, version)` and must key by plan index or 
 
 1. refactor(cli): resume progress keyed by `Cpv` (done, `82b9cb32`). The phase-slice lookup for `index_of`/`edge_order_ok` moves to step 4: with
    one phase it would be an unused parameter.
-2. feat(pubgrub): cycle witness with candidate `(package, version, flag)` edges.
+2. feat(pubgrub): cycle witness with candidate `(package, version, flag)` edges (done, `d4f0d78f`).
 3. feat(resolve): `cycle_split.rs` validation.
 4. feat(cli): the two-phase solve and concatenation, behind a flag at first, plus edge lookup per phase slice (own phase first, then earlier ones).
 5. feat(cli): display, JSON, resume, jobs and binpkg handling.
