@@ -55,7 +55,9 @@ mod version_set;
 
 pub use convert::SlotMap;
 pub use error::{Error, Result};
-pub use graph::{CycleSplit, DepClass, DepEdge, GraphStats, InstallOrderResult, SplitCandidate};
+pub use graph::{
+    CycleSplit, DepClass, DepEdge, GraphStats, InstallOrderResult, SplitCandidate, SplitOrder,
+};
 pub use package::{MergeRoot, PortagePackage};
 pub use portage_atom::interner::{DefaultInterner, Interned};
 pub use provider::{

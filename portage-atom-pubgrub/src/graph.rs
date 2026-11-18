@@ -191,6 +191,50 @@ impl InstallOrderResult {
         }
         splits
     }
+
+    /// This order again with `candidate`'s flag-gated edges dropped, and where its flag-on rebuild goes
+    ///
+    /// `None` when none of the package's edges carries the flag.
+    pub fn split(&self, candidate: &SplitCandidate) -> Option<SplitOrder> {
+        let gated =
+            |e: &DepEdge| e.from == candidate.package && e.via_use_flag == Some(candidate.flag);
+        let (dropped, kept): (Vec<DepEdge>, Vec<DepEdge>) =
+            self.edges.iter().cloned().partition(|e| gated(e));
+        let reordered = order_graph(
+            self.order.iter().map(|(p, v)| (p, v)),
+            kept,
+            GraphStats::default(),
+        );
+        let position =
+            |node: &(PortagePackage, Version)| reordered.order.iter().position(|n| n == node);
+        let after = dropped
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.class,
+                    DepClass::Depend | DepClass::Bdepend | DepClass::Rdepend
+                )
+            })
+            .filter_map(|e| Some((position(&e.to)?, e.to.clone())))
+            .max_by_key(|(i, _)| *i)?
+            .1;
+        Some(SplitOrder {
+            remaining: reordered.cycle_splits(),
+            order: reordered.order,
+            after,
+        })
+    }
+}
+
+/// An install order with one package built twice, flag off and then flag on; see [`InstallOrderResult::split`]
+#[derive(Debug, Clone)]
+pub struct SplitOrder {
+    /// The order with the package at its flag-off position; the rebuild is not in it
+    pub order: Vec<(PortagePackage, Version)>,
+    /// The last package the flag-gated edges need, which the flag-on rebuild must follow
+    pub after: (PortagePackage, Version),
+    /// The cycles the order still breaks with the flag off
+    pub remaining: Vec<CycleSplit>,
 }
 
 /// Which of `n` nodes `start` reaches through `next`, itself included
@@ -385,118 +429,125 @@ impl PortageDependencyProvider {
         &self,
         solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
     ) -> InstallOrderResult {
-        let (graph, mut stats) = self.dependency_graph_with_stats(solution);
+        let (graph, stats) = self.dependency_graph_with_stats(solution);
+        order_graph(solution.iter(), graph, stats)
+    }
+}
 
-        // Index nodes deterministically (sorted by cached key) so SCC discovery and all
-        // tie-breaks are reproducible.
-        let mut node_pv: Vec<OrderedNode> = solution
-            .iter()
-            .map(|(pkg, ver)| (format!("{}-{}", pkg, ver), (pkg.clone(), ver.clone())))
-            .collect();
-        node_pv.sort_by(|a, b| a.0.cmp(&b.0));
-        let n = node_pv.len();
-        stats.graph_nodes = n;
-        let idx: HashMap<(&PortagePackage, &Version), usize> = node_pv
-            .iter()
-            .enumerate()
-            .map(|(i, (_, (pkg, ver)))| ((pkg, ver), i))
-            .collect();
-        let node_id = |pkg: &PortagePackage, ver: &Version| idx.get(&(pkg, ver)).copied();
+/// Order `nodes` under `graph`'s DEPEND/BDEPEND/RDEPEND edges (see [`PortageDependencyProvider::install_order`])
+fn order_graph<'a>(
+    nodes: impl Iterator<Item = (&'a PortagePackage, &'a Version)>,
+    graph: Vec<DepEdge>,
+    mut stats: GraphStats,
+) -> InstallOrderResult {
+    // Index nodes deterministically (sorted by cached key) so SCC discovery and all
+    // tie-breaks are reproducible.
+    let mut node_pv: Vec<OrderedNode> = nodes
+        .map(|(pkg, ver)| (format!("{}-{}", pkg, ver), (pkg.clone(), ver.clone())))
+        .collect();
+    node_pv.sort_by(|a, b| a.0.cmp(&b.0));
+    let n = node_pv.len();
+    stats.graph_nodes = n;
+    let idx: HashMap<(&PortagePackage, &Version), usize> = node_pv
+        .iter()
+        .enumerate()
+        .map(|(i, (_, (pkg, ver)))| ((pkg, ver), i))
+        .collect();
+    let node_id = |pkg: &PortagePackage, ver: &Version| idx.get(&(pkg, ver)).copied();
 
-        // Adjacency: dependency → dependent ("dependency comes first").
-        // `succ_all` = hard (DEPEND/BDEPEND) + soft (RDEPEND); `succ_hard` only
-        // the build-time edges, used to order within a cycle.
-        let mut succ_all: Vec<Vec<usize>> = vec![Vec::new(); n];
-        let mut succ_hard: Vec<Vec<usize>> = vec![Vec::new(); n];
-        for edge in &graph {
-            let hard = match edge.class {
-                DepClass::Depend | DepClass::Bdepend => true,
-                DepClass::Rdepend => false,
-                // PDEPEND (merged after parent) / IDEPEND: no ordering constraint.
-                _ => continue,
-            };
-            let (Some(u), Some(v)) = (
-                node_id(&edge.to.0, &edge.to.1),
-                node_id(&edge.from.0, &edge.from.1),
-            ) else {
-                continue;
-            };
-            succ_all[u].push(v);
-            if hard {
-                succ_hard[u].push(v);
+    // Adjacency: dependency → dependent ("dependency comes first").
+    // `succ_all` = hard (DEPEND/BDEPEND) + soft (RDEPEND); `succ_hard` only
+    // the build-time edges, used to order within a cycle.
+    let mut succ_all: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut succ_hard: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for edge in &graph {
+        let hard = match edge.class {
+            DepClass::Depend | DepClass::Bdepend => true,
+            DepClass::Rdepend => false,
+            // PDEPEND (merged after parent) / IDEPEND: no ordering constraint.
+            _ => continue,
+        };
+        let (Some(u), Some(v)) = (
+            node_id(&edge.to.0, &edge.to.1),
+            node_id(&edge.from.0, &edge.from.1),
+        ) else {
+            continue;
+        };
+        succ_all[u].push(v);
+        if hard {
+            succ_hard[u].push(v);
+        }
+    }
+    for adj in succ_all.iter_mut() {
+        adj.sort_unstable();
+        adj.dedup();
+    }
+    for adj in succ_hard.iter_mut() {
+        adj.sort_unstable();
+        adj.dedup();
+    }
+
+    // Strongly-connected components via iterative Tarjan.  Nodes in different
+    // SCCs are linearised by the condensation (a DAG), so every cross-SCC
+    // edge — every edge that is not part of a genuine cycle — is respected.
+    let comp_of = tarjan_scc(&succ_all);
+    let num_comps = comp_of.iter().copied().max().map_or(0, |m| m + 1);
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); num_comps];
+    for (node, &c) in comp_of.iter().enumerate() {
+        members[c].push(node);
+    }
+    stats.scc_count = num_comps;
+    stats.largest_scc = members.iter().map(Vec::len).max().unwrap_or(0);
+
+    // Condensation edges + in-degrees (deduplicated).
+    let mut comp_succ: Vec<std::collections::BTreeSet<usize>> =
+        vec![std::collections::BTreeSet::new(); num_comps];
+    let mut comp_indeg = vec![0usize; num_comps];
+    for u in 0..n {
+        for &v in &succ_all[u] {
+            let (cu, cv) = (comp_of[u], comp_of[v]);
+            if cu != cv && comp_succ[cu].insert(cv) {
+                comp_indeg[cv] += 1;
             }
         }
-        for adj in succ_all.iter_mut() {
-            adj.sort_unstable();
-            adj.dedup();
-        }
-        for adj in succ_hard.iter_mut() {
-            adj.sort_unstable();
-            adj.dedup();
-        }
+    }
 
-        // Strongly-connected components via iterative Tarjan.  Nodes in different
-        // SCCs are linearised by the condensation (a DAG), so every cross-SCC
-        // edge — every edge that is not part of a genuine cycle — is respected.
-        let comp_of = tarjan_scc(&succ_all);
-        let num_comps = comp_of.iter().copied().max().map_or(0, |m| m + 1);
-        let mut members: Vec<Vec<usize>> = vec![Vec::new(); num_comps];
-        for (node, &c) in comp_of.iter().enumerate() {
-            members[c].push(node);
-        }
-        stats.scc_count = num_comps;
-        stats.largest_scc = members.iter().map(Vec::len).max().unwrap_or(0);
+    // The component key (max member node index, with nodes already sorted by
+    // key) drives a deterministic max-heap tie-break.
+    let comp_key = |c: usize| -> usize { members[c].iter().copied().max().unwrap_or(0) };
 
-        // Condensation edges + in-degrees (deduplicated).
-        let mut comp_succ: Vec<std::collections::BTreeSet<usize>> =
-            vec![std::collections::BTreeSet::new(); num_comps];
-        let mut comp_indeg = vec![0usize; num_comps];
-        for u in 0..n {
-            for &v in &succ_all[u] {
-                let (cu, cv) = (comp_of[u], comp_of[v]);
-                if cu != cv && comp_succ[cu].insert(cv) {
-                    comp_indeg[cv] += 1;
-                }
-            }
-        }
+    let mut comp_ready: BinaryHeap<(usize, usize)> = (0..num_comps)
+        .filter(|&c| comp_indeg[c] == 0)
+        .map(|c| (comp_key(c), c))
+        .collect();
 
-        // The component key (max member node index, with nodes already sorted by
-        // key) drives a deterministic max-heap tie-break.
-        let comp_key = |c: usize| -> usize { members[c].iter().copied().max().unwrap_or(0) };
-
-        let mut comp_ready: BinaryHeap<(usize, usize)> = (0..num_comps)
-            .filter(|&c| comp_indeg[c] == 0)
-            .map(|c| (comp_key(c), c))
-            .collect();
-
-        let mut result = Vec::with_capacity(n);
-        while let Some((_, c)) = comp_ready.pop() {
-            // Emit this component's members.  A singleton is just itself; a real
-            // cycle is ordered internally by breaking soft (RDEPEND) edges before
-            // hard ones (see `order_cycle`).
-            if members[c].len() == 1 {
-                let node = members[c][0];
+    let mut result = Vec::with_capacity(n);
+    while let Some((_, c)) = comp_ready.pop() {
+        // Emit this component's members.  A singleton is just itself; a real
+        // cycle is ordered internally by breaking soft (RDEPEND) edges before
+        // hard ones (see `order_cycle`).
+        if members[c].len() == 1 {
+            let node = members[c][0];
+            result.push(node_pv[node].1.clone());
+        } else {
+            for node in order_cycle(&members[c], &succ_hard, &succ_all, &node_pv) {
                 result.push(node_pv[node].1.clone());
-            } else {
-                for node in order_cycle(&members[c], &succ_hard, &succ_all, &node_pv) {
-                    result.push(node_pv[node].1.clone());
-                }
-            }
-            for &cv in &comp_succ[c] {
-                comp_indeg[cv] -= 1;
-                if comp_indeg[cv] == 0 {
-                    comp_ready.push((comp_key(cv), cv));
-                }
             }
         }
+        for &cv in &comp_succ[c] {
+            comp_indeg[cv] -= 1;
+            if comp_indeg[cv] == 0 {
+                comp_ready.push((comp_key(cv), cv));
+            }
+        }
+    }
 
-        // Pass 2: restore inverted soft edges that remain acyclic (bug #3).
-        let order = repair_soft_inversions(result, &graph, &mut stats);
-        InstallOrderResult {
-            order,
-            edges: graph,
-            stats,
-        }
+    // Pass 2: restore inverted soft edges that remain acyclic (bug #3).
+    let order = repair_soft_inversions(result, &graph, &mut stats);
+    InstallOrderResult {
+        order,
+        edges: graph,
+        stats,
     }
 }
 
@@ -2023,6 +2074,21 @@ mod tests {
             })
             .collect();
         assert_eq!(candidates, [("ul", "nls", true)]);
+    }
+
+    #[test]
+    fn splitting_orders_the_cycle_and_places_the_rebuild_after_the_gated_deps() {
+        let result = docbook_cycle(deps("", "nls? ( app-text/po4a )"));
+        let candidate = result.cycle_splits()[0].candidates[0].clone();
+        let split = result.split(&candidate).expect("ul has nls-gated edges");
+        assert!(split.remaining.is_empty(), "{:?}", split.remaining);
+        let names: Vec<&str> = split
+            .order
+            .iter()
+            .map(|(p, _)| p.cpn().package.as_str())
+            .collect();
+        assert_eq!(names, ["ul", "bdc", "dxsl", "po4a"]);
+        assert_eq!(split.after.0.cpn().package.as_str(), "po4a");
     }
 
     #[test]
