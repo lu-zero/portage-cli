@@ -96,7 +96,9 @@ These key by `PortagePackage` or `(pkg, version)` and must key by plan index or 
 
 - Cross builds: configs are per root, but the provider evaluates one `package_use` per solve, and `set_cross_active` points each Host node at its
   Target node's `VersionData` (`host_aliases`). So `=cpv -f` reaches both instances. Accept a candidate only when `P` sits at one merge root in the plan.
-  (Whether Host nodes evaluate their USE conditionals under the target's config today is not checked, and is out of scope here.)
+  Code reading confirms Host nodes take all their plan-time USE from the target's config: `host_native_deps` (`provider/solve.rs` ~556) only re-stamps
+  the Target `VersionData`, and the plan's `use_flags` come from the one `final_policy` (`assemble.rs` ~454). That contradicts `root-topology.md`
+  ("builds against BROOT's config"). It is a separate gap, not fixed here; what USE the Host build actually gets at merge time was not traced.
 - A sub-slot change between the two builds triggers slot-operator rebuilds in phase B.
 - `--root-deps=rdeps` drops the DEPEND edges, so the feature stays idle there: correct.
 - `package.provided` nodes have no edges, so they never appear in a witness.
@@ -116,10 +118,11 @@ These key by `PortagePackage` or `(pkg, version)` and must key by plan index or 
 
 ## Order of work (one commit each, tests with the code)
 
-1. refactor(cli): plan identity by index, not by `(pkg, version)`; no behaviour change.
+1. refactor(cli): resume progress keyed by `Cpv` (done, `82b9cb32`). The phase-slice lookup for `index_of`/`edge_order_ok` moves to step 4: with
+   one phase it would be an unused parameter.
 2. feat(pubgrub): cycle witness with candidate `(package, version, flag)` edges.
 3. feat(resolve): `cycle_split.rs` validation.
-4. feat(cli): the two-phase solve and concatenation, behind a flag at first.
+4. feat(cli): the two-phase solve and concatenation, behind a flag at first, plus edge lookup per phase slice (own phase first, then earlier ones).
 5. feat(cli): display, JSON, resume, jobs and binpkg handling.
 6. perf: order cache reuse in `shape_plan`, if the bench shows a cost.
 7. docs: `docs/design/architecture.md` (resolution stages, divergences), the user docs for the new row marker, and this file moved to `todo/done/`.
