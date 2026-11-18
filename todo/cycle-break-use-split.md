@@ -172,6 +172,15 @@ opensp now builds. The split ran as planned: the first `util-linux` was recorded
 - The prefix had no `bin/bash` (my shortcut: `em setup --local` straight to docbook, skipping the toolchain steps), and `src_prepare`
   rewrites the shebang to `#!${EPREFIX}/bin/bash`. Installed `app-shells/bash` into the prefix first.
 
+## Real merge completed (2026-11-18)
+
+After installing prefix `bash` and reinstalling `build-docbook-catalog`, the docbook merge finished (`rc=0`), every docbook postinst running
+`build-docbook-catalog` from the prefix. The interrupted run had already built the flag-off `util-linux`, so the re-resolve listed only the
+stylesheets: the installed flag-off build satisfies everything and the rebuild is not re-planned. `-N` recovers it as a normal USE change:
+`em -uN --oneshot sys-apps/util-linux` merged ns-stylesheets, docbook-xml-dtd, pam, po4a, then `util-linux` `[R]` `USE="nls* pam* su*"`, then
+pam's PDEPENDs (8/8, `rc=0`; VDB `USE` has `nls pam su`). A run that is not interrupted does the rebuild itself; resume across an interruption
+is still step 5. (`-uDN` also tried rebuilding glibc/gcc in the prefix and hit the toolchain cycle, because the toolchain steps were skipped.)
+
 ## Tests
 
 - Unit, `portage-atom-pubgrub/src/provider/tests.rs` (`InMemoryRepository`): dxsl R bdc; bdc R `|| ( util-linux getopt )` with getopt absent (genuinely absent,
