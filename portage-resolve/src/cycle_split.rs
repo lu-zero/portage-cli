@@ -67,10 +67,11 @@ pub fn check(
     }
 }
 
-/// Whether the re-ordered `split` can build `candidate` with its flag off until its rebuild
+/// Whether the re-ordered `split` can build `candidate` with its flag off until its rebuild at `rebuild`
 pub fn check_order(
     data: &RepoData,
     split: &SplitOrder,
+    rebuild: usize,
     candidate: &SplitCandidate,
 ) -> Result<(), Rejection> {
     let (pkg, ver) = &candidate.package;
@@ -88,7 +89,7 @@ pub fn check_order(
     let Some(first) = split.order.iter().position(|n| *n == candidate.package) else {
         return Ok(());
     };
-    for (other, other_ver) in &split.order[first + 1..split.rebuild] {
+    for (other, other_ver) in split.order.get(first + 1..rebuild).unwrap_or_default() {
         let Some(cache) = find_cache(data, other, other_ver) else {
             continue;
         };
@@ -330,7 +331,7 @@ mod tests {
         let mut order: Vec<_> = order.iter().map(|c| node(c)).collect();
         order.push(node("sys-apps/ul-1"));
         SplitOrder {
-            rebuild: order.len() - 1,
+            rebuilds: vec![order.len() - 1],
             order,
             remaining: Vec::new(),
         }
@@ -342,7 +343,7 @@ mod tests {
             flag: Interned::intern("nls"),
             build_time: true,
         };
-        check_order(data, split, &candidate)
+        check_order(data, split, split.rebuilds[0], &candidate)
     }
 
     #[test]

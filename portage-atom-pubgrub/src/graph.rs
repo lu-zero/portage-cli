@@ -192,13 +192,16 @@ impl InstallOrderResult {
         splits
     }
 
-    /// This order again with `candidate`'s flag-gated edges dropped, and its flag-on rebuild inserted
+    /// This order again with each candidate's flag-gated edges dropped, and a flag-on rebuild inserted per candidate
     ///
-    /// The rebuild goes right after the last package those edges need. `None` when none of the package's edges
-    /// carries the flag.
-    pub fn split(&self, candidate: &SplitCandidate) -> Option<SplitOrder> {
-        let gated =
-            |e: &DepEdge| e.from == candidate.package && e.via_use_flag == Some(candidate.flag);
+    /// Each rebuild goes right after the last package its dropped edges need. `None` when a candidate has no
+    /// edge carrying its flag.
+    pub fn split(&self, candidates: &[SplitCandidate]) -> Option<SplitOrder> {
+        let gated = |e: &DepEdge| {
+            candidates
+                .iter()
+                .any(|c| e.from == c.package && e.via_use_flag == Some(c.flag))
+        };
         let (dropped, kept): (Vec<DepEdge>, Vec<DepEdge>) =
             self.edges.iter().cloned().partition(|e| gated(e));
         let reordered = order_graph(
@@ -208,36 +211,48 @@ impl InstallOrderResult {
         );
         let position =
             |node: &(PortagePackage, Version)| reordered.order.iter().position(|n| n == node);
-        let last_dep = dropped
-            .iter()
-            .filter(|e| {
-                matches!(
-                    e.class,
-                    DepClass::Depend | DepClass::Bdepend | DepClass::Rdepend
-                )
-            })
-            .filter_map(|e| position(&e.to))
-            .max()?;
-        let rebuild = last_dep.max(position(&candidate.package)?) + 1;
+        let mut inserts: Vec<(usize, usize)> = Vec::with_capacity(candidates.len());
+        for (i, c) in candidates.iter().enumerate() {
+            let last_dep = dropped
+                .iter()
+                .filter(|e| e.from == c.package && e.via_use_flag == Some(c.flag))
+                .filter(|e| {
+                    matches!(
+                        e.class,
+                        DepClass::Depend | DepClass::Bdepend | DepClass::Rdepend
+                    )
+                })
+                .filter_map(|e| position(&e.to))
+                .max()?;
+            inserts.push((last_dep.max(position(&c.package)?) + 1, i));
+        }
         let remaining = reordered.cycle_splits();
         let mut order = reordered.order;
-        order.insert(rebuild, candidate.package.clone());
+        // From the back, so earlier insert points stay valid; a later candidate goes after an earlier one at the same point.
+        inserts.sort_unstable();
+        for &(at, i) in inserts.iter().rev() {
+            order.insert(at, candidates[i].package.clone());
+        }
+        let mut rebuilds = vec![0; candidates.len()];
+        for (shift, &(at, i)) in inserts.iter().enumerate() {
+            rebuilds[i] = at + shift;
+        }
         Some(SplitOrder {
             order,
-            rebuild,
+            rebuilds,
             remaining,
         })
     }
 }
 
-/// An install order with one package built twice, flag off and then flag on; see [`InstallOrderResult::split`]
+/// An install order with packages built twice, flag off and then flag on; see [`InstallOrderResult::split`]
 #[derive(Debug, Clone)]
 pub struct SplitOrder {
-    /// The order, listing the package at its flag-off position and again at `rebuild`
+    /// The order, listing each split package at its flag-off position and again at its rebuild
     pub order: Vec<(PortagePackage, Version)>,
-    /// Where the flag-on rebuild sits in `order`
-    pub rebuild: usize,
-    /// The cycles the order still breaks with the flag off
+    /// Where each candidate's flag-on rebuild sits in `order`, in candidate order
+    pub rebuilds: Vec<usize>,
+    /// The cycles the order still breaks with the flags off
     pub remaining: Vec<CycleSplit>,
 }
 
@@ -2084,7 +2099,9 @@ mod tests {
     fn splitting_orders_the_cycle_and_places_the_rebuild_after_the_gated_deps() {
         let result = docbook_cycle(deps("", "nls? ( app-text/po4a )"));
         let candidate = result.cycle_splits()[0].candidates[0].clone();
-        let split = result.split(&candidate).expect("ul has nls-gated edges");
+        let split = result
+            .split(std::slice::from_ref(&candidate))
+            .expect("ul has nls-gated edges");
         assert!(split.remaining.is_empty(), "{:?}", split.remaining);
         let names: Vec<&str> = split
             .order
@@ -2092,7 +2109,61 @@ mod tests {
             .map(|(p, _)| p.cpn().package.as_str())
             .collect();
         assert_eq!(names, ["ul", "bdc", "dxsl", "po4a", "ul"]);
-        assert_eq!(split.rebuild, 4);
+        assert_eq!(split.rebuilds, [4]);
+    }
+
+    #[test]
+    fn two_cycles_split_together_each_get_their_own_rebuild() {
+        let mut repo = InMemoryRepository::new();
+        for p in ["x", "y"] {
+            let cpv = |n: &str| Cpv::parse(&format!("app-misc/{p}{n}-1")).unwrap();
+            let atom = |n: &str| format!("app-misc/{p}{n}");
+            repo.add_version(cpv("top"), None, None, deps(&atom("mid"), ""));
+            repo.add_version(cpv("mid"), None, None, deps(&atom("ul"), ""));
+            repo.add_version(cpv("tool"), None, None, deps("", &atom("top")));
+            let gated = format!("nls? ( {} )", atom("tool"));
+            repo.add_version_with_iuse(cpv("ul"), None, None, vec![slot("nls")], deps("", &gated));
+        }
+        let mut config = crate::use_config::UseConfig::new();
+        config.enable(slot("nls"));
+        repo.set_use_config(config);
+        let mut provider = PortageDependencyProvider::new(repo);
+        let targets = ["app-misc/xtop", "app-misc/ytop"].map(|t| {
+            (
+                PortagePackage::unslotted(Cpn::parse(t).unwrap()),
+                PortageVersionSet::any(),
+            )
+        });
+        let solution = provider.resolve_targets(targets.to_vec()).unwrap();
+        let result = provider.install_order_with_stats(&solution);
+
+        let candidates: Vec<SplitCandidate> = result
+            .cycle_splits()
+            .into_iter()
+            .map(|s| s.candidates[0].clone())
+            .collect();
+        assert_eq!(candidates.len(), 2);
+        let split = result
+            .split(&candidates)
+            .expect("both have nls-gated edges");
+        assert!(split.remaining.is_empty(), "{:?}", split.remaining);
+        let names: Vec<&str> = split
+            .order
+            .iter()
+            .map(|(p, _)| p.cpn().package.as_str())
+            .collect();
+        for p in ["x", "y"] {
+            let (ul, tool) = (format!("{p}ul"), format!("{p}tool"));
+            let first = names.iter().position(|n| *n == ul).unwrap();
+            let rebuild = names.iter().rposition(|n| *n == ul).unwrap();
+            let tool = names.iter().position(|n| *n == tool).unwrap();
+            assert!(first < tool && tool < rebuild, "{names:?}");
+            assert!(
+                split.rebuilds.contains(&rebuild),
+                "{:?} in {names:?}",
+                split.rebuilds
+            );
+        }
     }
 
     #[test]

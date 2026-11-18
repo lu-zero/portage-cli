@@ -1351,3 +1351,61 @@ fn cycle_split_builds_the_package_flag_off_first_then_rebuilds_it() {
         );
     }
 }
+
+#[test]
+fn cycle_split_opens_two_independent_cycles() {
+    let pkgs: Vec<Pkg> = ["x", "y"]
+        .into_iter()
+        .flat_map(|p| {
+            let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+            let pkg = |name: &str, rdepend: String, bdepend: String, iuse| Pkg {
+                cpv: leak(format!("app-misc/{p}{name}-1")),
+                keywords: "amd64",
+                depend: "",
+                rdepend: leak(rdepend),
+                bdepend: leak(bdepend),
+                iuse,
+                slot: "0",
+            };
+            [
+                pkg("top", format!("app-misc/{p}mid"), String::new(), ""),
+                pkg("mid", format!("app-misc/{p}ul"), String::new(), ""),
+                pkg(
+                    "ul",
+                    String::new(),
+                    format!("nls? ( app-misc/{p}tool )"),
+                    "+nls",
+                ),
+                pkg("tool", String::new(), format!("app-misc/{p}top"), ""),
+            ]
+        })
+        .collect();
+    let fix = fixture(&pkgs, &[]);
+    let atoms = [
+        TargetAtom::explicit("app-misc/xtop"),
+        TargetAtom::explicit("app-misc/ytop"),
+    ];
+    let outcome = solve(
+        &fix,
+        Solve {
+            cycle_split: true,
+            ..Solve::new(&atoms)
+        },
+    );
+    let names = names(&outcome);
+    for p in ["x", "y"] {
+        let ul = format!("app-misc/{p}ul-1");
+        let tool = format!("app-misc/{p}tool-1");
+        let first = names.iter().position(|n| *n == ul).unwrap();
+        let rebuild = names.iter().rposition(|n| *n == ul).unwrap();
+        let tool = names.iter().position(|n| *n == tool).unwrap();
+        assert!(first < tool && tool < rebuild, "{names:?}");
+        let has_nls = |i: usize| {
+            outcome.plan[i]
+                .use_flags
+                .iter()
+                .any(|f| f.as_str() == "nls")
+        };
+        assert!(!has_nls(first) && has_nls(rebuild), "{names:?}");
+    }
+}

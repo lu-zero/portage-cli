@@ -111,8 +111,8 @@ pub(super) struct RoundOutcome {
     pub(super) proposed: Vec<conflicts::ProposedPkg>,
     pub(super) exclude_omitted: usize,
     pub(super) resume_omitted: usize,
-    /// The package `order` lists twice: first built with `flag` off, then again with it on
-    pub(super) split_build: Option<SplitBuild>,
+    /// The packages `order` lists twice: first built with their flag off, then again with it on
+    pub(super) split_builds: Vec<SplitBuild>,
     pub(super) round_metrics: ResolveMetrics,
 }
 

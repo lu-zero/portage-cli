@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv};
 use portage_atom_pubgrub::{DepClass, DepEdge, MergeRoot, PortagePackage, UseFlagRequirement};
 
@@ -96,7 +97,7 @@ pub(super) fn assemble(
         proposed,
         exclude_omitted,
         resume_omitted,
-        split_build,
+        split_builds,
         round_metrics: _,
         provider_key: _,
     } = outcome;
@@ -448,16 +449,20 @@ pub(super) fn assemble(
         let name = repo::repo_name_of(&data, cpv);
         set.by_name(name.as_str()).unwrap_or(set.main())
     };
-    // Indices into the non-virtual entries, which `plan`, `index_of` and `build_blockers` share.
-    let split_at = split_build.as_ref().and_then(|s| {
-        let mut at = plan_entries
-            .iter()
-            .filter(|e| !e.pkg.is_virtual())
-            .enumerate()
-            .filter(|(_, e)| (&e.pkg, &e.version) == (&s.package.0, &s.package.1))
-            .map(|(i, _)| i);
-        Some((at.next()?, at.next()?, s.flag))
-    });
+    // `(flag-off build, rebuild, flag)`, as indices into the non-virtual entries that `plan`, `index_of` and
+    // `build_blockers` share.
+    let split_at: Vec<(usize, usize, Interned<DefaultInterner>)> = split_builds
+        .iter()
+        .filter_map(|s| {
+            let mut at = plan_entries
+                .iter()
+                .filter(|e| !e.pkg.is_virtual())
+                .enumerate()
+                .filter(|(_, e)| (&e.pkg, &e.version) == (&s.package.0, &s.package.1))
+                .map(|(i, _)| i);
+            Some((at.next()?, at.next()?, s.flag))
+        })
+        .collect();
     let plan: Vec<PlannedMerge> = plan_entries
         .iter()
         .filter(|e| !e.pkg.is_virtual())
@@ -484,9 +489,7 @@ pub(super) fn assemble(
                 effective_use::apply_ceded(&mut effective, *cpn, &ceded);
                 (Vec::new(), Vec::new(), effective.enabled_flags())
             };
-            if let Some((flag_off, _, flag)) = split_at
-                && flag_off == index
-            {
+            if let Some(&(_, _, flag)) = split_at.iter().find(|(off, _, _)| *off == index) {
                 flags.retain(|f| *f != flag);
             }
             flags.sort_by(|a, b| a.as_str().cmp(b.as_str()));
@@ -547,7 +550,7 @@ pub(super) fn assemble(
     let endpoints = |e: &DepEdge| -> Option<(usize, usize)> {
         let mut from = *index_of.get(&e.from.0)?;
         let mut to = *index_of.get(&e.to.0)?;
-        if let Some((flag_off, rebuild, flag)) = split_at {
+        for &(flag_off, rebuild, flag) in &split_at {
             if from == flag_off && e.via_use_flag == Some(flag) {
                 from = rebuild;
             }
@@ -561,7 +564,7 @@ pub(super) fn assemble(
     // the dependent — never true for a real DAG edge, so it only fires
     // inside a genuine hard cycle; recorded into `hard_cycle_edges` below.
     let mut build_blockers: Vec<Vec<usize>> = vec![Vec::new(); plan.len()];
-    if let Some((flag_off, rebuild, _)) = split_at {
+    for &(flag_off, rebuild, _) in &split_at {
         build_blockers[rebuild].push(flag_off);
     }
     let mut hard_cycle_edges: Vec<(Cpv, Cpv)> = Vec::new();
