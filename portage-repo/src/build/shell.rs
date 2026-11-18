@@ -1576,6 +1576,19 @@ impl EbuildShell {
         dirs.pop()
     }
 
+    /// The build prefix's own bash once it is installed, else the first one on `path`
+    fn real_bash(&self, path: &str) -> Option<Utf8PathBuf> {
+        let prefix_bash = self.build_eprefix.as_ref().map(|p| p.join("bin/bash"));
+        prefix_bash
+            .into_iter()
+            .chain(
+                path.split(':')
+                    .filter(|d| !d.is_empty())
+                    .map(|d| Utf8Path::new(d).join("bash")),
+            )
+            .find(|bash| bash.is_file())
+    }
+
     /// Set up the build environment
     ///
     /// Exports `PORTAGE_BIN_PATH` (when portage is installed; some eclasses
@@ -1621,6 +1634,10 @@ impl EbuildShell {
             .collect::<Vec<_>>()
             .join(":");
         self.set_var("PATH", &base_path);
+        // Ebuilds hand `$BASH` to configure as `CONFIG_SHELL`, so it names a real bash, as under portage.
+        if let Some(bash) = self.real_bash(&base_path) {
+            self.set_var("BASH", bash.as_str());
+        }
         // TERM rides through from the host, as it does in portage
         // (`special_env_vars.py`'s environ_whitelist). Leaving it unset is not
         // neutral: bash substitutes `dumb` for an unset TERM, and `dumb` is

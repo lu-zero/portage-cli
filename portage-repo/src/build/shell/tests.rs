@@ -2822,3 +2822,33 @@ async fn get_var_reads_an_exported_name_with_no_value_as_unset() {
     assert_eq!(shell.get_var("EM_SET").as_deref(), Some("x"));
     assert_eq!(shell.get_var("EM_DROPPED"), None);
 }
+
+// `CONFIG_SHELL=${BASH}` (opensp, …) needs `$BASH` to name a bash binary, not the embedded shell.
+#[tokio::test]
+async fn bash_names_the_build_prefix_bash_once_installed() {
+    let dir = tempdir().unwrap();
+    let mut shell = minimal_shell(dir.path()).await;
+    let eprefix = Utf8PathBuf::from_path_buf(dir.path().join("prefix")).unwrap();
+    std::fs::create_dir_all(eprefix.join("bin")).unwrap();
+    std::fs::write(eprefix.join("bin/bash"), "").unwrap();
+    shell.set_build_roots(None, None, Some(&eprefix), None, None);
+    shell.init_build_env().await.unwrap();
+    assert_eq!(
+        shell.get_var("BASH").as_deref(),
+        Some(eprefix.join("bin/bash").as_str())
+    );
+}
+
+#[tokio::test]
+async fn bash_falls_back_to_the_first_bash_on_path() {
+    let dir = tempdir().unwrap();
+    let mut shell = minimal_shell(dir.path()).await;
+    let empty_prefix = Utf8PathBuf::from_path_buf(dir.path().join("prefix")).unwrap();
+    shell.set_build_roots(None, None, Some(&empty_prefix), None, None);
+    shell.init_build_env().await.unwrap();
+    let bash = shell.get_var("BASH").unwrap_or_default();
+    assert!(
+        bash.ends_with("/bash") && Utf8Path::new(&bash).is_file(),
+        "BASH={bash:?}"
+    );
+}
