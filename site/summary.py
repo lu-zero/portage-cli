@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Write docs/SUMMARY.md for mdBook from site/SUMMARY.in.md.
 
-Bare `- path.md` lines get the page's first heading as their title; `<!-- cli -->` expands to the generated
-command reference under docs/user/cli, where `x.md` lists its subcommands in `x/`.
+Bare `- path.md` lines get the page's first heading as their title (a bare `path.md` is a prefix chapter);
+`<!-- cli -->` expands to the generated command reference under docs/user/cli, where `x.md` lists its subcommands in `x/`.
 """
 
 import pathlib
@@ -37,9 +37,11 @@ def cli_tree(page: pathlib.Path, depth: int) -> list[str]:
 def main() -> None:
     out = []
     for line in (ROOT / "site" / "SUMMARY.in.md").read_text(encoding="utf-8").splitlines():
-        bare = re.fullmatch(r"(\s*)- (\S+\.md)", line)
-        if bare:
-            out.append(entry(DOCS / bare.group(2), len(bare.group(1)) // 2))
+        bare = re.fullmatch(r"(\s*)(- )?(\S+\.md)", line)
+        if bare and bare.group(2):
+            out.append(entry(DOCS / bare.group(3), len(bare.group(1)) // 2))
+        elif bare:
+            out.append(entry(DOCS / bare.group(3), 0)[2:])
         elif line.strip() == "<!-- cli -->":
             out += cli_tree(DOCS / "user" / "cli" / "index.md", 0)
         else:

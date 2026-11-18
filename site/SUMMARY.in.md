@@ -1,6 +1,6 @@
 # Summary
 
-[em](README.md)
+README.md
 
 # User guide
 
