@@ -24,9 +24,9 @@ dispatches to subcommands corresponding to the traditional tools: `emerge`,
 
 ## Applet status
 
-Of the 28 applets, 22 are working and 6 are partial.
+Of the 28 applets, 20 are working and 8 are partial.
 
-![Applet coverage: 22 working, 6 partial](./docs/applets.svg)
+![Applet coverage: 20 working, 8 partial](./docs/applets.svg)
 
 <details>
 <summary>All 28 applets</summary>
@@ -41,7 +41,7 @@ Of the 28 applets, 22 are working and 6 are partial.
 | `sync` | `emaint sync` / `emerge --sync` | Working — `git` and `rsync` from `repos.conf` |
 | `regen` | `emerge --regen` | Working |
 | `search` | `emerge --search` | Working |
-| *(default)* | `emerge` | Working — resolve → build loop; `-uD` in-slot upgrades; `--prefix` / multi-root |
+| *(default)* | `emerge` | Partial — [detail](./docs/user/applets.md#em-emerge); resolve → build loop, `-uD` in-slot upgrades, `--prefix` / multi-root |
 | `ebuild` | `ebuild` | Working — fetch, unpack, phases, merge, VDB registration |
 | `depclean` | `emerge --depclean` | Working — reverse-dep orphan clean (`-c`); world-aware |
 | `quickpkg` | `quickpkg` | Working — GPKG from installed files / VDB `CONTENTS`; skips `CONFIG_PROTECT` by default |
@@ -55,7 +55,7 @@ Of the 28 applets, 22 are working and 6 are partial.
 | `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, `pkgconf`, `mirrors`, `news` (`eselect news`), `glsa` (`glsa-check`), … |
 | `active` | — | Working — register default `--prefix`/`--local` for bare `em` |
 | `setup` | — | Working — bootstrap a prefix layout (`--local` / `--prefix`) |
-| `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap; see [docs/user/crossdev.md](./docs/user/crossdev.md) |
+| `crossdev` | `crossdev` | Partial — [detail](./docs/user/crossdev.md#gaps-vs-crossdev); cross sysroot + staged toolchain bootstrap |
 | `toolchain` | — | Working — native self-hosting toolchain bootstrap (`--root` / `--prefix` / `--local`) |
 | `stages` | catalyst stage1/3 | Partial — `--stage1` (`packages.build`), `--stage3` (emptytree `@system`); no stage4 yet |
 | `dispatch` | `dispatch-conf` | Working — alias of `etc` |
