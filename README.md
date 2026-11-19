@@ -24,6 +24,13 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 
 ## Applet status
 
+Of the 28 applets, 22 are working and 6 are partial.
+
+![Applet coverage: 22 working, 6 partial](./docs/applets.svg)
+
+<details>
+<summary>All 28 applets</summary>
+
 | Applet | Maps to | Status |
 |--------|---------|--------|
 | `atom` | — | Working |
@@ -54,6 +61,11 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | `dispatch` | `dispatch-conf` | Working — alias of `etc` |
 | `etc` | `etc-update` / `dispatch-conf` | Working — one command for both — [detail](./docs/user/applets.md#em-etc-etc-update-dispatch-conf) |
 | `env` | `env-update` | Working — `profile.env` + `ld.so.conf` from `etc/env.d` |
+
+</details>
+
+[`docs/user/applets.md`](./docs/user/applets.md) has the per-applet detail,
+gaps and benchmarks.
 
 ## Documentation
 
