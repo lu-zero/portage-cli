@@ -24,9 +24,10 @@ dispatches to subcommands corresponding to the traditional tools: `emerge`,
 
 ## Applet status
 
-Of the 28 applets, 20 are working and 8 are partial.
+Of the 28 applets, 20 are working and 8 are partial. The chart counts long
+options of the two most important applets against the real tools:
 
-![Applet coverage: 20 working, 8 partial](./docs/applets.svg)
+![Option parity: 62 of 140 emerge options and 6 of 72 crossdev options](./docs/parity.svg)
 
 <details>
 <summary>All 28 applets</summary>
