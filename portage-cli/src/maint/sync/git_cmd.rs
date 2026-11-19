@@ -1,8 +1,7 @@
 //! Default git sync backend: shell out to `git` (Portage parity)
 //!
-//! Mirrors `portage.sync.modules.git.git.GitSync.update` (see
-//! `sync/modules/git/git.py`, comment block above `sync_depth`, bug #887025 /
-//! bug #824782): a `--depth 1` fetch's new tip commonly shares no ancestry
+//! Mirrors `portage.sync.modules.git.git.GitSync.update`: a `--depth 1`
+//! fetch's new tip commonly shares no ancestry
 //! with the previous shallow history, so a plain `git merge`/`--ff-only`
 //! refuses with "unrelated histories". Portage avoids that entirely:
 //! - clone: `git clone --depth 1 <uri> <path>`
@@ -10,16 +9,14 @@
 //!   volatile and was not already shallow — Portage never shallows a repo
 //!   the user cloned in full), then
 //!   - non-volatile: `git clean --force -d -x` (drop orphaned files a prior
-//!     shallow sync left behind — the actual failure mode these bugs are
-//!     about) followed by `git reset --hard` (always succeeds regardless of
-//!     ancestry)
+//!     shallow sync left behind), then `git reset --hard`, which succeeds
+//!     regardless of ancestry
 //!   - volatile: `git reset --merge <tip>` — unlike `git merge`, `reset
 //!     --merge` does not require a common ancestor, so it survives the
 //!     shallow-history case while still refusing to clobber uncommitted
 //!     worktree changes
-//! - a shallow fetch runs `git gc --auto` afterward (bug #599008: unreachable
-//!   objects from repeated shallow fetches otherwise pile up until `gc`
-//!   eventually fails outright)
+//! - a shallow fetch runs `git gc --auto` afterward (unreachable objects from
+//!   repeated shallow fetches otherwise pile up until `gc` fails outright)
 //! - the remote URL is only rewritten when it actually differs from
 //!   `sync-uri`, and only for non-volatile repos
 //! - `GIT_CEILING_DIRECTORIES` is set so git can never operate on a `.git`

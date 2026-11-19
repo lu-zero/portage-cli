@@ -22,27 +22,10 @@
 //!
 //! ## Two `git_cmd` steps with no gix counterpart
 //!
-//! **`git gc --auto` after a shallow fetch (bug #599008).** Deliberately not
-//! ported: gitoxide (as of 0.90) ships no repacking, pruning or maintenance API at all
-//! (`gix::Repository` has no `gc`/`maintenance`/`prune` entry point), so there
-//! is nothing to call. Shelling out to `git gc` here would defeat the point of
-//! a pure-gix backend, and gix's own fetch already avoids the specific hazard
-//! that made Portage's `gc` call *mandatory* rather than merely tidy: it
-//! writes a `.keep` file alongside each received pack until the corresponding
-//! refs are updated, so a concurrent collector cannot drop objects out from
-//! under an in-flight fetch. What remains is unbounded growth of unreachable
-//! objects across many shallow fetches — a disk-usage issue, not a
-//! correctness one, and unavoidable until gitoxide grows maintenance support.
-//! A user who cares can still run `git gc` in the repo by hand; the default
-//! `git_cmd` backend does it automatically.
-//!
-//! **`GIT_CEILING_DIRECTORIES`.** Genuinely a non-issue here, not an
-//! oversight. That variable stops `git`'s *upward* search for a `.git` when a
-//! command is run inside a directory that is not itself a repository. gix has
-//! no such search on this path: [`gix::open`] resolves exactly `<path>/.git`
-//! (falling back to `<path>` itself if that is the git dir) and errors out
-//! otherwise — upward discovery is a separate, explicitly-named API
-//! (`gix::discover`) that this backend never calls.
+//! - gix has no `gc`/maintenance API; unconstrained pack growth is a
+//!   disk-usage issue, not a correctness one;
+//! - no upward `.git` discovery on this path: [`gix::open`] resolves exactly
+//!   `<path>/.git`, so `GIT_CEILING_DIRECTORIES` has nothing to affect.
 
 use std::num::NonZeroU32;
 

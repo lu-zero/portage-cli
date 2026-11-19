@@ -25,22 +25,6 @@
 //! `crate-status.md` (*checkout, switch, restore and reset*). Plumbing used:
 //! [`gix::Repository::index_from_tree`], [`gix_worktree_state::checkout`],
 //! [`gix::Reference::set_target_id`] / [`gix::Repository::reference`].
-//!
-//! ## Upstream proposal sketch
-//!
-//! ```text
-//! // proposed for gix (crate-status.md: "reset orchestration")
-//! impl Repository {
-//!     pub fn reset(
-//!         &self,
-//!         target: impl Into<ObjectId>,
-//!         mode: reset::Mode, // Soft | Mixed | Hard
-//!     ) -> Result<(), reset::Error>;
-//! }
-//! ```
-//!
-//! Landed in `em` first so we can dogfood Portage sync and offer the module
-//! (or a cleaned-up PR) to gitoxide with a real-world caller.
 
 use std::path::{Component, Path, PathBuf};
 

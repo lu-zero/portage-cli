@@ -10,13 +10,6 @@ use std::sync::Mutex;
 /// `PATH` lookup. Env vars are per-process, not per-thread, so a plain
 /// save/restore in one test module isn't enough; every test on either side
 /// of the mutation must acquire this same lock.
-///
-/// Found live: `select::pkgconf`'s tests temporarily replace `PATH` with a
-/// synthetic, tool-free directory list to exercise "no backend reachable".
-/// While that window is open, `quickpkg::tests` spawning `tar` (and
-/// `postprocess::tests` spawning `bzip2`/`strip`) failed with a bare
-/// ENOENT — a real, consistently-reproducing CI failure (2026-07-20)
-/// traced back to this exact PATH-clobbering window.
 static PATH_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquire [`PATH_LOCK`] for the duration of a test that either mutates

@@ -3787,11 +3787,7 @@ fn elog_config(
 }
 
 /// `FETCHCOMMAND`/`RESUMECOMMAND` from the live ebuild shell — root-aware for
-/// the same reason as [`gentoo_mirrors_list`]. Previously read via a
-/// hardcoded `[DEFAULT_MAKE_CONF, LEGACY_MAKE_CONF]` scan of the *host's*
-/// make.conf regardless of the active root, and via a plain `MakeConf::get`
-/// that wouldn't expand a `${VAR}` self-reference the way `shell`'s real
-/// sourcing does.
+/// the same reason as [`gentoo_mirrors_list`].
 fn read_fetch_commands(shell: &portage_repo::EbuildShell) -> (Option<String>, Option<String>) {
     let fetch = shell.get_var("FETCHCOMMAND").filter(|s| !s.is_empty());
     let resume = shell.get_var("RESUMECOMMAND").filter(|s| !s.is_empty());

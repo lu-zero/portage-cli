@@ -1,8 +1,7 @@
 //! `em select compiler` — `gcc-config`/`eselect gcc` workalike
 //!
 //! Manages compiler profile selection for gcc. Reads/writes env.d files and
-//! creates symlinks similar to gcc-config. Supports grouping profiles by target
-//! architecture and showing which is active per architecture.
+//! creates symlinks similar to gcc-config.
 
 use std::collections::BTreeMap;
 

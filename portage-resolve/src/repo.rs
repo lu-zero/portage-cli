@@ -135,35 +135,11 @@ impl AcceptToken {
 
 /// Folded accept set: multi-arch literal tokens plus wildcards
 ///
-/// This is Portage’s `pgroups` set after incremental stacking
-/// (`KeywordsManager._getEgroups` for env/package lines,
-/// `_getMissingKeywords` for the match against ebuild `KEYWORDS`).
-///
-/// ## Why not “host arch + five bools”?
-///
-/// A host-only model is tempting (`stable`/`testing` bits for `$ARCH` only)
-/// because bare `ACCEPT_KEYWORDS="arm64 ~arm64"` never mentions another arch.
-/// It is **wrong** for `package.accept_keywords`, which routinely lists
-/// *other* arches (crossdev target keywords, binary packages on a foreign
-/// KEYWORDS line, `*`/`~*`/`**`).
-///
-/// Those tokens are ordinary set members in Portage; they are not
-/// “host-relative modifiers”.
-///
-/// ## Match algorithm (must stay Portage-shaped)
-///
-/// For each positive package keyword `gp` in `KEYWORDS` (PMS 7.3.3 tokens):
-/// - exact membership: `gp`’s arch is in [`Self::stable`] or [`Self::testing`]
-///   according to stability (stable `arm64` ≠ testing `~arm64`);
-/// - else wildcards on the accept side: `*` if the package has any stable
-///   keyword, `~*` if any testing, `**` always.
-///
-/// Package-side `-arch` / `-*` are “disabled” entries and do not accept;
-/// Portage strips `-*` from the ebuild keyword list before matching.
-///
-/// Fold never joins tokens: `-arch` removes only that stable arch and does
-/// **not** retract a separate `*` grant (literal-token semantics; locked by
-/// `negate_arch_does_not_retract_a_wildcard_grant`).
+/// Portage's `pgroups` set after incremental stacking. Membership is a set of
+/// literal tokens: stable `arch`, testing `~arch`, and `*` / `~*` / `**`.
+/// Matching is exact by stability, then those wildcards. A package-side
+/// `-arch` removes only that token; it does not retract a separate wildcard
+/// grant.
 #[derive(Clone, Default)]
 struct KeywordAccept {
     /// Arches granted via a bare `arch` token (any architecture name)

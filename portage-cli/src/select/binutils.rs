@@ -1,7 +1,6 @@
 //! `em select binutils` — `binutils-config`/`eselect binutils` workalike
 //!
-//! Manages binutils profile selection. Supports grouping profiles by target
-//! architecture and showing which is active per architecture.
+//! Manages binutils profile selection.
 
 use std::collections::BTreeMap;
 

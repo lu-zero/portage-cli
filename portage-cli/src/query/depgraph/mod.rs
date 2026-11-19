@@ -204,11 +204,6 @@ pub struct DepgraphOpts<'a> {
     /// `depgraph()` — so the solver builds its plan against the exact same repo world
     /// `resolve_atom` picked atoms from.
     ///
-    /// Previously this function took a bare `repo_path` and rebuilt the set
-    /// internally, which double-opened every repo per merge and could
-    /// diverge from the caller's set when an overlay's open failed
-    /// transiently in one build and succeeded in the other.
-    ///
     /// Caller-supplied aliases (e.g. `crossdev --setup -p`'s in-memory target)
     /// must already be prepended onto `set` before it is passed in.
     pub set: portage_repo::RepoSet,

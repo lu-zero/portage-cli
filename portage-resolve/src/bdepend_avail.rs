@@ -39,9 +39,8 @@ struct AvailEntry {
     /// duplicate that without the parent-flag context it needs.
     ///
     /// Deliberately *not* read eagerly: most `AvailEntry`s built for a whole
-    /// VDB are never checked against a USE-dep atom (eager reads cost ~1.3s
-    /// of pure I/O on a 712-package host, a real regression found via
-    /// `em -p` benchmarking). Reading lazily, only for an entry that already
+    /// VDB are never checked against a USE-dep atom, and eager reads cost
+    /// seconds of pure I/O. Reading lazily, only for an entry that already
     /// matched and whose atom has USE-dep brackets, keeps the common case free.
     installed: Option<InstalledPackage>,
     /// Interned `(enabled, iuse)` USE state, cached on first use-dep check:

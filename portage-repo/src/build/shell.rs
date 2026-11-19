@@ -270,10 +270,9 @@ pub struct EbuildShell {
     /// `--root` offset, the prefix itself for `--prefix`. `None` when
     /// unknown (standalone `em ebuild` debug path).
     ///
-    /// Deliberately NOT the package's own merge root: tried for a same-arch
-    /// `--root` offset (2026-07-12) and reverted, see [`init_build_env`]'s
-    /// toolchain-selection comment — a same-arch binary built into an
-    /// offset isn't safely runnable unchrooted, unlike a cross-compiler.
+    /// Deliberately not the package's own merge root: a same-arch binary
+    /// built into an offset isn't safely runnable unchrooted, unlike a
+    /// cross-compiler.
     build_broot: Option<Utf8PathBuf>,
     /// Caller-resolved directories placed ahead of the sanitised phase `PATH`
     /// ([`phase_path_dirs`]) — the one way to reach a tool that sanitising

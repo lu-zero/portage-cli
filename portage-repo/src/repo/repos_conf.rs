@@ -502,11 +502,8 @@ auto-sync = no
         assert!(rc.repos().is_empty());
     }
 
-    /// The mechanism changed (was: a hardcoded "move main-repo to position
-    /// 0"; now: the main repo's implicit `priority = -1000` default sorting
-    /// first among unset-priority ({0}) repos) but the observable behavior
-    /// is the same for the common case of no repo setting an explicit
-    /// `priority =`.
+    /// The main repo sorts first even when declared later, via its implicit
+    /// `priority = -1000` among unset-priority repos.
     #[test]
     fn main_repo_moves_to_front_even_when_declared_later() {
         let dir = tempfile::tempdir().unwrap();

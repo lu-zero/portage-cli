@@ -258,8 +258,7 @@ pub struct HostInstalledEntry {
 /// distinct `PortagePackage`).
 ///
 /// The root selection (BROOT, plus the prefix's own VDB under `--prefix`) is
-/// `crate::broot_vdb_packages` — shared with `Avail::initial_bdepend`,
-/// which the same #28/#30 bug was once fixed in separately.
+/// `crate::broot_vdb_packages` — shared with `Avail::initial_bdepend`.
 ///
 /// `add_host_installed` (`provider/mod.rs`) does a plain `HashMap::insert`
 /// keyed by package, so whichever entry is appended last wins — "what is

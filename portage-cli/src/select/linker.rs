@@ -1,8 +1,7 @@
 //! `em select linker` — linker profile selection
 //!
 //! Manages linker profile selection. Similar to binutils-config but focused
-//! specifically on the linker (ld, lld, mold, etc.). Supports grouping profiles
-//! by target architecture and showing which is active per architecture.
+//! specifically on the linker (ld, lld, mold, etc.).
 
 use anyhow::Result;
 

@@ -174,10 +174,7 @@ impl KnownSets {
 
 /// Which VDB-aware built-in set a name refers to, if any — the single
 /// source of truth for both "is this name VDB-aware" (`vdb_set_kind(name)
-/// .is_some()`) and dispatch ([`resolve_vdb_set`]). Previously these were
-/// two independently hand-synced lists (a `matches!` and a `match` with an
-/// `unreachable!()` fallback); a name added to one and not the other would
-/// have turned a resolvable set into a panic.
+/// .is_some()`) and dispatch ([`resolve_vdb_set`]).
 enum VdbSet {
     Preserved,
     Live,
