@@ -7,8 +7,8 @@
 A Rust reimplementation of the Gentoo Portage command-line tools, built on a
 family of purpose-built crates for parsing atoms, metadata, repositories, and
 the installed package database. `em` is the unified front-end binary; it
-dispatches to subcommands corresponding to the traditional tools (`emerge`,
-`equery`, `euse`, `emaint`, …).
+dispatches to subcommands corresponding to the traditional tools: `emerge`,
+`equery`, `euse`, `emaint`, and others.
 
 > **Note**: For a more mature Rust-based alternative, see
 > [Pkgcraft](https://pkgcraft.github.io/).
@@ -17,9 +17,9 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 > thoroughly audited, some crates are already polished up to a degree and perform
 > correctly. Use at your own risk.
 
-> **Pre-release git checkout**: This is development source from `git` before the
-> first release of `portage-cli` / the `em` binary on crates.io. See
-> [`docs/design/architecture.md`](./docs/design/architecture.md) for the per-crate
+> **Pre-release**: This is development source from `git`, before the first
+> release of `portage-cli` and `em` on crates.io. See
+> [`docs/design/architecture.md`](./docs/design/architecture.md) for the
 > published/local-only breakdown.
 
 ## Applet status
@@ -67,9 +67,34 @@ Of the 28 applets, 22 are working and 6 are partial.
 [`docs/user/applets.md`](./docs/user/applets.md) has the per-applet detail,
 gaps and benchmarks.
 
+## Performance
+
+Cold `em -p` against `emerge -p`, and `em -s` against `emerge -s`, on thalia,
+an Ampere-1a server pinned to one NUMA node. Hyperfine medians, representative
+of recent runs:
+
+| Command | `em` | `emerge` | Speedup |
+|---------|-----:|---------:|--------:|
+| `firefox -p` | ~0.9 s | ~3.7 s | ~4× |
+| `libreoffice -p` | ~1.0 s | ~4.0 s | ~4× |
+| five packages `-p` | ~1.0 s | ~4.7 s | ~4.5× |
+| `gcc -s` | ~0.1 s | ~5.2 s | ~50× |
+
+Metadata cache regeneration on a 32k-ebuild tree at `j=8` took `em` 18.1 s
+against pkgcraft's 48.3 s.
+
+**Details:** [benchmark records](./benchmarks/BENCHMARKS.md) ·
+[method and scripts](./benchmarks/README.md) ·
+[machine](./benchmarks/machines/thalia.md).
+
 ## Documentation
 
-**User guides** (`docs/user/`) — how to actually run `em`:
+### User guides
+
+How to actually run `em`.
+
+<details>
+<summary>All user guides</summary>
 
 | Doc | Covers |
 |-----|--------|
@@ -83,11 +108,18 @@ gaps and benchmarks.
 | [`docs/user/applets.md`](./docs/user/applets.md) | Per-applet detail, gaps vs. the real tool, benchmarks |
 | [`docs/user/stages-and-testing.md`](./docs/user/stages-and-testing.md) | Bootstrapping and validating a ROOT with `em stages` |
 
+</details>
+
 There is no dedicated `--local` user guide yet;
 [`docs/user/stages-and-testing.md`](./docs/user/stages-and-testing.md) covers
 the bootstrap. Remaining gaps are tracked under `todo/`.
 
-**Design & architecture** (`docs/design/`) — how `em` is built, and why:
+### Design and architecture
+
+How `em` is built, and why.
+
+<details>
+<summary>All design pages</summary>
 
 | Doc | Covers |
 |-----|--------|
@@ -100,11 +132,13 @@ the bootstrap. Remaining gaps are tracked under `todo/`.
 | [`docs/design/build-environment.md`](./docs/design/build-environment.md) | How phase env vars are resolved and read |
 | [`docs/design/bash-crossdev-matrix.md`](./docs/design/bash-crossdev-matrix.md) | `em crossdev` vs. real bash-crossdev fidelity reference |
 | [`docs/design/worker-build-tree.md`](./docs/design/worker-build-tree.md) | The unprivileged-build worker split |
-| [`docs/design/dep-resolver.md`](./docs/design/dep-resolver.md) | Historical resolver investigation (superseded by architecture.md) |
+| [`docs/design/dep-resolver.md`](./docs/design/dep-resolver.md) | Historical resolver investigation, superseded by architecture.md |
 | [`docs/design/use-flags-api-design.md`](./docs/design/use-flags-api-design.md) | Effective-USE-flag API design notes |
 | [`docs/design/testing.md`](./docs/design/testing.md) | Testing strategy, benchmarking, bumping the brush fork |
 | [`docs/design/benchmarks.md`](./docs/design/benchmarks.md) | How to measure performance across the workspace |
 | [`AGENTS.md`](AGENTS.md) | Contributor conventions: build commands, style, commit format |
+
+</details>
 
 Status trackers (open work, not reference docs) live under `todo/` — start
 at [`todo/PENDING.md`](./todo/PENDING.md).
@@ -115,7 +149,7 @@ at [`todo/PENDING.md`](./todo/PENDING.md).
 cargo install --path portage-cli
 ```
 
-## Local Development
+## Development
 
 See [AGENTS.md](AGENTS.md) for build commands, local dependency overrides,
 and CI-parity checks.
