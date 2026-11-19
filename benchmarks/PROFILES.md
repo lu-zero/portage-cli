@@ -31,7 +31,7 @@ ABI_X86= (empty)
 ### Forced flags
 
 ```
-arm64 big-endian cpu_flags_arm_edsp cpu_flags_arm_v8 cpu_flags_arm_vfp
+arm64 cpu_flags_arm_edsp cpu_flags_arm_v8 cpu_flags_arm_vfp
 cpu_flags_arm_vfp-d32 cpu_flags_arm_vfpv3 cpu_flags_arm_vfpv4 elibc_glibc
 kernel_linux llvm_targets_AArch64 split-usr test-rust
 ```
@@ -75,7 +75,7 @@ When constructing `UseConfig` for the benchmark, these flags should be enabled
 "cpu_flags_arm_vfp-d32", "cpu_flags_arm_vfpv3", "cpu_flags_arm_vfpv4",
 
 // Forced (architecture)
-"arm64", "big-endian",
+"arm64",
 ```
 
 ## Keyword Acceptance

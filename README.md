@@ -63,7 +63,7 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 |-----|--------|
 | [`docs/user/intro.md`](./docs/user/intro.md) | **Start here** — what `em` is, quick start, topologies, common workflows |
 | [`docs/user/cli/`](./docs/user/cli/index.md) | Generated flag-by-flag CLI reference (`em --help` in the terminal) |
-| [`docs/user/root-model.md`](./docs/user/root-model.md) | `--root`, `--prefix`, `--config-root`, and the other location flags — read this first |
+| [`docs/user/root-model.md`](./docs/user/root-model.md) | `--root`, `--prefix`, `--config-root`, and the other location flags — builder-side recipes |
 | [`docs/user/prefix-toolchain.md`](./docs/user/prefix-toolchain.md) | How to bootstrap and use a `--prefix`'s own compiler |
 | [`docs/user/crossdev.md`](./docs/user/crossdev.md) | Cross-compilation targets (`--target`, `em crossdev`) |
 | [`docs/user/binhost.md`](./docs/user/binhost.md) | Binary packages (`-b`/`-B`/`-k`/`-g`) and binhost identity model |
@@ -80,7 +80,10 @@ the bootstrap. Remaining gaps are tracked under `todo/`.
 | Doc | Covers |
 |-----|--------|
 | [`docs/design/architecture.md`](./docs/design/architecture.md) | Crate dependency graph, per-crate API catalog, `em -p` pipeline |
-| [`docs/design/root-topology.md`](./docs/design/root-topology.md) | The root/prefix/sysroot model's implementation reference |
+| [`docs/design/root-topology.md`](./docs/design/root-topology.md) | Design authority for the root/prefix/sysroot model — read this first |
+| [`docs/design/cross-sysroot-spec.md`](./docs/design/cross-sysroot-spec.md) | How a cross target's spec becomes Portage config |
+| [`docs/design/sync-backends.md`](./docs/design/sync-backends.md) | `em sync`'s git and gix backends, and what gix still lacks |
+| [`docs/design/cargo-eb.md`](./docs/design/cargo-eb.md) | The `cargo eb` applet |
 | [`docs/design/em-prefix-experiment.md`](./docs/design/em-prefix-experiment.md) | Why EPREFIX/multi-root bugs happen |
 | [`docs/design/build-environment.md`](./docs/design/build-environment.md) | How phase env vars are resolved and read |
 | [`docs/design/bash-crossdev-matrix.md`](./docs/design/bash-crossdev-matrix.md) | `em crossdev` vs. real bash-crossdev fidelity reference |

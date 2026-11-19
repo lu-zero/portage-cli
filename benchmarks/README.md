@@ -52,19 +52,16 @@ numbers, e.g. `cargo bench --features pkgcraft-compare`.
 
 ## Setup
 
+From the workspace root:
+
 ```sh
-git clone https://github.com/lu-zero/portage-bench
-cd portage-bench
-
-# Clone sibling crates
-../portage-bench/scripts/maint.sh setup
-
-# Shallow Gentoo tree for regen/search benchmarks (~200 MB)
-git clone --depth 1 https://github.com/gentoo/gentoo.git gentoo
-
-# pkgcraft baseline (optional, for comparison)
-git clone https://github.com/pkgcraft/pkgcraft ../pkgcraft
+git clone --depth 1 https://github.com/gentoo/gentoo.git gentoo   # ~200-300 MB, for regen/search
+cargo install hyperfine
 ```
+
+pkgcraft is an optional baseline: its revision is pinned in `Cargo.toml`, and
+a local checkout can be used through `.cargo/config.toml`. The harness lives
+in this directory; [`BENCHMARKS.md`](./BENCHMARKS.md) has the sweep commands.
 
 ## Running
 
@@ -108,10 +105,10 @@ cargo bench --no-default-features --features lasso
 
 ## Libraries Under Test
 
-- [portage-atom](https://crates.io/crates/portage-atom) — PMS atom and dependency parser
-- [portage-metadata](https://crates.io/crates/portage-metadata) — ebuild metadata cache types
-- [portage-repo](https://github.com/lu-zero/portage-repo) — ebuild repository layout reader
-- [portage-atom-pubgrub](https://github.com/lu-zero/portage-atom-pubgrub) — PubGrub solver bridge
+- [`portage-atom`](../portage-atom/) — PMS atom and dependency parser
+- [`portage-metadata`](../portage-metadata/) — ebuild metadata cache types
+- [`portage-repo`](../portage-repo/) — ebuild repository layout reader
+- [`portage-atom-pubgrub`](../portage-atom-pubgrub/) — PubGrub solver bridge
 - [pkgcraft](https://github.com/pkgcraft/pkgcraft) — baseline comparison library
 
 ## Data & Blogpost Material

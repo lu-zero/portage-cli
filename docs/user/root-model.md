@@ -1,9 +1,10 @@
 # Root model: `--root`, `--prefix`, and the location variables
 
-`em` operates on **three independent roots** that portage also distinguishes
-(PMS + `PORTAGE_CONFIGROOT`). Conflating them is a bug; keeping them orthogonal
-is what lets one code path serve host management, offset/stage builds,
-unprivileged `.local` overlays, and (eventually) crossdev.
+`em` keeps separate the location roles that Portage distinguishes (PMS +
+`PORTAGE_CONFIGROOT`): a config root, a base root, a target root, a sysroot and
+a build-tool root. Conflating them is a bug; keeping them orthogonal is what
+lets one code path serve host management, offset/stage builds, unprivileged
+`.local` overlays and crossdev.
 
 | concept | PMS / portage var | governs | `${X}/…` paths |
 |---|---|---|---|
@@ -95,7 +96,6 @@ bootstrapped prefix profile — see that row).
 | `em --prefix a/ --root b/ firefox` | b/ | a/ | VDB(b/) ∪ VDB(a/) | general overlay: base `b/`, delta into `a/`, config still from host `/` (pass `--config-root` explicitly for anything else) |
 | `em --local [DIR]` firefox | DIR (default `~/.gentoo`) | DIR | VDB(DIR) (empty ⇒ **full closure**) | standalone Gentoo-Prefix — like `--root`, but relocatable (`EPREFIX`), **its own BROOT** (see below), and config prefers `DIR`'s own profile once bootstrapped (else host `/`) — not the host's VDB either way |
 | `{target}-emerge` (crossdev) | `/` (BROOT) | `/usr/<CHOST>/` or overridden `ROOT` | host VDB + target VDB | cross-compile; config *does* follow the target here (`PORTAGE_CONFIGROOT=${SYSROOT}`, set by the wrapper) — see [BDEPEND / crossdev](#bdepend-rdepend-and-with-bdeps) |
-| `em` crossdev parity (future) | host | target | same model as portage | Stage 3 — dual-root plan entries |
 
 `em --root foo/` and `em --prefix foo/` differ in exactly one thing: whether the
 host counts as already installed. `--root` ignores it (full closure rebuilt into

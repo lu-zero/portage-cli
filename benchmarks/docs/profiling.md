@@ -102,10 +102,6 @@ just the measured routine, build the provider once and use
 idempotent (the root is removed at the end of every call), so
 this is safe.
 
-A small example doing exactly this lives in `examples/`
-(when added) and is the right harness for "where does the
-resolver itself spend its time."
-
 ## Tracking allocations (dhat)
 
 `portage-bench` has a `dhat-heap` feature that swaps the global
@@ -122,18 +118,7 @@ $RESOLVE_BIN --bench 'resolve/targets/portage-atom-pubgrub/firefox'
 
 Note: dhat's `Profiler` writes its report when it is dropped.
 A criterion `--bench` run only flushes after criterion exits,
-so the report covers the whole run including setup. For
-allocation-site profiling scoped to a specific phase, write a
-small standalone `examples/dhat_resolve.rs` that:
-
-```rust
-fn main() {
-    let _profiler = dhat::Profiler::new_heap();
-    // build provider once
-    // run resolve_targets in a loop
-    // _profiler dropped at end -> writes dhat-heap.json
-}
-```
+so the report covers the whole run including setup.
 
 Open the resulting `dhat-heap.json` in
 [dh_view](https://nnethercote.github.io/dh_view/dh_view.html).

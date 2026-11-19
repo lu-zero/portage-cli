@@ -529,34 +529,20 @@ section used to describe is **already fixed** in `setup/mod.rs` (see its own
 correctly gets no host-python symlinks, `--prefix` correctly does. Don't
 re-diagnose that; it's done.
 
-**Corrected 2026-09-27.** This paragraph used to say `em setup --local` writes
-**no** `make.profile` and that a `select profile set <profile>` step was
-required to supply one. That is no longer true: `em setup --local DIR`
-auto-resolves and symlinks `etc/portage/make.profile` from the upstream
-profile matching the host arch, hard-erroring when there is no registered
-profile rather than guessing. Verified in a crossdev-stages sandbox — the
-symlink lands on `profiles/default/linux/arm64/23.0` for an arm64 host, from
-`em setup --local` alone, with no `select profile set` involved. The
-`--local` lifecycle above no longer carries that step. See
-`todo/local-bootstrap.md` for the setup ladder, which was already right.
+`em setup --local DIR` resolves and symlinks `etc/portage/make.profile` to the
+upstream profile matching the host arch, and hard-errors when no profile is
+registered. No separate `select profile set` step supplies one.
 
-The practical consequence was a silent one: a `--local` bootstrap driven
-without `em setup --local` runs with no profile *and* no `package.provided`, and
-then the bootstrap graph's genuine hard cycles become unbreakable, so preflight
-reports them as phantom "real hard-dependency cycle: A and B" failures. Six of
-them on a stock `arm64/23.0` tree; zero once `setup --local` had run. A caller
-that skips the setup step is not taking a shortcut, it is disabling the cycle
-repair.
+Without that step a `--local` bootstrap runs with no profile and no
+`package.provided`, so preflight reports the graph's genuine hard cycles as
+phantom "real hard-dependency cycle: A and B" failures. Skipping setup
+disables the cycle repair, it does not take a shortcut.
 
-What remains true: a plain
-`em select profile set --local DIR <profile>` now targets the prefix
-correctly (see the "Known gap" writeup above — fixed in `7a8c5bc`, no
-`--config-root` override needed for the common `--local`/`--prefix` case,
-only for targeting a foreign sysroot). Skipping the step entirely still
-doesn't error at the `toolchain --setup` step: it silently falls back to
-resolving against the host's real `/etc/portage`, producing a much larger,
-more chaotic dependency set than intended (confirmed live 2026-07-11 — see
-"Plain unprivileged toolchain" above for the full writeup).
+A plain `em select profile set --local DIR <profile>` targets the prefix
+correctly; `--config-root` is needed only when targeting a foreign sysroot.
+Skipping the step entirely does not error at `toolchain --setup`: it falls
+back to the host's real `/etc/portage` and resolves a much larger dependency
+set than intended.
 
 ### Cross setup (`em crossdev`)
 

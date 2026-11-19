@@ -429,7 +429,8 @@ For a complete guide to cross-compilation, see [`docs/user/crossdev.md`](./cross
 
 `em` is still pre-release. Some features are not yet complete:
 
-- Some applets are stubs (see applet status in README)
+- The applets marked Partial in the README are incomplete; `em maint merges`
+  is unavailable because `em` keeps no failed-merge registry
 - `--local` bootstrap is not fully automated
 - Certain edge cases in dependency resolution
 - `FEATURES`: a build sees only what em implements — `test`, `keepwork`, `keeptemp`, `noclean`,
@@ -475,19 +476,8 @@ em query depgraph <package>
 
 ## Architecture Overview
 
-For those interested in the internals:
-
-- **`portage-cli`**: The `em` binary crate (this repository)
-- **`portage-atom`**: Package atom parsing (Cpn, Cpv, Dep, etc.)
-- **`portage-metadata`**: Metadata cache parsing and USE flag handling
-- **`portage-repo`**: Repository layout, profile stack, ebuild execution
-- **`portage-solver`**: Solver-agnostic dependency resolution trait
-- **`portage-atom-pubgrub`**: PubGrub solver implementation
-- **`portage-resolve`**: Resolution policy, USE stacking, post-solve validation
-- **`portage-vdb`**: Installed package database access
-- And more...
-
-For details, see [`docs/design/architecture.md`](../design/architecture.md).
+See [`docs/design/architecture.md`](../design/architecture.md) for the crate
+catalog, dependency layering and the resolution pipeline.
 
 ---
 

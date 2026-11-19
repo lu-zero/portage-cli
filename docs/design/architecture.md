@@ -9,7 +9,6 @@ validation, and known divergences from emerge.
 
 Related: [`docs/design/testing.md`](./testing.md) (how correctness is established),
 [`docs/design/benchmarks.md`](./benchmarks.md) (how performance is measured),
-[`usage-rs.md`](./usage-rs.md) (the grammar decisions behind `em`'s CLI, which now parses with winnow-args),
 [`cross-sysroot-spec.md`](./cross-sysroot-spec.md) (how a cross target's spec becomes Portage config),
 [`sync-backends.md`](./sync-backends.md) (`em sync`'s git and gix backends, and what gix still lacks).
 
@@ -74,7 +73,9 @@ Versions below are the **workspace** package versions in each crate's
 
 ## Per-crate public API
 
-### `gentoo-interner` (v0.4.1)
+Versions are in the crate catalog above; the headings name the API only.
+
+### `gentoo-interner`
 
 String interning foundation. Default backend is **papaya** (concurrent
 hash map); `lasso` and `symbol-table` backends available as feature flags.
@@ -85,7 +86,7 @@ hash map); `lasso` and `symbol-table` backends available as feature flags.
 - `struct GlobalInterner` *(feature: interner, default)* — process-global interner
 - `type DefaultInterner` — alias: `GlobalInterner`
 
-### `gentoo-core` (v0.6.1)
+### `gentoo-core`
 
 Architecture and release-variant types.
 
@@ -94,7 +95,7 @@ Architecture and release-variant types.
 - `type ExoticKey<I>` — alias for `Interned<I>`
 - `struct Variant<I>` — release media variant (`arch-flavor`): `parse()`, `flavor()`
 
-### `portage-atom` (v0.11.1)
+### `portage-atom`
 
 PMS atom parser — the vocabulary every other crate speaks.
 
@@ -117,7 +118,7 @@ PMS atom parser — the vocabulary every other crate speaks.
 - Builder types *(feature: `builder`)*: `CpnBuilder`, `CpvBuilder`, `DepBuilder`, `SlotBuilder`, `UseDepBuilder`, `SuffixBuilder`, `VersionBuilder`
 - Re-exports `gentoo_interner as interner`
 
-### `portage-metadata` (v0.10.0)
+### `portage-metadata`
 
 Ebuild metadata cache parser.
 
@@ -132,7 +133,7 @@ Ebuild metadata cache parser.
 - `struct ParseDiagnostic` — structured winnow parse failure (`miette::Diagnostic`); four grammar `Error` variants carry it
 - Re-exports `portage_atom::interner`
 
-### `portage-solver` (v0.3.0)
+### `portage-solver`
 
 Solver-agnostic vocabulary for the PubGrub bridge, which `em` resolves through.
 
@@ -143,7 +144,7 @@ Solver-agnostic vocabulary for the PubGrub bridge, which `em` resolves through.
 - `enum RequiredUse` — REQUIRED_USE encoding vocabulary
 - Depends only on `portage-atom` and `thiserror`; no pubgrub or resolvo
 
-### `portage-atom-resolvo` (v0.8.1)
+### `portage-atom-resolvo`
 
 SAT-based dependency solver bridge using resolvo.
 
@@ -158,7 +159,7 @@ SAT-based dependency solver bridge using resolvo.
 - `struct InMemoryRepository` — HashMap-backed test impl
 - `fn version_matches()` — PMS version matching
 
-### `portage-atom-pubgrub` (v0.8.0)
+### `portage-atom-pubgrub`
 
 PubGrub-based dependency solver bridge — the solver `em` uses by default.
 
@@ -179,7 +180,7 @@ PubGrub-based dependency solver bridge — the solver `em` uses by default.
 - `fn resolve_effective_use()` — Per-package USE fold (re-export from `portage-solver`)
 - Re-exports `DefaultInterner`, `Interned` from `portage_atom::interner`
 
-### `portage-repo` (v0.1.0)
+### `portage-repo`
 
 Repository layout reader — reads a Gentoo **ebuild tree** from disk (PMS §4).
 The most complex library crate. Depends on `brush-*` (embedded bash shell)
@@ -225,7 +226,7 @@ sourcing and `make.conf` parsing. Additions to the fork:
 See [`../AGENTS.md`](../../AGENTS.md) § "Bumping the brush fork" for the
 patch/pin workflow.
 
-### `portage-vdb` (v0.2.1)
+### `portage-vdb`
 
 Installed package database reader/writer for `/var/db/pkg`.
 
@@ -249,7 +250,7 @@ Installed package database reader/writer for `/var/db/pkg`.
   paths.
 - Directory iterators: `AllPackages`, `Category`, `Categories`, `Packages`
 
-### `portage-binpkg` (v0.2.1)
+### `portage-binpkg`
 
 Gentoo binary package (GPKG) read/write per [GLEP 78](https://www.gentoo.org/glep/glep-0078.html).
 
@@ -262,7 +263,7 @@ Gentoo binary package (GPKG) read/write per [GLEP 78](https://www.gentoo.org/gle
 - `struct GpkgInput` — input specification for writing
 - Used by `em` for `-b`/`--buildpkg`, `-k`/`--usepkg`, and `-g`/`--getbinpkg`
 
-### `portage-distfiles` (v0.1.0)
+### `portage-distfiles`
 
 Source distfile fetching and resolution.
 
@@ -272,7 +273,7 @@ Source distfile fetching and resolution.
 - `struct Fetcher` — Downloads distfiles (builtin HTTP or external command)
 - `struct FetchConfig` / `enum FetchStrategy` / `enum FetchStatus` — Fetch configuration and result
 
-### `gentoo-stages` (v0.6.1)
+### `gentoo-stages`
 
 Stage3 tarball fetch and cache management.
 
@@ -280,7 +281,7 @@ Stage3 tarball fetch and cache management.
 - `struct Client` / `ClientBuilder` — HTTP client for mirror listings
 - `struct Cache` — Local filesystem cache
 
-### `portage-resolve` (v0.0.1, unpublished)
+### `portage-resolve`
 
 Resolution-policy and plan layer used by `em -p` / the merge path. Migrated
 out of `portage-cli`'s former `query/depgraph/*` (2026-07-16). Depends on

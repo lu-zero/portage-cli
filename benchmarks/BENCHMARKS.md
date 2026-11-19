@@ -138,11 +138,10 @@ allocation/interning fixes, the `dhat-heap` tooling addition, and the `bdepend_t
 
 ## Update 2026-07-12: `UseConfig`/`ForceMask` per-version cost cut (commit `d4091a3`)
 
-`todo/useconfig-clone-elimination.md` had proposed making the solver's
-per-version `VersionData.desired` a `Cow<UseConfig>` so a package with no
-local IUSE/`package.use` match could borrow the global config instead of
-cloning it. An independent review (Fable model) of that plan, done *before*
-implementation, found the premise false: `desired_use` already forces
+An earlier proposal made the solver's per-version `VersionData.desired` a
+`Cow<UseConfig>` so a package with no local IUSE/`package.use` match could
+borrow the global config instead of cloning it. The premise was false:
+`desired_use` already forces
 `.into_owned()` before `ForceMask::apply` runs, and `ForceMask::apply`
 mutates `cfg` for essentially every real package (`ForceMask::is_empty()`
 requires the *global* `use.mask` to be empty too, which no real profile
@@ -168,10 +167,8 @@ exists somewhere in the system.
 
 The win scales with plan size × IUSE richness (what the fixed scan is
 proportional to), not a fixed per-invocation overhead — small plans see
-nothing, which matches the earlier estimate in
-`todo/useconfig-clone-elimination.md` that the *originally proposed* fix
-would be below the noise floor end-to-end. This one wasn't, because it
-targeted the actual dominant cost instead of the one the doc guessed at.
+nothing, as the earlier proposal's end-to-end estimate predicted. This fix
+was measurable because it targeted the actual dominant cost.
 
 Parity unchanged (`benchmarks/bench-em-vs-emerge.sh SKIP_TIMING=1`): same
 pre-existing diff counts on firefox/thunderbird/libreoffice, both before
