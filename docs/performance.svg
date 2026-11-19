@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="540" viewBox="0 0 720 380" role="img" aria-label="Wall-clock benchmarks: em against emerge and pkgcraft on thalia.">
+<rect width="720" height="380" fill="none"/>
+<text x="10.0" y="18" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#5fafaf" text-anchor="start" font-weight="600">Pretend and search, wall clock</text>
+<line x1="170" y1="30" x2="170" y2="222" stroke="#8a8a8a" stroke-opacity="0.35" stroke-width="1"/>
+<text x="170.0" y="238" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">10 ms</text>
+<line x1="265" y1="30" x2="265" y2="222" stroke="#8a8a8a" stroke-opacity="0.35" stroke-width="1"/>
+<text x="265.0" y="238" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">100 ms</text>
+<line x1="360" y1="30" x2="360" y2="222" stroke="#8a8a8a" stroke-opacity="0.35" stroke-width="1"/>
+<text x="360.0" y="238" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">1 s</text>
+<line x1="455" y1="30" x2="455" y2="222" stroke="#8a8a8a" stroke-opacity="0.35" stroke-width="1"/>
+<text x="455.0" y="238" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">10 s</text>
+<line x1="550" y1="30" x2="550" y2="222" stroke="#8a8a8a" stroke-opacity="0.35" stroke-width="1"/>
+<text x="550.0" y="238" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">100 s</text>
+<text x="162.0" y="46" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="end" font-weight="600">firefox -p · em</text>
+<rect x="170" y="35" width="185.7" height="14" rx="2" fill="#5faf5f"/>
+<text x="361.7" y="46" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="start">0.9 s</text>
+<text x="162.0" y="70" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="end">firefox -p · emerge</text>
+<rect x="170" y="59" width="244.0" height="14" rx="2" fill="#d78787"/>
+<text x="420.0" y="70" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="start">3.7 s</text>
+<text x="162.0" y="94" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="end" font-weight="600">libreoffice -p · em</text>
+<rect x="170" y="83" width="190.0" height="14" rx="2" fill="#5faf5f"/>
+<text x="366.0" y="94" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="start">1.0 s</text>
+<text x="162.0" y="118" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="end">libreoffice -p · emerge</text>
+<rect x="170" y="107" width="247.2" height="14" rx="2" fill="#d78787"/>
+<text x="423.2" y="118" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="start">4.0 s</text>
+<text x="162.0" y="142" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="end" font-weight="600">five packages -p · em</text>
+<rect x="170" y="131" width="190.0" height="14" rx="2" fill="#5faf5f"/>
+<text x="366.0" y="142" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="start">1.0 s</text>
+<text x="162.0" y="166" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="end">five packages -p · emerge</text>
+<rect x="170" y="155" width="253.8" height="14" rx="2" fill="#d78787"/>
+<text x="429.8" y="166" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="start">4.7 s</text>
+<text x="162.0" y="190" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="end" font-weight="600">gcc -s · em</text>
+<rect x="170" y="179" width="95.0" height="14" rx="2" fill="#5faf5f"/>
+<text x="271.0" y="190" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="start">0.1 s</text>
+<text x="162.0" y="214" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="end">gcc -s · emerge</text>
+<rect x="170" y="203" width="258.0" height="14" rx="2" fill="#d78787"/>
+<text x="434.0" y="214" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="start">5.2 s</text>
+<text x="10.0" y="274" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#5fafaf" text-anchor="start" font-weight="600">Cache regeneration, 32k ebuilds, j=8</text>
+<line x1="170" y1="286" x2="170" y2="334" stroke="#8a8a8a" stroke-opacity="0.35" stroke-width="1"/>
+<text x="170.0" y="350" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">10 ms</text>
+<line x1="265" y1="286" x2="265" y2="334" stroke="#8a8a8a" stroke-opacity="0.35" stroke-width="1"/>
+<text x="265.0" y="350" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">100 ms</text>
+<line x1="360" y1="286" x2="360" y2="334" stroke="#8a8a8a" stroke-opacity="0.35" stroke-width="1"/>
+<text x="360.0" y="350" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">1 s</text>
+<line x1="455" y1="286" x2="455" y2="334" stroke="#8a8a8a" stroke-opacity="0.35" stroke-width="1"/>
+<text x="455.0" y="350" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">10 s</text>
+<line x1="550" y1="286" x2="550" y2="334" stroke="#8a8a8a" stroke-opacity="0.35" stroke-width="1"/>
+<text x="550.0" y="350" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">100 s</text>
+<text x="162.0" y="302" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="end" font-weight="600">regen · em</text>
+<rect x="170" y="291" width="309.5" height="14" rx="2" fill="#5faf5f"/>
+<text x="485.5" y="302" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="start">18.1 s</text>
+<text x="162.0" y="326" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="end">regen · pkgcraft</text>
+<rect x="170" y="315" width="350.0" height="14" rx="2" fill="#d75f5f"/>
+<text x="526.0" y="326" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#17181a" text-anchor="start">48.3 s</text>
+<text x="407.5" y="364" font-family="ui-sans-serif,system-ui,Segoe UI,Helvetica,Arial,sans-serif" font-size="13" fill="#8a8a8a" text-anchor="middle">wall clock, log scale</text>
+</svg>

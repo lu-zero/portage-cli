@@ -73,6 +73,8 @@ Cold `em -p` against `emerge -p`, and `em -s` against `emerge -s`, on thalia,
 an Ampere-1a server pinned to one NUMA node. Hyperfine medians, representative
 of recent runs:
 
+![Wall-clock benchmarks: em against emerge and pkgcraft](./docs/performance.svg)
+
 | Command | `em` | `emerge` | Speedup |
 |---------|-----:|---------:|--------:|
 | `firefox -p` | ~0.9 s | ~3.7 s | ~4× |
