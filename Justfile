@@ -46,10 +46,10 @@ site:
     python3 site/summary.py
     mdbook build site
 
-# Serve the site at http://localhost:3000, rebuilding as docs/ changes
-site-serve:
+# Serve the site on port 3000, rebuilding as docs/ changes; `just site-serve 0.0.0.0` for remote work
+site-serve host="localhost":
     python3 site/summary.py
-    mdbook serve site
+    mdbook serve site --hostname {{host}}
 
 # Dead links and doc paths in Markdown and Rust doc comments
 docs-links:
