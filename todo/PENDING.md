@@ -11,6 +11,12 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 `[[name]]` links still resolve by filename there. Milestone-level build
 progress (M0 → M4, each with its gate command) lives in [[build-roadmap]].
 
+## CLI parity (2026-11-19)
+
+| Item | Status | Detail |
+|------|--------|--------|
+| emerge/crossdev gaps and em-only additions, tracked in both directions | 🔴 backlog | [[em-crossdev-parity]] |
+
 ## Latest (2026-11-15) — repository storage, sync verification, search
 
 Not part of the stage arc, but where the work went 2026-10-28…11-15.

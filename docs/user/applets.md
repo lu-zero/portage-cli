@@ -4,7 +4,7 @@ Detail behind the summary table in the [README](../../README.md#applet-status):
 per-subcommand status, gaps against the real Portage tool, and notes on
 deliberate design differences.
 
-**Covered here:** `query`, `use`, `maint`, `clean`, `etc`, `revdep`,
+**Covered here:** `emerge`, `query`, `use`, `maint`, `clean`, `etc`, `revdep`,
 `mirrordist`, `read`, `portageq`, `grep`.
 
 **Covered by their own document:**
@@ -18,11 +18,50 @@ deliberate design differences.
 | `maint binhost`, `maint binpkg` | [`binhost.md`](./binhost.md) |
 | the `--root`/`--prefix`/`--local` model the topology flags select | [`root-model.md`](./root-model.md) |
 
-**Everything else** — `active`, `atom`, `depclean`, `ebuild`, `emerge`,
-`env`, `pkg`, `quickpkg`, `regen`, `search`, `select`, `setup`, `sync` — has
+**Everything else** — `active`, `atom`, `depclean`, `ebuild`, `env`,
+`pkg`, `quickpkg`, `regen`, `search`, `select`, `setup`, `sync` — has
 no long-form how-to. Flag-by-flag help is in [`cli/`](./cli/index.md);
 `em <applet> --help` is the same in the terminal. `em --help` lists every
 applet, and each one's `--help` lists its subcommands.
+
+## `em emerge`
+
+The default applet: a bare `em <atoms>` takes the same path. Core resolving
+and merging match `emerge -p/-uD/-C/-c`, including binpkg build and use, sets
+and the root flags. The gaps below are tracked in the implementation queue.
+
+**Not implemented:**
+
+- `EMERGE_DEFAULT_OPTS` is printed by `em info` but never applied, and
+  `--ignore-default-opts` is absent. A host carrying `-j8 --quiet-build=y`
+  runs `em` sequentially with full build output.
+- `--clean` has no workalike: `-P/--prune` keeps the highest version and
+  ignores slots; emerge keeps the most recently installed version per slot.
+- The autounmask family beyond `--autounmask-write`: emerge generates USE,
+  license, keyword and mask suggestions with `--autounmask-use`,
+  `--autounmask-license`, `--autounmask-keep-keywords` and the backtrack
+  controls. `em` accepts `--autounmask` but does not act on it.
+- Binpkg trust and selection filters: `--binpkg-respect-use`,
+  `--binpkg-changed-deps`, `--usepkg-include/-exclude`, `--pkg-format`.
+- Emerge-level actions `--check-news`, `--read-news`, `--list-sets`,
+  `--metadata`, `--config`, `--status`, `--rage-clean` and `--sync-submodule`.
+  News, sync, regen and depclean exist as separate `em` applets.
+- Rebuild selectors (`--changed-deps`, `--rebuilt-binaries`, `--newrepo`,
+  `--nobindeps`) and per-invocation overrides (`--accept-properties`,
+  `--accept-restrict`, `--dynamic-deps`, `--ignore-world`).
+- Scheduler knobs beyond `-j`/`-l`; merges are serialised.
+- `-r/--resume` re-solves the saved atoms instead of replaying a pinned merge
+  list, so a dependency change between runs changes the resumed plan.
+- `--info [atom]`: `em --info firefox` emerges firefox; only the empty-atom
+  form prints info.
+- `--color` takes `auto|always|never`, not emerge's `y|n`.
+- Minor flags: `-A/--alert`, `--ask-enter-invalid`, `-d/--debug`,
+  `--circular-deps-report`, `--sysroot`, `--select/-w`, `--skipfirst`.
+
+**Intentional differences:** `--keep-going` is refused, `--autounmask` is a
+no-op and `--complete-graph` defaults to repairing installed packages.
+
+Reference: [`emerge`](./cli/emerge.md).
 
 ## `em query` (equery)
 

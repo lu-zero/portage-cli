@@ -285,17 +285,24 @@ more host-arch tools onto an established target — crossdev's own "Extra
 Fun". These are **per-invocation**, not persisted: a later `--init-target`
 that omits the flag drops the extra again, exactly like real crossdev.
 
+`--init-target` writes the extra into the target's spec and exits; `--setup`
+then builds it. Both steps are needed — `--setup` on an already initialized
+target only fills gaps and does not add a new extra.
+
 ```
 # Build a cross-gdb (dev-debug/gdb) alongside the toolchain:
 em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-gdb
+em crossdev --target riscv64-unknown-linux-gnu --setup
 
 # The Rust standard library for this target (sys-devel/rust-std — its own
 # ::gentoo DESCRIPTION literally says "standalone (for crossdev)"), needed
 # to cross-compile Rust code targeting the tuple:
 em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-pkg sys-devel/rust-std
+em crossdev --target riscv64-unknown-linux-gnu --setup
 
 # Multiple extras, repeatable:
 em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-gdb --ex-pkg sys-devel/rust-std
+em crossdev --target riscv64-unknown-linux-gnu --setup
 ```
 
 Pick a genuine standalone host-arch tool for `--ex-pkg` — something that
@@ -330,6 +337,42 @@ No per-target compiler build — clang already cross-targets. The category is
 `cross_llvm-<tuple>` instead of `cross-<tuple>`, and the package set is the
 clang wrapper + LLVM runtimes (`compiler-rt`/`libunwind`/`libcxxabi`/
 `libcxx`) instead of the GCC toolchain stages.
+
+## Gaps vs crossdev
+
+`em crossdev` covers config setup, the full toolchain bootstrap and the LLVM
+model. The real tool's wider option surface is not implemented:
+
+**Missing options:**
+
+- Stage selection `-s0..-s4` and `--ex-only`: em has only config-only
+  `--init-target` or the full `--setup` sequence.
+- `-C/--clean` to uninstall a target's config, overlay, wrappers and sysroot.
+- Per-component version selectors (`--b/--g/--k/--l`, LLVM equivalents) with
+  depend atoms, and `-S/--stable`. A [spec file](#spec-files) can pin exact
+  versions, but there is no CLI range or stable selector.
+- Per-component `--[bdgkl]cat/pkg/env` overrides and `--ex-gcc` extra
+  frontends.
+- `-A/--abis`, `--host-abi`, `-f/--force`, `-P/--portage` and
+  `--show-fail-log`. Note that `-f` means `--fetchonly` in em, so real
+  crossdev command lines do not carry over.
+- Overlay selection flags. em discovers repositories and writes a virtual
+  config entry instead; see the
+  [fidelity matrix](../design/bash-crossdev-matrix.md).
+
+**Different behaviour:**
+
+- The letters `b`, `g`, `k`, `r`, `u`, `a`, `p` and `t` mean different things
+  in em because they are shared with emerge. Real crossdev lines are not
+  portable.
+- `--show-target-cfg` prints a human table, not shell-evaluable `key=value`.
+- Supported [tuples](#supported-tuples) are narrower: `gnu*`, `musl` and
+  bare-metal `-elf`/`-eabi`/`-newlib` targets.
+- em regenerates config on `--init-target`/`--setup` rather than restoring
+  `/etc/portage/crossdev/<tuple>` settings, and installs no per-target
+  wrappers. Use `em --target T …` instead.
+
+Reference: [`crossdev`](./cli/crossdev.md).
 
 ## Gotchas
 
