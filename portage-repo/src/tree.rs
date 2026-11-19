@@ -1,7 +1,7 @@
 //! Where a repository's files and metadata entries come from
 //!
 //! [`TreeSource`] serves bytes by repo-relative path; [`EntrySource`] produces the valid
-//! metadata entries, which each backend answers its own way.
+//! metadata entries, which each backend answers its own way. See `docs/design/tree-storage.md`.
 
 use std::io;
 use std::sync::Arc;

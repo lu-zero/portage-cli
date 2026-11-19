@@ -25,6 +25,7 @@ README.md
 - design/build-environment.md
 - design/worker-build-tree.md
 - design/cross-sysroot-spec.md
+- design/tree-storage.md
 - design/sync-backends.md
 - design/use-flags-api-design.md
 - design/testing.md
@@ -33,3 +34,4 @@ README.md
 - design/usage-rs.md
 - design/bash-crossdev-matrix.md
 - design/em-prefix-experiment.md
+- design/tree-storage-experiment.md
