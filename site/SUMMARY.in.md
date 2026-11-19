@@ -30,6 +30,5 @@ README.md
 - design/testing.md
 - design/benchmarks.md
 - design/cargo-eb.md
-- design/usage-rs.md
 - design/bash-crossdev-matrix.md
 - design/em-prefix-experiment.md
