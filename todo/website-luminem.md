@@ -1,7 +1,8 @@
 # Project websites on luminem.org: em.luminem.org first, same pattern for winnow-args
 
-Status: 🟡 em site prepared 2026-11-18 (`site/`, `just site`, `.github/workflows/pages.yml`), not deployed: needs Pages enabled with
-source "GitHub Actions" and the DNS records below. Hosting: GitHub Pages, one site per repo, each on its own `luminem.org` subdomain.
+Status: 🟡 both sites prepared, not deployed. em: `site/`, `just site`, `pages.yml` (2026-11-18). winnow-args: `site/`, `just site`,
+`pages.yml`, uncommitted in `~/Sources/winnow-args` (2026-11-19). Next: Pages source "GitHub Actions" on each repo, first deploy
+at `lu-zero.github.io/<repo>/`, then pick the owner and the DNS mapping below. Hosting: GitHub Pages, one site per repo, each on its own `luminem.org` subdomain.
 
 ## Shape
 
@@ -14,7 +15,12 @@ Both repos are public with no Pages site yet (checked 2026-11-18), so each repo 
 `luminem.org` itself moves to GitHub Pages too, built with Zola from `luminem/site` (a landing page listing the projects).
 An apex domain on Pages takes `A`/`AAAA` records to GitHub's Pages addresses instead of a `CNAME`, and replaces the current OVH host.
 
-## Building: mdBook (done for em)
+## Building: mdBook (done for both)
+
+winnow-args: `site/SUMMARY.md` lists README, `docs/*.md`, CHANGELOG and CONTRIBUTING; `site/stage.py` copies those (and
+`docs/*.svg`) into `target/site-src` and points links to anything else (crates, benchmarks, examples, licenses) at GitHub.
+
+em:
 
 - `site/book.toml` builds from `docs/` itself (`src = "../docs"`) into `target/site`; nothing moved.
 - `site/SUMMARY.in.md` is the hand-written outline; `site/summary.py` writes the gitignored `docs/SUMMARY.md`, titling each page from
@@ -29,6 +35,8 @@ An apex domain on Pages takes `A`/`AAAA` records to GitHub's Pages addresses ins
 
 - Workflow `pages.yml`: on a push to `master` touching `docs/` or `site/` (and manual dispatch), run `./check-doc-links.py`, build with
   mdBook (CI's `cli-reference` job already guards the generated pages), upload with `actions/upload-pages-artifact`, publish with `actions/deploy-pages`. Repo Settings → Pages → Source: GitHub Actions.
+- The address is not in the repo: `actions/configure-pages` gives the base path (`/portage-cli` on github.io, empty on a custom
+  domain) and the build passes it to mdBook as `MDBOOK_OUTPUT__HTML__SITE_URL`, so mapping a domain needs no commit.
 - Custom domain set in Settings → Pages (with Actions deploys no `CNAME` file is needed), then "Enforce HTTPS" once the certificate is issued.
 
 ## Ownership, DNS and domain safety (needs Luca)

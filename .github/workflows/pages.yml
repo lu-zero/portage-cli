@@ -21,11 +21,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - id: pages
+        uses: actions/configure-pages@v5
       - uses: taiki-e/install-action@v2
         with:
           tool: mdbook@0.5.4,mdbook-mermaid@0.17.1
       - run: ./check-doc-links.py
+      # lu-zero.github.io/portage-cli/ until a custom domain is set, then the domain's root.
       - run: python3 site/summary.py && mdbook build site
+        env:
+          MDBOOK_OUTPUT__HTML__SITE_URL: ${{ steps.pages.outputs.base_path }}/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: target/site

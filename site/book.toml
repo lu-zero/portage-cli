@@ -16,7 +16,6 @@ command = "python3 repo-links.py"
 
 [output.html]
 site-url = "/"
-cname = "em.luminem.org"
 git-repository-url = "https://github.com/lu-zero/portage-cli"
 edit-url-template = "https://github.com/lu-zero/portage-cli/edit/master/docs/{path}"
 additional-js = ["mermaid-init.js"]

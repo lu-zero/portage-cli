@@ -41,7 +41,7 @@ docs-check:
         exit 1
     fi
 
-# Build the em.luminem.org site from docs/ into target/site
+# Build the project site from docs/ into target/site
 site:
     python3 site/summary.py
     mdbook build site
