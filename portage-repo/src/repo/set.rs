@@ -17,9 +17,7 @@ use crate::metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache
 /// Every repository one invocation searches or merges across, in priority
 /// order, plus the virtual (alias) repos configured alongside them.
 ///
-/// This is the whole "which repos" parameter — there is no second list. A
-/// caller that used to take `repo: &Repository` plus a separately-threaded
-/// `overlays`/`sources` list takes one `&RepoSet` instead.
+/// This is the whole "which repos" parameter — there is no second list.
 #[derive(Clone)]
 pub struct RepoSet {
     /// **Descending** `(priority, name)`: index 0 wins a duplicate cpv

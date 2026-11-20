@@ -648,8 +648,8 @@ fn set_atom((cpn, slot): (Cpn, Slot)) -> Dep {
 /// fallback in `_pkg_str`, for the legitimate old-EAPI-implicit-slot case);
 /// an unreadable/corrupted `SLOT` file returns `None` instead of guessing —
 /// the same handling `preserved_rebuild_atoms` (`preserve_libs.rs`) gives the
-/// identical VDB-read failure, so the two VDB-set families no longer disagree
-/// on how to treat a mid-removal/corrupted package.
+/// identical VDB-read failure, so both families agree on how to treat a
+/// mid-removal/corrupted package.
 fn slot_member(pkg: &InstalledPackage) -> Option<(Cpn, Slot)> {
     // The main slot only, matching portage's `Atom(f"{pkg.cp}:{pkg.slot}")` —
     // `_pkg_str.slot` keeps the sub-slot separate. `from_name` reuses the

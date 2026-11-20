@@ -410,9 +410,8 @@ pub fn clear(root: &Utf8Path) {
 }
 
 /// Load the state to replay for `-r`/`--resume`: `resume` if present, else
-/// `resume_backup` — promoted (removed from backup, persisted as the live
-/// `resume`) to match portage's own promotion-on-`--resume` behavior.
-/// `Ok(None)` if neither slot is occupied.
+/// `resume_backup` — promoted to the live `resume` to match portage's own
+/// promotion-on-`--resume` behavior. `Ok(None)` if neither slot is occupied.
 pub fn take_for_resume(root: &Utf8Path) -> Result<Option<ResumeState>> {
     let mut file = read_file(root);
     if let Some(state) = file.resume.clone() {

@@ -2344,13 +2344,8 @@ pub enum Applet {
     ///
     /// With no names, syncs every entry with `auto-sync = yes` (Portage
     /// default) and a usable `sync-type`/`sync-uri`. Named repos are synced
-    /// regardless of `auto-sync`.
-    ///
-    /// Uses `git` / `rsync` (Portage parity) for the actual transfer.
-    ///
-    /// Same command as `em maint sync` — this top-level form exists only
-    /// because `sync` is common enough to deserve a short invocation,
-    /// matching real Portage having both `emerge --sync` and `emaint sync`.
+    /// regardless of `auto-sync`. Uses `git` / `rsync` (Portage parity) for
+    /// the actual transfer.
     // Both dispatch to `crate::maint::sync::run`.
     #[arg(help = "Sync repositories (git, rsync)")]
     Sync(SyncArgs),
@@ -3028,7 +3023,7 @@ pub struct GrepArgs {
     #[arg(short = 's', long = "skip-comments")]
     pub skip_comments: bool,
 
-    /// Label matches with `cat/pkg-ver::repo` instead of a path; implies -N
+    /// Label matches with `cat/pkg-ver::repo` instead of a path
     #[arg(short = 'R', long = "show-repo")]
     pub show_repo: bool,
 
@@ -3418,9 +3413,6 @@ pub struct StagesArgs {
 }
 
 /// `em emerge` — resolve and merge/unmerge packages (real emerge workalike)
-///
-/// The explicit, self-contained form of the bare `em <atoms>` path — see
-/// [`Applet::Emerge`]'s doc comment.
 #[derive(winnow_args::Args, Debug, Clone, Default)]
 #[arg(
     effect = "write",

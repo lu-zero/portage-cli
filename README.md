@@ -71,19 +71,13 @@ of recent runs:
 
 ![Wall-clock benchmarks: em against emerge and pkgcraft](./docs/performance.svg)
 
-| Command | `em` | `emerge` | Speedup |
-|---------|-----:|---------:|--------:|
-| `firefox -p` | ~0.9 s | ~3.7 s | ~4× |
-| `libreoffice -p` | ~1.0 s | ~4.0 s | ~4× |
-| five packages `-p` | ~1.0 s | ~4.7 s | ~4.5× |
-| `gcc -s` | ~0.1 s | ~5.2 s | ~50× |
-
 Metadata cache regeneration on a 32k-ebuild tree at `j=8` took `em` 18.1 s
 against pkgcraft's 48.3 s.
 
-**Details:** [benchmark records](./benchmarks/BENCHMARKS.md) ·
-[method and scripts](./benchmarks/README.md) ·
-[machine](./benchmarks/machines/thalia.md).
+Full numbers and the method are in
+[`benchmarks/BENCHMARKS.md`](./benchmarks/BENCHMARKS.md), the benchmark scripts
+in [`benchmarks/README.md`](./benchmarks/README.md) and the machine in
+[`benchmarks/machines/thalia.md`](./benchmarks/machines/thalia.md).
 
 ## Documentation
 

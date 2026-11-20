@@ -33,8 +33,8 @@ REPO=/var/db/repos/gentoo ./test-scripts/capture-plan.sh capture /tmp/plan-after
 ./test-scripts/capture-plan.sh compare /tmp/plan-before /tmp/plan-after
 ```
 
-The only oracle for that code: `query/depgraph/mod.rs` has no `#[cfg(test)]`
-module, and the binary crate has no end-to-end `em -p` test. Captures are
+The only oracle for that code: `em -p` captures are diffed by hand; the
+binary crate has no end-to-end `em -p` test. Captures are
 deliberately **not** committed as goldens — the target tree moves, so an
 expected-output file in git breaks on every sync; the A/B diff is the contract
 instead. Each case is captured `RUNS` times (default 3) and the script warns if

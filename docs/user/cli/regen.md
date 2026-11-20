@@ -30,9 +30,7 @@ em regen [OPTIONS] [REPOS]...
 
 Where live progress is written.
 
-* `--activity-fd <N>` — Write activity events as JSONL to file descriptor N (subprocess front-ends)
-
-  Takes ownership of the FD.
+* `--activity-fd <N>` — Write activity events as JSONL to file descriptor N (subprocess front-ends). The FD is duplicated, so the caller keeps it open.
 * `--activity-jsonl <PATH>` — Append activity events as JSONL to PATH (not `-`; use `--activity-fd`)
 * `--emergelog` — Dual-write Portage-compatible emerge.log lines (opt-in; qlop/genlop) Path defaults to `<merge-root>/var/log/emerge.log` (or `/var/log/emerge.log`).
 
@@ -51,7 +49,7 @@ Which tree this invocation reads and writes.
 
   The single source for "which tuple" everywhere: `em crossdev --target T --init-target` sets T up; `em stages --target T --stage1` (or any plain atom build) resolves/installs into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for `--config-root <sysroot> --root <sysroot>`.
 
-  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf. One flag for both roles — `crossdev` no longer has its own `-t`/`--target`.
+  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf.
 * `--root <PATH>` — Installation root (the offset an applet installs into / queries)
 
 ## Global options

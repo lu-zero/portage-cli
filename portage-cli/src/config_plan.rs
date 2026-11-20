@@ -1,10 +1,6 @@
 //! Diff-and-apply plan for `em`-generated config files
 //!
-//! `crossdev --init-target` used to write every file unconditionally and
-//! immediately, with no way to preview or confirm it — unlike every other
-//! mutating `em` path, which honours `-p`/`--pretend` (global on `Cli`) and
-//! `-a`/`--ask` (`MergeFlags::ask` — not global, unlike `--pretend`). This
-//! collects the desired state of each file/symlink/dir as a [`ConfigEntry`] (no I/O
+//! Collects the desired state of each file/symlink/dir as a [`ConfigEntry`] (no I/O
 //! beyond validation), diffs it against what's actually on disk, and only
 //! then previews (`-p`), confirms (`-a`), or applies — the config-
 //! regeneration equivalent of a merge plan. Shared between `crossdev` (cross

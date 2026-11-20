@@ -1475,9 +1475,9 @@ pub(super) struct PrettyCtx<'a> {
     pub verbose: u8,
     pub ceded: &'a [CededFlag],
     /// Local binpkg index, when `-k`/`-K` (usepkg/usepkgonly) is active —
-    /// used to show `[binary ...]` instead of `[ebuild ...]` for an entry
-    /// whose USE matches an available binpkg. `None` when neither flag is
-    /// set, or for callers with no binpkg-reuse concept at all.
+    /// used to show `[binary ...]` for an entry whose USE matches an
+    /// available binpkg. `None` when neither flag is set, or for callers
+    /// with no binpkg-reuse concept at all.
     ///
     /// Remote binhosts (`-g`/`-G`) are deliberately not checked here — that
     /// would add a network fetch to a plain `-p` preview; the merge itself

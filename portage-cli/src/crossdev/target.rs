@@ -206,9 +206,8 @@ impl CrossTarget {
 /// Every `(real_category, package)` a `cross-<tuple>/` category can hold, with
 /// the package.env arch from bash-crossdev's letter split (`set_env` `K|L` →
 /// Target, `*` → Host). [`CrossTarget::packages`] and
-/// [`cross_env_entries`](super::cross_env_entries) read this table — not a
-/// planner-computed `BuildClass` stamp, removed for being a second authority
-/// that could disagree with the real `package.env` contract.
+/// [`cross_env_entries`](super::cross_env_entries) read this table — the
+/// real `package.env` table is the authority over that listing.
 ///
 /// LLVM runtimes (R/U/A/P) are **host** env in bash-crossdev even though
 /// ebuilds install under `/usr/${CTARGET}` — see

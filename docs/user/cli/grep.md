@@ -28,7 +28,7 @@ em grep [OPTIONS] <PATTERN> [TARGETS]...
 * `-J, --installed` — Search installed packages' own ebuild copies (under --root/--prefix/--local) instead of the repo tree
 * `-E, --eclass` — Search eclasses instead of ebuilds (targets are ignored)
 * `-s, --skip-comments` — Skip lines that are comments (first non-blank character is `#`)
-* `-R, --show-repo` — Label matches with `cat/pkg-ver::repo` instead of a path; implies -N
+* `-R, --show-repo` — Label matches with `cat/pkg-ver::repo` instead of a path
 * `-S, --skip <PATTERN>` — Also skip lines matching this pattern (same literal/regex/case mode as PATTERN)
 * `-B, --before <N>` — Print N lines of context before each match
 * `-A, --after <N>` — Print N lines of context after each match
@@ -54,7 +54,7 @@ Which tree this invocation reads and writes.
 
   The single source for "which tuple" everywhere: `em crossdev --target T --init-target` sets T up; `em stages --target T --stage1` (or any plain atom build) resolves/installs into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for `--config-root <sysroot> --root <sysroot>`.
 
-  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf. One flag for both roles — `crossdev` no longer has its own `-t`/`--target`.
+  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf.
 * `--root <PATH>` — Installation root (the offset an applet installs into / queries)
 
 ## Global options

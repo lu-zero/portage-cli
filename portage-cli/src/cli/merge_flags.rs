@@ -121,7 +121,7 @@ pub struct MergeFlags {
     /// Continue merging as much as possible even if some packages fail
     #[arg(
         long,
-        warning = "Exists for portage parity; do not use it. A failed package must stop the run."
+        warning = "Exists for portage parity; the run continues past failures."
     )]
     pub keep_going: bool,
 

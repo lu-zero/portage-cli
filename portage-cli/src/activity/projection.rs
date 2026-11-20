@@ -63,8 +63,7 @@ impl LiveSession {
     /// Falls back to inflight-only (no blockers) when the session has no plan.
     /// `store` (`history/merges.jsonl`, already loaded by the caller) is the
     /// source of truth for which plan packages already finished — the live
-    /// tree no longer keeps a `finished` set of its own (it was an O(N²)
-    /// rewrite that hung `em regen`).
+    /// tree keeps no `finished` set of its own.
     pub fn remaining_for_eta(&self, store: &DurationStore) -> (Vec<EtaPkg>, Vec<Vec<usize>>) {
         if self.plan.is_empty() {
             let pkgs: Vec<EtaPkg> = self

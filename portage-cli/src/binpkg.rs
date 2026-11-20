@@ -122,17 +122,13 @@ pub(crate) async fn read_make_conf_var(globals: &Cli, var: &str) -> Option<Strin
     read_make_conf_var_for_roots(&globals.roots(), var).await
 }
 
-/// Read a variable from make.conf under specific roots — used to get
-/// per-entry CHOST/CFLAGS/etc. for cross-compilation scenarios, where the
-/// desired config root isn't `globals`'s own (e.g. a `MergeRoot::Host` entry
-/// under `--target`).
+/// Read a variable from make.conf under specific roots — per-entry CHOST,
+/// CFLAGS and friends for cross-compilation, e.g. a `MergeRoot::Host` entry
+/// under `--target`.
 ///
 /// Evaluates the file via [`MakeConf::apply_to`] (a real, minimal
 /// `brush_core::Shell` sourcing the file) rather than a plain
-/// [`MakeConf::get`], so `${VAR}` self-references expand — the stock Gentoo
-/// `COMMON_FLAGS="-O2 -march=…"` + `CFLAGS="${COMMON_FLAGS}"` pattern used to
-/// leave every reader seeing a literal, `-m*`-free `${COMMON_FLAGS}` string,
-/// silently starving the binpkg `build_env_key` gate (rebuild loop).
+/// [`MakeConf::get`], so `${VAR}` self-references expand.
 ///
 /// A name this file never assigns now expands to empty rather than staying
 /// literal — more correct, since that literal string was never usable.

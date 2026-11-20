@@ -3,8 +3,6 @@
 
 `em emerge` — resolve and merge/unmerge packages (real emerge workalike)
 
-The explicit, self-contained form of the bare `em <atoms>` path — see \[`Applet::Emerge`\]'s doc comment.
-
 **Effect:** modifies state.
 
 ## Usage
@@ -26,7 +24,7 @@ em emerge [OPTIONS] [ATOM]...
 
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 * `-p, --pretend` — Show what would be done without actually performing any actions
-* `--vdb <PATH>` — Override VDB path (default: $ROOT/var/db/pkg)
+* `--vdb <PATH>` — Override VDB path (the default is the merge root's `/var/db/pkg`)
 * `-h, --help` — Print help (see a summary with '-h')
 
 ## Merge
@@ -71,7 +69,7 @@ How the solver and build scheduler behave.
 * `-l, --load-average <LOAD>` — Maximum 1-minute load average allowed when starting additional parallel builds (`--jobs` \> 1)
 
   Once at least one job is running, further starts wait until load drops below LOAD (matches real Portage's own load-average throttling). The first concurrent job is always allowed. Displayed on the `Jobs:` status line regardless.
-* `--keep-going` — Continue merging as much as possible even if some packages fail. Warning: Exists for portage parity; do not use it. A failed package must stop the run.
+* `--keep-going` — Continue merging as much as possible even if some packages fail. Warning: Exists for portage parity; the run continues past failures.
 * `--autounmask` — Accepted so existing command lines keep parsing. Config writes follow `--autounmask-write` and whether this run is pretend or `--ask`; this flag is not consulted.
 * `--autosolve-use` — Let the solver choose USE flags to satisfy REQUIRED\_USE (Level C) rather than only reporting violations
 
@@ -133,7 +131,7 @@ Pick a different operation than a merge.
 * `-r, --resume` — Resume the last saved merge (see `em maint cleanresume` to discard it instead)
 
   Atoms are not accepted together with this flag — the package list comes from the saved state. Combine with other flags (e.g. `-r -X stuck/atom`) to adjust the resumed run.
-* `--info` — `emerge --info` workalike. Takes no atoms. Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with USE\_EXPAND groups like VIDEO\_CARDS broken out), ACCEPT\_KEYWORDS/ACCEPT\_LICENSE, and configured repositories. Combine with `--json` for structured output, or `-v` to also list every known `@name` set and its resolved atoms (neither has a real-emerge equivalent).
+* `--info` — `emerge --info` workalike. Takes no atoms. Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with USE\_EXPAND groups like VIDEO\_CARDS broken out), ACCEPT\_KEYWORDS/ACCEPT\_LICENSE, and configured repositories. Combine with `--json` for structured output, or `-v` to also list every known `@name` set and its resolved atoms.
 
 ## Depgraph
 
@@ -186,16 +184,14 @@ Which tree this invocation reads and writes.
 
   The single source for "which tuple" everywhere: `em crossdev --target T --init-target` sets T up; `em stages --target T --stage1` (or any plain atom build) resolves/installs into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for `--config-root <sysroot> --root <sysroot>`.
 
-  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf. One flag for both roles — `crossdev` no longer has its own `-t`/`--target`.
+  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf.
 * `--root <PATH>` — Installation root (the offset an applet installs into / queries)
 
 ## Activity
 
 Where live progress is written.
 
-* `--activity-fd <N>` — Write activity events as JSONL to file descriptor N (subprocess front-ends)
-
-  Takes ownership of the FD.
+* `--activity-fd <N>` — Write activity events as JSONL to file descriptor N (subprocess front-ends). The FD is duplicated, so the caller keeps it open.
 * `--activity-jsonl <PATH>` — Append activity events as JSONL to PATH (not `-`; use `--activity-fd`)
 * `--emergelog` — Dual-write Portage-compatible emerge.log lines (opt-in; qlop/genlop) Path defaults to `<merge-root>/var/log/emerge.log` (or `/var/log/emerge.log`).
 

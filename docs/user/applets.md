@@ -41,11 +41,10 @@ and the root flags. The gaps below are tracked in the implementation queue.
   license, keyword and mask suggestions with `--autounmask-use`,
   `--autounmask-license`, `--autounmask-keep-keywords` and the backtrack
   controls. `em` accepts `--autounmask` but does not act on it.
-- Binpkg trust and selection filters: `--binpkg-respect-use`,
-  `--binpkg-changed-deps`, `--usepkg-include/-exclude`, `--pkg-format`.
 - Emerge-level actions `--check-news`, `--read-news`, `--list-sets`,
   `--metadata`, `--config`, `--status`, `--rage-clean` and `--sync-submodule`.
-  News, sync, regen and depclean exist as separate `em` applets.
+  News, sync, regen and depclean exist as separate `em` applets; `--selective`
+  is the closest emerge knob here.
 - Rebuild selectors (`--changed-deps`, `--rebuilt-binaries`, `--newrepo`,
   `--nobindeps`) and per-invocation overrides (`--accept-properties`,
   `--accept-restrict`, `--dynamic-deps`, `--ignore-world`).
@@ -55,11 +54,9 @@ and the root flags. The gaps below are tracked in the implementation queue.
 - `--info [atom]`: `em --info firefox` emerges firefox; only the empty-atom
   form prints info.
 - `--color` takes `auto|always|never`, not emerge's `y|n`.
-- Minor flags: `-A/--alert`, `--ask-enter-invalid`, `-d/--debug`,
-  `--circular-deps-report`, `--sysroot`, `--select/-w`, `--skipfirst`.
 
-**Intentional differences:** `--keep-going` is refused, `--autounmask` is a
-no-op and `--complete-graph` defaults to repairing installed packages.
+**Intentional differences:** `--autounmask` is a no-op and `--complete-graph`
+defaults to repairing installed packages.
 
 Reference: [`emerge`](./cli/emerge.md).
 
@@ -114,8 +111,8 @@ and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`
 
 **Gaps vs equery:**
 - `uses` descriptions come from `profiles/use.desc` + `profiles/use.local.desc`.
-  Overlay packages not yet regen'd fall back to empty description (metadata.xml
-  per-package lookup is not yet wired as a fallback).
+  Overlay packages not yet regen'd fall back to empty description; a
+  `metadata.xml` lookup is the wired fallback for those.
 - No `stats` subcommand.
 
 ## `em use` (euse)

@@ -1,9 +1,9 @@
 //! USE configuration tokens
 //!
 //! A profile or user configuration layer changes the USE set through an ordered list of
-//! [`UseToken`]s. PMS defines the profile grammar: flag names, `-flag` and `-*`. Prefix wildcards
-//! and the group replacement of a `USE_EXPAND` assignment come from user configuration, which PMS
-//! leaves to the package manager; they follow Portage.
+//! [`UseToken`]s. PMS defines the profile grammar: flag names, `-flag` and `-*`; prefix
+//! wildcards and the group replacement of a `USE_EXPAND` assignment follow user
+//! configuration, as PMS leaves both to the package manager.
 
 use gentoo_interner::{DefaultInterner, Interned, Interner};
 

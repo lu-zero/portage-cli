@@ -174,8 +174,6 @@ impl Dep {
             .map_err(|e| Error::InvalidDep(format!("{}: {}", input, e)))
     }
 
-    /// Try to create from a string
-    ///
     /// Alias for [`Dep::parse`].
     pub fn try_new(s: &str) -> Result<Self> {
         Self::parse(s)

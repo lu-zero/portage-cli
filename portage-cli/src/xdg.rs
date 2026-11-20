@@ -97,12 +97,10 @@ pub fn mirrordist_state_dir() -> Utf8PathBuf {
     em_state_dir().join("mirrordist")
 }
 
-/// `$XDG_STATE_HOME/em/activity` — stand-in "merge root" for `em regen`'s activity bus
+/// `$XDG_STATE_HOME/em/activity` — stand-in "merge root" for `em regen`'s activity bus.
 ///
-/// Unlike a real merge, `regen` runs unprivileged, but its activity bus used to be built
-/// from the real `--root` unconditionally, so `LiveFsSink` tried (and failed) to write
-/// under `<root>/var/cache/edb/em-activity/live`. This path keeps regen's live-session
-/// tracking working without root.
+/// Unlike a real merge, `regen` runs unprivileged, so the bus's live-session tracking
+/// works from here rather than from `<root>/var/cache/edb/em-activity/live`.
 pub fn regen_activity_root() -> Utf8PathBuf {
     em_state_dir().join("activity")
 }

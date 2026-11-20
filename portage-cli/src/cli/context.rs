@@ -87,7 +87,7 @@ pub struct RepoArg {
 /// `em toolchain` would parse but do nothing.
 #[derive(winnow_args::Args, Debug, Clone, Default)]
 pub struct VdbArg {
-    /// Override VDB path (default: $ROOT/var/db/pkg)
+    /// Override VDB path (the default is the merge root's `/var/db/pkg`)
     #[arg(long, global, value_name = "PATH", hint = "dir")]
     pub vdb: Option<String>,
 }

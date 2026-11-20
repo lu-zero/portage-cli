@@ -128,8 +128,7 @@ pub struct Topology {
     /// `--config-root <sysroot> --root <sysroot>`.
     ///
     /// Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the
-    /// sysroot make.conf. One flag for both roles — `crossdev` no longer
-    /// has its own `-t`/`--target`.
+    /// sysroot make.conf.
     #[arg(from_str, long, short = 'T', global, value_name = "TARGET")]
     pub target: Option<TargetArg>,
 }
@@ -190,8 +189,7 @@ pub struct RootedTopology {
     /// `--config-root <sysroot> --root <sysroot>`.
     ///
     /// Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the
-    /// sysroot make.conf. One flag for both roles — `crossdev` no longer
-    /// has its own `-t`/`--target`.
+    /// sysroot make.conf.
     #[arg(from_str, long, short = 'T', global, value_name = "TARGET")]
     pub target: Option<TargetArg>,
 

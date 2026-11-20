@@ -18,7 +18,7 @@ em depclean [OPTIONS] [ATOMS]...
 ## Options
 
 * `-p, --pretend` — Show what would be done without actually performing any actions
-* `--vdb <PATH>` — Override VDB path (default: $ROOT/var/db/pkg)
+* `--vdb <PATH>` — Override VDB path (the default is the merge root's `/var/db/pkg`)
 * `-h, --help` — Print help (see a summary with '-h')
 
 ## Roots
@@ -36,7 +36,7 @@ Which tree this invocation reads and writes.
 
   The single source for "which tuple" everywhere: `em crossdev --target T --init-target` sets T up; `em stages --target T --stage1` (or any plain atom build) resolves/installs into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for `--config-root <sysroot> --root <sysroot>`.
 
-  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf. One flag for both roles — `crossdev` no longer has its own `-t`/`--target`.
+  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf.
 * `--root <PATH>` — Installation root (the offset an applet installs into / queries)
 
 ## Merge
@@ -75,7 +75,7 @@ How the solver and build scheduler behave.
 * `-l, --load-average <LOAD>` — Maximum 1-minute load average allowed when starting additional parallel builds (`--jobs` \> 1)
 
   Once at least one job is running, further starts wait until load drops below LOAD (matches real Portage's own load-average throttling). The first concurrent job is always allowed. Displayed on the `Jobs:` status line regardless.
-* `--keep-going` — Continue merging as much as possible even if some packages fail. Warning: Exists for portage parity; do not use it. A failed package must stop the run.
+* `--keep-going` — Continue merging as much as possible even if some packages fail. Warning: Exists for portage parity; the run continues past failures.
 * `--autounmask` — Accepted so existing command lines keep parsing. Config writes follow `--autounmask-write` and whether this run is pretend or `--ask`; this flag is not consulted.
 * `--autosolve-use` — Let the solver choose USE flags to satisfy REQUIRED\_USE (Level C) rather than only reporting violations
 

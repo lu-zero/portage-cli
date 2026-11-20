@@ -62,8 +62,6 @@ impl Cpv {
             .map_err(|e| Error::InvalidCpv(format!("{}: {}", input, e)))
     }
 
-    /// Try to create from a string
-    ///
     /// Alias for [`Cpv::parse`].
     pub fn try_new(s: &str) -> Result<Self> {
         Self::parse(s)

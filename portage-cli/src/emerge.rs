@@ -1220,9 +1220,7 @@ fn drop_highest_version_per_cpn(
 /// Real emerge's world-atom selection (`_world_atom`): only the literal,
 /// explicitly-named atoms make it onto the world set, never `@set`
 /// expansions. Takes the already-*resolved* `atoms` — disambiguated via
-/// `query::resolve_atom` upstream — not the raw command-line strings:
-/// re-parsing them independently here used to reject any bare package name
-/// as an invalid cpn even though the same atom had resolved fine already.
+/// `query::resolve_atom` upstream.
 fn select_world_atoms(atoms: &[TargetAtom]) -> Vec<portage_atom::Dep> {
     atoms
         .iter()

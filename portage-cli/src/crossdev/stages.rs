@@ -94,9 +94,8 @@ pub struct StagePlan {
 ///
 /// The ordered step sequence ([`toolchain_plan`]) is identical; only how each component is
 /// named as an atom differs — cross rewrites the category to `cross-<tuple>`, native keeps
-/// the real `::gentoo` category. Single typed decision point for "build a toolchain into a
-/// fresh root", replacing a cross-vs-native split the driver used to re-derive at each call
-/// site.
+/// the real `::gentoo` category. One typed decision point: building a toolchain into a fresh
+/// root.
 #[derive(Debug, Clone)]
 pub enum BootstrapKind {
     /// Cross-compilation into a `<CTARGET>` sysroot (`CBUILD ≠ CHOST`): atoms

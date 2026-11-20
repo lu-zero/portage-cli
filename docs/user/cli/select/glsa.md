@@ -36,11 +36,11 @@ em select glsa [OPTIONS] [COMMAND]
 
   The single source for "which tuple" everywhere: `em crossdev --target T --init-target` sets T up; `em stages --target T --stage1` (or any plain atom build) resolves/installs into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for `--config-root <sysroot> --root <sysroot>`.
 
-  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf. One flag for both roles — `crossdev` no longer has its own `-t`/`--target`.
+  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf.
 * `--root <PATH>` — Installation root (the offset an applet installs into / queries)
 * `--arch <ARCH>` — Target architecture for operations \[default: current system architecture\]
 * `--repo <PATH>` — Pin search/query to a single repository
 
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 * `-p, --pretend` — Show what would be done without actually performing any actions
-* `--vdb <PATH>` — Override VDB path (default: $ROOT/var/db/pkg)
+* `--vdb <PATH>` — Override VDB path (the default is the merge root's `/var/db/pkg`)

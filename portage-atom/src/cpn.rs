@@ -64,8 +64,6 @@ impl Cpn {
             .map_err(|e| Error::InvalidCpn(format!("{}: {}", input, e)))
     }
 
-    /// Try to create from a string
-    ///
     /// Alias for [`Cpn::parse`].
     pub fn try_new(s: &str) -> Result<Self> {
         Self::parse(s)

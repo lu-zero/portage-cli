@@ -14,9 +14,8 @@
     heading("Activity", help = "Where live progress is written.")
 )]
 pub struct ActivityArgs {
-    /// Write activity events as JSONL to file descriptor N (subprocess front-ends)
-    ///
-    /// Takes ownership of the FD.
+    /// Write activity events as JSONL to file descriptor N (subprocess front-ends).
+    /// The FD is duplicated, so the caller keeps it open.
     #[arg(long = "activity-fd", value_name = "N")]
     pub activity_fd: Option<i32>,
 
