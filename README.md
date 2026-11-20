@@ -79,9 +79,16 @@ in [`benchmarks/README.md`](./benchmarks/README.md) and the machine in
 [`docs/user/applets.md`](./docs/user/applets.md) has the per-applet detail,
 gaps and benchmarks.
 
-## Documentation
+## Installation
 
-### User guides
+```bash
+cargo install --path portage-cli
+```
+
+## User Guide
+
+`em` by default accepts most of the arguments `emerge` takes, but can act as
+different applets.
 
 How to actually run `em`.
 
@@ -106,7 +113,7 @@ There is no dedicated `--local` user guide yet;
 [`docs/user/stages-and-testing.md`](./docs/user/stages-and-testing.md) covers
 the bootstrap. Remaining gaps are tracked under `todo/`.
 
-### Design and architecture
+## Design & architecture
 
 How `em` is built, and why.
 
@@ -128,23 +135,19 @@ How `em` is built, and why.
 | [`docs/design/use-flags-api-design.md`](./docs/design/use-flags-api-design.md) | Effective-USE-flag API design notes |
 | [`docs/design/testing.md`](./docs/design/testing.md) | Testing strategy, benchmarking, bumping the brush fork |
 | [`docs/design/benchmarks.md`](./docs/design/benchmarks.md) | How to measure performance across the workspace |
-| [`AGENTS.md`](AGENTS.md) | Contributor conventions: build commands, style, commit format |
+| [`AGENTS.md`](AGENTS.md) | Contributor conventions: style and commit format |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Build commands, checklists, MSRV verification and the test suites |
 
 </details>
 
 Status trackers (open work, not reference docs) live under `todo/` — start
 at [`todo/PENDING.md`](./todo/PENDING.md).
 
-## Installation
-
-```bash
-cargo install --path portage-cli
-```
-
 ## Development
 
-See [AGENTS.md](AGENTS.md) for build commands, local dependency overrides,
-and CI-parity checks.
+See [AGENTS.md](AGENTS.md) for project conventions and
+[CONTRIBUTING.md](CONTRIBUTING.md) for build commands, checklists and
+CI-parity checks.
 
 ## License
 
@@ -152,8 +155,9 @@ and CI-parity checks.
 
 ## Contributing
 
-See [AGENTS.md](AGENTS.md) for project conventions (Conventional Commits,
-style, checks).
+See [AGENTS.md](AGENTS.md) for project conventions and
+[CONTRIBUTING.md](CONTRIBUTING.md) for build commands, checklists and
+CI-parity checks.
 
 ## Author
 
