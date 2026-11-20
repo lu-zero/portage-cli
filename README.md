@@ -113,6 +113,12 @@ There is no dedicated `--local` user guide yet;
 [`docs/user/stages-and-testing.md`](./docs/user/stages-and-testing.md) covers
 the bootstrap. Remaining gaps are tracked under `todo/`.
 
+## Development
+
+See [AGENTS.md](AGENTS.md) for project conventions and
+[CONTRIBUTING.md](CONTRIBUTING.md) for build commands, checklists and
+CI-parity checks.
+
 ## Design & architecture
 
 How `em` is built, and why.
@@ -142,12 +148,6 @@ How `em` is built, and why.
 
 Status trackers (open work, not reference docs) live under `todo/` — start
 at [`todo/PENDING.md`](./todo/PENDING.md).
-
-## Development
-
-See [AGENTS.md](AGENTS.md) for project conventions and
-[CONTRIBUTING.md](CONTRIBUTING.md) for build commands, checklists and
-CI-parity checks.
 
 ## License
 
