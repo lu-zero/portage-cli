@@ -22,6 +22,22 @@ dispatches to subcommands corresponding to the traditional tools: `emerge`,
 > [`docs/design/architecture.md`](./docs/design/architecture.md) for the
 > published/local-only breakdown.
 
+## Performance
+
+Cold `em -p` against `emerge -p`, and `em -s` against `emerge -s`, on thalia,
+an Ampere-1a server pinned to one NUMA node. Hyperfine medians, representative
+of recent runs:
+
+![Wall-clock benchmarks: em against emerge and pkgcraft](./docs/performance.svg)
+
+Metadata cache regeneration on a 32k-ebuild tree at `j=8` took `em` 18.1 s
+against pkgcraft's 48.3 s.
+
+Full numbers and the method are in
+[`benchmarks/BENCHMARKS.md`](./benchmarks/BENCHMARKS.md), the benchmark scripts
+in [`benchmarks/README.md`](./benchmarks/README.md) and the machine in
+[`benchmarks/machines/thalia.md`](./benchmarks/machines/thalia.md).
+
 ## Applet status
 
 <details>
@@ -62,22 +78,6 @@ dispatches to subcommands corresponding to the traditional tools: `emerge`,
 
 [`docs/user/applets.md`](./docs/user/applets.md) has the per-applet detail,
 gaps and benchmarks.
-
-## Performance
-
-Cold `em -p` against `emerge -p`, and `em -s` against `emerge -s`, on thalia,
-an Ampere-1a server pinned to one NUMA node. Hyperfine medians, representative
-of recent runs:
-
-![Wall-clock benchmarks: em against emerge and pkgcraft](./docs/performance.svg)
-
-Metadata cache regeneration on a 32k-ebuild tree at `j=8` took `em` 18.1 s
-against pkgcraft's 48.3 s.
-
-Full numbers and the method are in
-[`benchmarks/BENCHMARKS.md`](./benchmarks/BENCHMARKS.md), the benchmark scripts
-in [`benchmarks/README.md`](./benchmarks/README.md) and the machine in
-[`benchmarks/machines/thalia.md`](./benchmarks/machines/thalia.md).
 
 ## Documentation
 
