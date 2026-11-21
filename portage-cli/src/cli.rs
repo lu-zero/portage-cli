@@ -73,27 +73,61 @@ impl TryFrom<Cli> for Validated {
     }
 }
 
+fn rooted_applet_name(applet: &Option<Applet>) -> Option<&'static str> {
+    match applet {
+        Some(Applet::Crossdev(_)) => Some("crossdev"),
+        Some(Applet::Active(_)) => Some("active"),
+        Some(Applet::Worker(_)) => Some("__worker"),
+        _ => None,
+    }
+}
+
 fn validate(cli: &Cli) -> Result<(), ValidationError> {
-    if let Some(root) = cli.root_topology.root.as_deref() {
-        let name = match &cli.applet {
-            Some(Applet::Crossdev(_)) => Some("crossdev"),
-            Some(Applet::Active(_)) => Some("active"),
-            Some(Applet::Worker(_)) => Some("__worker"),
-            _ => None,
-        };
-        if let Some(name) = name {
+    if let Some(name) = rooted_applet_name(&cli.applet) {
+        if let Some(root) = cli.root_topology.root.as_deref() {
             return Err(invalid(
                 "--root",
                 root,
                 format!("not valid with the '{name}' applet"),
             ));
         }
+        if let Some(sysroot) = cli.root_topology.sysroot.as_deref() {
+            return Err(invalid(
+                "--sysroot",
+                sysroot,
+                format!("not valid with the '{name}' applet"),
+            ));
+        }
     }
+    reject_sysroot_when_root_is_host(cli)?;
     if applet_privilege(cli) == Privilege::Auto {
         privilege_from_env()?;
     }
     if !applet_activity(cli).emergelog {
         env_bool("EM_EMERGELOG")?;
+    }
+    Ok(())
+}
+
+/// `SYSROOT` other than `/` is refused when the install root is `/`.
+///
+/// Checked only when the flag or the environment actually names one, so a
+/// normal host invocation does not resolve roots just to accept them.
+fn reject_sysroot_when_root_is_host(cli: &Cli) -> Result<(), ValidationError> {
+    let from_flag = cli.applet_sysroot().is_some() || cli.root_topology.sysroot.is_some();
+    let from_env = std::env::var("SYSROOT")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    if !from_flag && !from_env {
+        return Ok(());
+    }
+    let roots = cli.roots();
+    if let Some(sysroot) = roots.sysroot_explicit()
+        && roots.merge_root().as_str() == "/"
+        && sysroot.as_str() != "/"
+    {
+        let field = if from_flag { "--sysroot" } else { "SYSROOT" };
+        return Err(invalid(field, sysroot.as_str(), "must be / when ROOT is /"));
     }
     Ok(())
 }
@@ -265,37 +299,49 @@ impl Cli {
         (!dir.join("etc/portage/make.conf").is_file()).then_some(dir)
     }
 
-    /// The dispatched applet's own `--root`, if it carries one at all
-    /// ([`RootedTopology`] applets only — `Crossdev`/`Active` have no root
-    /// field to bind to, which is what keeps `--root` a hard parse error for
-    /// them, not just a `validate()` rejection).
-    fn applet_root(&self) -> Option<&str> {
+    /// The dispatched applet's [`RootedTopology`], if it carries one.
+    ///
+    /// `Crossdev`/`Active` flatten [`Topology`] instead, so `--root` and
+    /// `--sysroot` stay a hard parse error there, not only a `validate()` rejection.
+    fn applet_rooted(&self) -> Option<&RootedTopology> {
         match &self.applet {
-            Some(Applet::Emerge(a)) => a.topology.root.as_deref(),
-            Some(Applet::Toolchain(a)) => a.topology.root.as_deref(),
-            Some(Applet::Stages(a)) => a.topology.root.as_deref(),
-            Some(Applet::Setup(a)) => a.topology.root.as_deref(),
-            Some(Applet::Ebuild(a)) => a.topology.root.as_deref(),
-            Some(Applet::Maint(a)) => a.topology.root.as_deref(),
-            Some(Applet::Sync(a)) => a.topology.root.as_deref(),
-            Some(Applet::Depclean(a)) => a.topology.root.as_deref(),
-            Some(Applet::Regen(a)) => a.topology.root.as_deref(),
-            Some(Applet::Quickpkg(a)) => a.topology.root.as_deref(),
-            Some(Applet::MirrorDist(a)) => a.topology.root.as_deref(),
-            Some(Applet::Clean(a)) => a.topology.root.as_deref(),
-            Some(Applet::Etc(a)) => a.topology.root.as_deref(),
-            Some(Applet::Query(a)) => a.topology.root.as_deref(),
-            Some(Applet::Use(a)) => a.topology.root.as_deref(),
-            Some(Applet::Pkg(a)) => a.topology.root.as_deref(),
-            Some(Applet::Revdep(a)) => a.topology.root.as_deref(),
-            Some(Applet::Read(a)) => a.topology.root.as_deref(),
-            Some(Applet::Log(a)) => a.topology.root.as_deref(),
-            Some(Applet::Search(a)) => a.topology.root.as_deref(),
-            Some(Applet::Select(a)) => a.topology.root.as_deref(),
-            Some(Applet::Env(a)) => a.topology.root.as_deref(),
-            Some(Applet::Grep(a)) => a.topology.root.as_deref(),
+            Some(Applet::Emerge(a)) => Some(&a.topology),
+            Some(Applet::Toolchain(a)) => Some(&a.topology),
+            Some(Applet::Stages(a)) => Some(&a.topology),
+            Some(Applet::Setup(a)) => Some(&a.topology),
+            Some(Applet::Ebuild(a)) => Some(&a.topology),
+            Some(Applet::Maint(a)) => Some(&a.topology),
+            Some(Applet::Sync(a)) => Some(&a.topology),
+            Some(Applet::Depclean(a)) => Some(&a.topology),
+            Some(Applet::Regen(a)) => Some(&a.topology),
+            Some(Applet::Quickpkg(a)) => Some(&a.topology),
+            Some(Applet::MirrorDist(a)) => Some(&a.topology),
+            Some(Applet::Clean(a)) => Some(&a.topology),
+            Some(Applet::Etc(a)) => Some(&a.topology),
+            Some(Applet::Query(a)) => Some(&a.topology),
+            Some(Applet::Use(a)) => Some(&a.topology),
+            Some(Applet::Pkg(a)) => Some(&a.topology),
+            Some(Applet::Revdep(a)) => Some(&a.topology),
+            Some(Applet::Read(a)) => Some(&a.topology),
+            Some(Applet::Log(a)) => Some(&a.topology),
+            Some(Applet::Search(a)) => Some(&a.topology),
+            Some(Applet::Select(a)) => Some(&a.topology),
+            Some(Applet::Env(a)) => Some(&a.topology),
+            Some(Applet::Grep(a)) => Some(&a.topology),
             _ => None,
         }
+    }
+
+    /// The dispatched applet's own `--root`, if it carries one at all.
+    fn applet_root(&self) -> Option<&str> {
+        self.applet_rooted()
+            .and_then(|topology| topology.root.as_deref())
+    }
+
+    /// The dispatched applet's own `--sysroot`, if it carries one at all.
+    fn applet_sysroot(&self) -> Option<&str> {
+        self.applet_rooted()
+            .and_then(|topology| topology.sysroot.as_deref())
     }
 
     pub(crate) fn topology_and_root(&self) -> (Topology, RootArg) {
@@ -313,6 +359,10 @@ impl Cli {
                 .applet_root()
                 .map(str::to_string)
                 .or_else(|| self.root_topology.root.clone()),
+            sysroot: self
+                .applet_sysroot()
+                .map(str::to_string)
+                .or_else(|| self.root_topology.sysroot.clone()),
         };
         (topology, root)
     }
@@ -759,6 +809,170 @@ mod tests {
         assert_eq!(r.merge_root().as_str(), "/srv/x");
         assert_eq!(r.target().unwrap().as_str(), "/srv/x");
         assert_eq!(r.build_sysroot().unwrap().as_str(), sysroot);
+    }
+
+    #[test]
+    fn sysroot_equal_to_root_builds_against_the_install_tree() {
+        let (_active, _guard) = crate::test_support::isolate_active_state();
+        let cli = emerge([
+            "--sysroot",
+            "/target/",
+            "--root",
+            "/target",
+            "--config-root",
+            "/prefix",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let roots = cli.roots();
+        assert_eq!(roots.build_sysroot().unwrap().as_str(), "/target");
+        assert_eq!(roots.sysroot_explicit().unwrap().as_str(), "/target");
+        assert_eq!(roots.config().unwrap().as_str(), "/prefix");
+        assert_eq!(roots.merge_root().as_str(), "/target");
+        assert_eq!(roots.base().unwrap().as_str(), "/target");
+        assert_eq!(roots.base_merge_root(), None);
+        assert!(!roots.installed_view_target_only());
+        assert_eq!(roots.satisfaction_root(DepClass::Bdepend).as_str(), "/");
+        assert!(cli.sysroot_roots().is_none());
+        assert!(cli.host_roots().sysroot_explicit().is_none());
+        assert_eq!(cli.host_roots().merge_root().as_str(), "/");
+
+        let prefixed = parse_cli(&[
+            "em",
+            "--sysroot",
+            "/target",
+            "--root",
+            "/target",
+            "--config-root",
+            "/prefix",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        assert_eq!(
+            prefixed.roots().build_sysroot().unwrap().as_str(),
+            "/target"
+        );
+    }
+
+    #[test]
+    fn sysroot_distinct_from_root_is_a_depend_destination() {
+        let (_active, _guard) = crate::test_support::isolate_active_state();
+        let cli = emerge([
+            "--sysroot",
+            "/sys",
+            "--root",
+            "/board",
+            "--config-root",
+            "/prefix",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let roots = cli.roots();
+        assert_eq!(roots.build_sysroot().unwrap().as_str(), "/sys");
+        assert_eq!(roots.merge_root().as_str(), "/board");
+        assert_eq!(roots.base_merge_root().unwrap().as_str(), "/sys");
+        assert!(roots.installed_view_target_only());
+        assert!(!roots.is_cross_arch());
+        let base = cli.sysroot_roots().expect("depend destination");
+        assert_eq!(base.merge_root().as_str(), "/sys");
+        assert_eq!(base.config().unwrap().as_str(), "/prefix");
+        assert!(base.sysroot_explicit().is_none());
+        assert_eq!(base.build_sysroot(), None);
+    }
+
+    #[test]
+    fn explicit_sysroot_overrides_the_target_toolchain_sysroot() {
+        let (_active, _guard) = crate::test_support::isolate_active_state();
+        let cli = emerge([
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--root",
+            "/board",
+            "--sysroot",
+            "/board",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let roots = cli.roots();
+        assert_eq!(roots.build_sysroot().unwrap().as_str(), "/board");
+        assert_eq!(roots.merge_root().as_str(), "/board");
+        assert_eq!(roots.base_merge_root(), None);
+        assert!(roots.installed_view_target_only());
+        assert_eq!(
+            roots.config().unwrap().as_str(),
+            "/usr/riscv64-unknown-linux-gnu"
+        );
+    }
+
+    #[test]
+    fn a_root_without_sysroot_still_builds_against_the_host() {
+        let (_active, _guard) = crate::test_support::isolate_active_state();
+        let roots = emerge(["--root", "/srv/x", "-p", "sys-libs/zlib"]).roots();
+        assert!(roots.sysroot_explicit().is_none());
+        assert_eq!(roots.build_sysroot().unwrap().as_str(), "/");
+    }
+
+    #[test]
+    fn target_board_root_keeps_config_root_on_base_merges() {
+        let (_active, _guard) = crate::test_support::isolate_active_state();
+        let cli = emerge([
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--root",
+            "/board",
+            "--config-root",
+            "/prefix",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let base = cli.sysroot_roots().expect("toolchain sysroot");
+        assert_eq!(base.merge_root().as_str(), "/usr/riscv64-unknown-linux-gnu");
+        assert_eq!(base.config().unwrap().as_str(), "/prefix");
+    }
+
+    #[test]
+    fn sysroot_other_than_slash_is_refused_when_root_is_slash() {
+        let (_active, _guard) = crate::test_support::isolate_active_state();
+        let err = parse_cli_into(&["em", "--sysroot", "/tmp", "-p", "sys-libs/zlib"]).unwrap_err();
+        assert!(err.contains("InvalidValue --sysroot"), "{err}");
+        parse_cli_into(&[
+            "em",
+            "--sysroot",
+            "/tmp",
+            "--root",
+            "/tmp",
+            "-p",
+            "sys-libs/zlib",
+        ])
+        .expect("sysroot may equal ROOT");
+        parse_cli_into(&["em", "--sysroot", "/", "-p", "sys-libs/zlib"]).expect("host sysroot");
+    }
+
+    #[test]
+    fn prefix_sysroot_then_crossdev_is_refused() {
+        let err = parse_cli_into(&["em", "--sysroot", "/tmp", "crossdev", "--setup"]).unwrap_err();
+        assert!(
+            err.contains("InvalidValue --sysroot"),
+            "validation must reject prefix --sysroot with crossdev, got {err}"
+        );
+    }
+
+    #[test]
+    fn resolved_sysroot_normalizes_empty_and_slashes() {
+        assert!(super::topology::resolved_sysroot(&Some(String::new())).is_none());
+        assert!(super::topology::resolved_sysroot(&Some("   ".into())).is_none());
+        assert_eq!(
+            super::topology::resolved_sysroot(&Some("///".into()))
+                .unwrap()
+                .as_str(),
+            "/"
+        );
+        assert_eq!(
+            super::topology::resolved_sysroot(&Some(" /target/ ".into()))
+                .unwrap()
+                .as_str(),
+            "/target"
+        );
     }
 
     #[test]

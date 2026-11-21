@@ -89,6 +89,11 @@ knob overrides — no more, no less:
   the target profile + `make.conf` there; the host's `etc/portage` remains
   BROOT's config. An explicit `--config-root` still wins, as a set
   `PORTAGE_CONFIGROOT` does with crossdev's `<tuple>-emerge` wrapper.
+- **`--sysroot S`**, or `SYSROOT` when the flag is absent, is the tree the
+  compiler searches. It leaves `ROOT` and `--config-root` where they are.
+  `S` equal to `ROOT` builds against the install tree; a different `S`
+  receives `DEPEND` while `RDEPEND` stays on `ROOT`. `S` other than `/` is
+  rejected when `ROOT` is `/`.
 
 The dep-class → role map is fixed by PMS table 8.2:
 

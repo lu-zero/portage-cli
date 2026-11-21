@@ -45,6 +45,9 @@ pub struct Roots {
     config_root_explicit: Option<Utf8PathBuf>,
     /// See [`with_target_only_installed_view`](Self::with_target_only_installed_view)
     installed_view_target_only: bool,
+    /// Caller-set `SYSROOT`. [`build_sysroot`](Self::build_sysroot) returns it
+    /// before the derived default, including when it equals the install root.
+    sysroot_explicit: Option<Utf8PathBuf>,
 }
 
 impl Roots {
@@ -186,14 +189,20 @@ impl Roots {
         self.config_overlay.as_deref()
     }
 
-    /// The build-against sysroot (`SYSROOT`/`ESYSROOT`) to hand the shell
+    /// The caller-set `SYSROOT`, if `--sysroot` or the environment named one.
+    pub fn sysroot_explicit(&self) -> Option<&Utf8Path> {
+        self.sysroot_explicit.as_deref()
+    }
+
+    /// The build-against sysroot (`SYSROOT`/`ESYSROOT`) to hand the shell.
     ///
-    /// `Some` for an overlay (`--prefix`) and for a same-arch self-contained
-    /// `--root DIR`: real host `/`, matching `satisfaction_root`'s own
-    /// `DEPEND` answer there (and real `ROOT=` emerge's `ESYSROOT`). `None`
-    /// (SYSROOT defaults to `ROOT`) only for a topology with its own build
-    /// closure: `--local`'s BROOT, or a cross-arch `--target` sysroot.
+    /// An explicit `--sysroot` wins even when it equals the install root.
+    /// Otherwise `Some("/")` for a same-arch `--root` or overlay, and `None`
+    /// (the shell uses `ROOT`) for `--local` and a cross `--target`.
     pub fn build_sysroot(&self) -> Option<&Utf8Path> {
+        if let Some(sysroot) = self.sysroot_explicit.as_deref() {
+            return Some(sysroot);
+        }
         if self.base.as_deref() != self.target.as_deref() {
             Some(self.base.as_deref().unwrap_or(Utf8Path::new("/")))
         } else if self.is_self_contained_root() && !self.is_cross_arch {
@@ -378,6 +387,12 @@ impl Roots {
         self
     }
 
+    /// Set the caller-chosen `SYSROOT`.
+    pub fn with_sysroot_explicit(mut self, sysroot: Option<Utf8PathBuf>) -> Self {
+        self.sysroot_explicit = sysroot;
+        self
+    }
+
     // -----------------------------------------------------------------
     // Test-only constructors. `#[cfg(test)]` doesn't survive across a crate
     // boundary (it's only `true` while *this* crate is under test, not for
@@ -511,6 +526,18 @@ mod satisfaction_root_tests {
         );
         let board = Roots::for_test_board_root("/usr/T", "/board");
         assert_eq!(board.base_merge_root().unwrap().as_str(), "/usr/T");
+    }
+
+    #[test]
+    fn explicit_sysroot_wins_when_it_equals_the_install_root() {
+        let roots =
+            Roots::for_test("/target").with_sysroot_explicit(Some(Utf8PathBuf::from("/target")));
+        assert!(!roots.is_cross_arch());
+        assert_eq!(roots.build_sysroot().unwrap().as_str(), "/target");
+        assert_eq!(
+            Roots::for_test("/target").build_sysroot().unwrap().as_str(),
+            "/"
+        );
     }
 
     #[test]

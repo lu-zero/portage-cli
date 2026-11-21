@@ -284,9 +284,10 @@ Effects:
 
 So `ROOT=/tmp/place` is an alternate **install tree** for the cross target,
 not a different config root. Common uses: disposable chroots, CI images, keeping
-`/usr/<CHOST>` clean while iterating. `em` has no equivalent entry point yet;
-mapping it would be `em -p --root /tmp/place --config-root /usr/<CHOST> …` once
-the planner honours per-class roots and dual plan entries.
+`/usr/<CHOST>` clean while iterating. `em --target <tuple> --root /tmp/place`
+is that shape. `--sysroot` names the build-against tree on its own: set it
+equal to `--root` to compile against the install tree, and leave
+`--config-root` on the cross prefix.
 
 ### `--with-bdeps` under cross
 

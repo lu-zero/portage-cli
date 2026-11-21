@@ -4,13 +4,13 @@
 //!
 //! Three applet-facing shapes, not one:
 //!
-//! - [`RootedTopology`]: all 5 fields, `global` inner fields, flattened onto
-//!   the 22 applets that accept `--root`.
+//! - [`RootedTopology`]: all 6 fields, `global` inner fields, flattened onto
+//!   the 22 applets that accept `--root` and `--sysroot`.
 //!
-//! - [`Topology`]: the same 4 fields minus `--root`, flattened bare onto
-//!   `Crossdev`/`Active`, which must keep `--root` a hard parse error.
+//! - [`Topology`]: the same 4 fields minus `--root`/`--sysroot`, flattened bare
+//!   onto `Crossdev`/`Active`, which must keep those flags a hard parse error.
 //!
-//! - [`RootTopology`]: the 5 fields again, not `global` and `hide`-d from
+//! - [`RootTopology`]: the 6 fields again, not `global` and `hide`-d from
 //!   help, mounted once on `Cli` as the parent-flag copy that keeps
 //!   `em --prefix X toolchain --setup` routing to `Toolchain`; see its doc.
 //!
@@ -139,10 +139,12 @@ pub struct Topology {
 /// once by `resolved_root`. Not flattened onto any applet: `--root` isn't
 /// accepted everywhere (`crossdev`/`active`/`worker` reject it), so it
 /// travels inside [`RootedTopology`] and `Cli::topology_and_root()` derives
-/// a `RootArg` from whichever shape applies.
+/// a `RootArg` from whichever shape applies. `--sysroot` / `SYSROOT` travel
+/// the same way and name the build-against tree, not the install destination.
 #[derive(Debug, Clone, Default)]
 pub struct RootArg {
     pub root: Option<String>,
+    pub sysroot: Option<String>,
 }
 
 /// `root.root`, falling back to the `ROOT` environment variable.
@@ -150,11 +152,48 @@ pub fn resolved_root(root: &RootArg) -> Option<String> {
     root.root.clone().or_else(|| std::env::var("ROOT").ok())
 }
 
-/// [`Topology`]'s 4 fields plus `--root`, flattened as one mixin on the 22
-/// applets that need both (everything `Cli::applet_root_arg` used to list —
-/// `RootArg` is no longer flattened on its own anywhere). Inner fields stay
-/// `global` so they cascade into e.g. `em maint sync --root R`, same as
-/// `Topology`'s did and `RootArg`'s used to.
+/// `--sysroot`, falling back to the `SYSROOT` environment variable.
+///
+/// Empty or whitespace is unset. A value that is only slashes is `/`. A
+/// trailing slash is dropped so the path compares equal to `ROOT`.
+pub fn resolved_sysroot(flag: &Option<String>) -> Option<camino::Utf8PathBuf> {
+    let raw = flag.clone().or_else(|| std::env::var("SYSROOT").ok())?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        Some(camino::Utf8PathBuf::from("/"))
+    } else {
+        Some(camino::Utf8PathBuf::from(trimmed))
+    }
+}
+
+/// `SYSROOT` names the build-against tree. It does not move the install root.
+///
+/// A path equal to `ROOT` still wins over the derived default (the image
+/// case). A different path is a separate `DEPEND` destination, so the board
+/// VDB must not count those packages as installed.
+fn apply_explicit_sysroot(roots: Roots, sysroot: Option<Utf8PathBuf>) -> Roots {
+    let Some(path) = sysroot else {
+        return roots;
+    };
+    let distinct = path.as_path() != roots.merge_root();
+    let roots = roots
+        .with_base(Some(path.clone()))
+        .with_sysroot_explicit(Some(path));
+    if distinct {
+        roots.with_target_only_installed_view()
+    } else {
+        roots
+    }
+}
+
+/// [`Topology`]'s 4 fields plus `--root` and `--sysroot`, flattened as one
+/// mixin on the 22 applets that need both (everything `Cli::applet_root_arg`
+/// used to list — `RootArg` is no longer flattened on its own anywhere).
+/// Inner fields stay `global` so they cascade into e.g. `em maint sync --root R`,
+/// same as `Topology`'s did and `RootArg`'s used to.
 #[derive(winnow_args::Args, Debug, Clone, Default)]
 #[arg(
     next_help_heading = "Roots",
@@ -196,6 +235,13 @@ pub struct RootedTopology {
     /// Installation root (the offset an applet installs into / queries)
     #[arg(long, global, value_name = "PATH", hint = "dir")]
     pub root: Option<String>,
+
+    /// Build-against tree (`SYSROOT`).
+    ///
+    /// Also read from the `SYSROOT` environment variable when this flag is
+    /// absent. Does not move `--root` or `--config-root`.
+    #[arg(long, global, value_name = "PATH", hint = "dir")]
+    pub sysroot: Option<String>,
 }
 
 impl RootedTopology {
@@ -211,12 +257,13 @@ impl RootedTopology {
             },
             RootArg {
                 root: self.root.clone(),
+                sysroot: self.sysroot.clone(),
             },
         )
     }
 }
 
-/// `Cli`'s own raw copy of [`RootedTopology`]'s 5 fields — **not** `global`,
+/// `Cli`'s own raw copy of [`RootedTopology`]'s 6 fields — **not** `global`,
 /// and hidden from help/completion.
 ///
 /// Exists so these flags keep *parent-flag* status in
@@ -226,7 +273,7 @@ impl RootedTopology {
 /// with the per-applet copy by `Cli::topology_and_root()`; read nowhere else.
 ///
 /// `hide` on every field: `default_subcommand_help` already appends emerge's
-/// whole `--help` page below root's, and emerge flattens the same 5 fields
+/// whole `--help` page below root's, and emerge flattens the same 6 fields
 /// via `RootedTopology`, so showing them here duplicated the "Roots:" block
 /// on `em --help`. `hide` only affects help and completion, not parsing or
 /// routing; completion still lists them via the merged default-subcommand flags.
@@ -257,6 +304,11 @@ pub struct RootTopology {
     /// leak into crossdev/active/worker.
     #[arg(long, hide, value_name = "PATH", hint = "dir")]
     pub root: Option<String>,
+
+    /// Prefix-position `--sysroot` for default emerge. Not global; must not
+    /// leak into crossdev/active/worker.
+    #[arg(long, hide, value_name = "PATH", hint = "dir")]
+    pub sysroot: Option<String>,
 }
 
 impl Topology {
@@ -303,7 +355,14 @@ impl Topology {
     /// `merge_root()` is the **host `/`** (BROOT, for BDEPEND checks). The two
     /// genuinely differ for an overlay; this split is what lets preflight check
     /// BDEPEND against the host while the merge lands in the prefix.
+    ///
+    /// An explicit `--sysroot`, or `SYSROOT` when the flag is absent, replaces
+    /// the build-against tree afterwards and does not move `ROOT` or `--config-root`.
     pub fn roots(&self, root: &RootArg) -> Roots {
+        apply_explicit_sysroot(self.compute_roots(root), resolved_sysroot(&root.sysroot))
+    }
+
+    fn compute_roots(&self, root: &RootArg) -> Roots {
         // --target: layer the sysroot on top of the overlay target (the prefix),
         // not base_roots's BROOT (host /). Under --prefix the cross sysroot is
         // <prefix>/usr/<tuple>, and base_roots's merge_root is the host — so
@@ -613,21 +672,22 @@ impl Topology {
             .with_config_root_explicit(base.config_root_explicit().map(|p| p.to_owned()))
     }
 
-    /// The toolchain sysroot as its own merge destination, for a
-    /// `MergeRoot::Base` plan entry (`merge/mod.rs`'s `entry_roots`) —
-    /// `roots().base_merge_root()` promoted to a full `Roots` whose own
-    /// `merge_root()` is the sysroot itself, not the board root.
+    /// The build-against tree as its own merge destination, for a
+    /// `MergeRoot::Base` plan entry.
     ///
-    /// `None` outside the board-root topology (`--target T --root R`, where
-    /// `base` and `target` genuinely differ): there is no separate sysroot
-    /// merge destination for a `Base` entry to route to there, and
-    /// `root_closure::base` never produces one.
+    /// `None` when that tree and the install root are the same path.
+    /// `--target T --root R`, and `--sysroot S --root R` with `S` ≠ `R`,
+    /// return one. An explicit `--config-root` stays the config source.
     pub fn sysroot_roots(&self, root: &RootArg) -> Option<Roots> {
         let roots = self.roots(root);
         let sysroot = roots.base_merge_root()?.to_owned();
+        let config = roots
+            .config()
+            .map(|p| p.to_owned())
+            .unwrap_or_else(|| sysroot.clone());
         Some(
             Roots::default()
-                .with_config(Some(sysroot.clone()))
+                .with_config(Some(config))
                 .with_base(Some(sysroot.clone()))
                 .with_target(Some(sysroot))
                 .with_broot(roots.broot().map(|p| p.to_owned()))
