@@ -43,6 +43,7 @@ fn main() {
         cli.verbose(),
         cli.merge_flags().jobs.unwrap_or(1) > 1,
     );
+    portage_cli::default_opts::log_ignored();
 
     // An unprivileged build re-execs once under a fake root so chown/setuid
     // succeed; the wrapped child returns here with `EM_PRIVILEGE_ACTIVE` set and

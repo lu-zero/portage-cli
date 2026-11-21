@@ -186,13 +186,16 @@ fn applet_activity(cli: &Cli) -> ActivityArgs {
 
 /// Parse process argv into `Validated`. Exits on `--help`/`--version`/failure,
 /// and answers a completion script's callback.
+///
+/// An emerge run re-parses with `EMERGE_DEFAULT_OPTS` and `EM_DEFAULT_OPTS`
+/// inserted, so color, quiet and pretend on the returned value include them.
 pub fn parse_cli_or_exit() -> Validated {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     if let Some(answer) = Cli::completion_request(&args) {
         print!("{answer}");
         std::process::exit(0);
     }
-    match Cli::parse_from(&args).and_then(Validated::try_from) {
+    match crate::default_opts::parse(&args) {
         Ok(validated) => validated,
         Err(error) => std::process::exit(winnow_args::report(&error, "em")),
     }
@@ -3677,6 +3680,10 @@ pub struct EmergeArgs {
     /// Privilege backend for this merge
     #[arg(long, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
+
+    /// Skip `EMERGE_DEFAULT_OPTS` and `EM_DEFAULT_OPTS`
+    #[arg(long)]
+    pub ignore_default_opts: bool,
 
     /// Atoms, package sets (`@world`), or ebuild paths to act on
     #[arg(positional, value_name = "ATOM")]

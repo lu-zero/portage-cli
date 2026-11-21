@@ -12,6 +12,7 @@ pub mod cli;
 pub(crate) mod config_plan;
 pub(crate) mod console;
 pub(crate) mod crossdev;
+pub mod default_opts;
 pub(crate) mod depclean;
 pub mod diag;
 pub(crate) mod dispatch;
