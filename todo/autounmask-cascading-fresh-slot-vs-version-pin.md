@@ -1,12 +1,9 @@
 # `em`'s autounmask doesn't discover a masked candidate buried multiple hops deep
 
-Status: 🟡 **implemented + live-verified 2026-08-25** — solver-core
-widening, third-tier ordering, Choice demotion, two-phase solve, and the
-persistence policy (see § Persistence below) all landed. Root cause
-confirmed by direct evidence 2026-08-24; found during the crossdev-stages
-replacement retest, testing `--ex-pkg sys-devel/clang-crossdev-wrappers`
-(i586 pilot sandbox). Opus design review done; design settled with Luca —
-see § Settled decisions below.
+Status: ✅ widening landed and live-verified 2026-08-25. Residuals, not
+the original bug: aliased `cross-*` cpvs still dodge a `package.mask`
+written against the real Cpn; autounmask lines have no `# required by`
+provenance; `--autounmask-keep-masks` is tracked in [[em-crossdev-parity]].
 
 ## Persistence policy (settled with Luca 2026-08-25) — verified live
 

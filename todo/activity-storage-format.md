@@ -28,7 +28,7 @@ formats is itself going to bite next.
 - Does `merges.jsonl` actually grow large enough in practice to matter
   (measure on a real long-lived host), or is this premature?
 - If it does: rotate-by-size/date (`merges-2026-08.jsonl` etc., already
-  sketched as "optional later" in `todo/activity-status.md`) is the
+  sketched as "optional later" in `todo/done/activity-status.md`) is the
   cheap fix and keeps the JSONL format. A tail-read (last N lines
   without a full parse) would cover `em log list`/`time` but not
   `median_seconds`/`global_median_seconds`, which need a real window of

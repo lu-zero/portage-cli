@@ -1,6 +1,6 @@
 # Default options from the config, and sets in `em -s`
 
-Status: part 2 (sets in `em -s`) landed; part 1 parked until winnow-args has a public `response::split`. Written 2026-11-16.
+Status: ✅ both parts landed 2026-11-21. The sections below are the plan as filed.
 
 ## Why
 
@@ -27,7 +27,7 @@ The effective command line of an `emerge` run is, left to right:
 `parse_cli_or_exit` parses once, and the config root is only known afterwards, as emerge also parses twice.
 
 1. Parse the arguments as they are. If the applet is not `Emerge`, or `--ignore-default-opts` is given, stop here.
-2. Read the variables for `cli.roots().config()`. Split them into words with winnow-args' response-file tokenizer (whitespace, `'…'`, `"…"`, `\`; no operators, no expansion, no `@file`). It is private today: it needs a public `winnow_args::response::split` first, in the sibling repo, which wants the user's go-ahead. No splitter of our own.
+2. Read the variables for `cli.roots().config()`. Split them with `winnow_args::response::split` (`Result<Vec<Cow<str>>, SplitError>`, winnow-args 0.6.4). Whitespace separates, `'…'` and `"…"` quote, and `\` escapes one byte. `@file` stays a word. An unclosed quote, a trailing `\`, or non-UTF-8 after unquoting is an error that names the variable. Raise the `winnow-args` requirement from 0.6.3 to 0.6.4. No splitter of our own.
 3. Build the argv of the second parse. The grammar already says every word after a leading flag is an emerge argument, so the rule is exact:
    - the first word is `emerge`: insert after it;
    - otherwise (a leading flag, `-r`, or a bare atom): insert at the front.
@@ -45,10 +45,10 @@ The effective command line of an `emerge` run is, left to right:
 ### Risks to settle before landing
 
 - Applying `-j80 -l80` changes what existing runs do. `--jobs` here is packages in parallel, and MAKEOPTS is separate. This is the point of the feature, but the first run after the change should be a `-p`.
-- `--keep-going` has no em equivalent by design (AGENTS.md), so it falls out through the "unsupported" path. Test that it is dropped and not accepted.
+- `--keep-going` is a real `MergeFlags` flag, so the probe keeps it. Do not drop it.
 - `--ask` in the default options makes a script prompt. The same holds in emerge; no special case.
 - `--color`, `--quiet`/`--verbose` and `--pretend` in the options must go through the same re-parse, so `Cli::color.write_global()` and `diag::init` see the final values: build `Cli` once, from the second parse.
-- `privilege::maybe_supervise` re-execs `em` under a fake root. The re-exec must not apply the defaults twice. Pass the final argv, or set the ignore marker in the child's environment.
+- `privilege::maybe_supervise` re-execs `em` under a fake root and forwards the original argv. The child applies the defaults once. Do not forward the expanded argv, and do not set an ignore marker.
 
 ### Tests
 
@@ -104,5 +104,5 @@ Part 2 first (small, self-contained, a day), then Part 1 (the parse path is shar
 ## Decisions (2026-11-16)
 
 - The default options apply to `em emerge` only, not to other applets.
-- Words are split by winnow-args (a public `response::split` to add there), not by a splitter of our own and not by brush's shell tokenizer.
+- Words are split by `winnow_args::response::split` (winnow-args 0.6.4), not by a splitter of our own and not by brush's shell tokenizer.
 - Flags dropped from `EMERGE_DEFAULT_OPTS` are reported in debug mode only (and in `em info`).

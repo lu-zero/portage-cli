@@ -15,7 +15,7 @@ source is GPL and this tree is MIT.
 
 | Item | Severity | Status | Detail |
 |---|---|---|---|
-| `EMERGE_DEFAULT_OPTS`, `EM_DEFAULT_OPTS`, `--ignore-default-opts` | high | 🟡 parked | [[default-opts-and-set-search]] part 1; only `em info` prints it today |
+| `EMERGE_DEFAULT_OPTS`, `EM_DEFAULT_OPTS`, `--ignore-default-opts` | high | ✅ 2026-11-21 | [[default-opts-and-set-search]] |
 | `--clean`: keep the most recently installed version in each slot | medium | 🔴 | `-P/--prune` keeps the highest version and ignores slots |
 | Autounmask family: `--autounmask-use/-license/-keep-keywords/-keep-masks/-unrestricted-atoms/-backtrack/-continue/-only` | medium | 🔴 | `--autounmask` is accepted but ignored; only `-write` acts |
 | Binpkg trust and filters: `--binpkg-respect-use`, `--binpkg-changed-deps`, `--usepkg-include/-exclude`, `--getbinpkg-include/-exclude`, `--pkg-format` | medium | 🔴 | `-k/-K/-g/-G` take any available binpkg |
@@ -26,7 +26,8 @@ source is GPL and this tree is MIT.
 | `-r/--resume` pins a merge list; em re-solves the saved atoms | medium | 🔴 | two history slots are kept |
 | `--info [atom]`; em treats the atom as a merge target | low | 🔴 | `info_wins` requires zero atoms |
 | `--color y\|n` alongside `auto\|always\|never` | low-medium | 🔴 | real scripts carry `y`/`n` |
-| Minor flags: `-A/--alert`, `--ask-enter-invalid`, `-d/--debug`, `--circular-deps-report`, `--sysroot`, `--select/-w`, `--onlydeps-with-{r,i}deps`, `--skipfirst`, `--quiet-unmerge-warn` | low | 🔴 | `-v`/`RUST_LOG` instead of `-d` |
+| `--sysroot` / `SYSROOT` | low | ✅ | names the tree the compiler searches |
+| Minor flags: `-A/--alert`, `--ask-enter-invalid`, `-d/--debug`, `--circular-deps-report`, `--select/-w`, `--onlydeps-with-{r,i}deps`, `--skipfirst`, `--quiet-unmerge-warn` | low | 🔴 | `-v`/`RUST_LOG` instead of `-d` |
 
 ## Missing from `em crossdev`
 
@@ -69,7 +70,7 @@ The root and cross *models* behind those names are additions; the spellings are 
 
 ## Decided divergences — do not re-implement
 
-- `--keep-going` is accepted but refused; `--autounmask` is a no-op; `--complete-graph`
+- `--keep-going` continues past failures. `--autounmask` is a no-op; `--complete-graph`
   defaults to repairing installed packages.
 - crossdev config is regenerated rather than preserved from `/etc/portage/crossdev`;
   no per-target wrapper scripts; narrower tuple set; overlay auto-discovery;
@@ -83,5 +84,4 @@ The root and cross *models* behind those names are additions; the spellings are 
    a separate `--setup` builds them.
 3. User-visible gaps go in `docs/user/applets.md` and `docs/user/crossdev.md`;
    this note is the implementation queue.
-4. High-severity rows before minor flags, except where a row is parked on a
-   sibling repo (default options).
+4. High-severity rows before minor flags.

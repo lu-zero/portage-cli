@@ -1,7 +1,12 @@
 # What is still unimplemented — survey 2026-09-02
 
-Status: 🟡 `em clean` and `em etc` implemented 2026-09-02; `portageq`/`grep`
-and three `emaint` subcommands remain.
+Status: 🟡 survey of 2026-09-02. `em etc`, `em clean`, and `em grep` landed.
+`portageq` has the VDB group, `envvar`, settings, and repo queries; the
+metadata/contents/owners tail is [[portageq-workalike-plan]]. No
+`bail!("not implemented")` remains in the tree. `emaint merges` still
+explains that `em` has no failed-merge registry. Closer `eclean` parity
+(interactive mode, `--destructive`) is not started.
+
 Every `bail!("not implemented")` in the tree, grouped by whether it actually
 costs a user anything.
 
@@ -120,12 +125,12 @@ that `portage_repo` cannot resolve, distinguishing it from "not resolvable:
 
 ## Suggested order, if this is ever picked up
 
-1. `etc-update`/`dispatch-conf` — the only one that breaks a normal workflow,
-   and the only one whose absence is worse under `em`'s own offset roots than
-   on a host.
-2. ~~`eclean pkg`/`dist`~~ — done, see above.
-3. `emaint merges`, then `all`.
-4. `portageq`/`grep`: **measured, not worth it.** A scan of
+1. ~~`etc-update`/`dispatch-conf`~~ — `em etc`, see §1.
+2. ~~`eclean pkg`/`dist`~~ — done, see §2. Interactive mode and
+   `--destructive` are the leftover `eclean` parity.
+3. `emaint merges` stays unavailable: there is no failed-merge registry.
+   `em maint all` was removed in favour of `em clean all`.
+4. `portageq`/`grep`: grep is done. A scan of
    `/var/db/repos/{gentoo,guru,crossdev,pentoo}` found **zero** `portageq`
    calls in any inheritable `*.eclass` and zero in any live ebuild — the only
    hits are `eclass/tests/` (a hand-run harness that is never `inherit`ed),

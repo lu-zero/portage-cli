@@ -2,7 +2,7 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-11-15**.
+here briefly for context). Updated **2026-11-21**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
@@ -10,6 +10,16 @@ and the full binhost/migration log remains below the `---` (do not delete — it
 is the audit trail). Fully closed design notes live under `todo/done/`;
 `[[name]]` links still resolve by filename there. Milestone-level build
 progress (M0 → M4, each with its gate command) lives in [[build-roadmap]].
+
+**2026-11-20 prune:** archived [[activity-status]], [[regression-matrix-run-2026-09-02]],
+[[crossdev-local-python-sysroot-doubling]], and
+[[crossdev-prefix-spurious-os-headers-blocker]]. BF-511's `depgraph()` split
+is on master (`prepare` / `resolve` / `assemble`). PubGrub phases 4 and 5
+landed in `5e1098df`; only the phase 3 benchmark gate is partial. The CLI is
+winnow-args; the usage-rs migration note stays in `todo/done/`.
+
+**2026-11-21:** [[default-opts-and-set-search]] landed and moved to
+`todo/done/`. `--sysroot` is accepted. Local master is ahead of origin again.
 
 ## CLI parity (2026-11-19)
 
@@ -37,7 +47,7 @@ Not part of the stage arc, but where the work went 2026-10-28…11-15.
 | `em search` wall time vs CPU (was ~67 ms wall for ~30 ms CPU): re-measure; now 36–67 ms wall | 🟡 | found 2026-11-07 |
 | `em search` matches `qsearch` for names, `-S`, `-H`, `-N`, regular expressions and `-R` (`--show-repo`) and `-v` (full versions); still differs: no `-F` (format), `-s`, packages in several repos are listed once (qsearch once per repo), order is by name | 🟡 | `qsearch` |
 | `em -s` matches emerge on 11 keys, sizes by enabled USE and the latest version by keywords and package.mask (`-v` adds the all-USE size and the newer masked version). Still differs: license masks are not applied | 🟡 | emerge `search.py` |
-| `EMERGE_DEFAULT_OPTS`/`EM_DEFAULT_OPTS` are not read (a host with `-j80 -l80` runs sequentially); waits on a public `winnow_args::response::split` | 🔴 | [[default-opts-and-set-search]] |
+| `EMERGE_DEFAULT_OPTS`/`EM_DEFAULT_OPTS` and `--ignore-default-opts` on emerge runs | ✅ 2026-11-21 | [[default-opts-and-set-search]] |
 | A real run prints the plan only with `-p`/`-a`/`-v`; candy or banners show progress (2ab5fcc2). Output of a real merge not checked live | 🟡 | `docs/user/activity.md` |
 | USE layers as `UseToken`s (e7312ec1…671f3488), nested prefix globs (26eb640c) | ✅ | — |
 
@@ -145,9 +155,10 @@ Parser/docs: [[pms-parser-lenient]], [[pms-einstalldocs]],
   found and fixed two false-positive classes in the Phase 2 detector
   itself (spurious reports on `-n`/`-N`/`Lock`-policy resolves and on
   version-capped atoms — 68 spurious lines on a real `@world` down to 0)
-  and a VDB-fallback correctness bug in `effective_flag_new`. Phases 3-5
-  (benchmark gate, full follower tier, re-solve backstop) still open:
-  [[pubgrub-version-choice-heuristic]]
+  and a VDB-fallback correctness bug in `effective_flag_new`. Phases 4 and 5
+  landed in `5e1098df` (follower tier, then one-pin re-solve). Phase 4 grows
+  `@world` by the perl 5.44 cascade. Phase 3's benchmark gate is only a
+  partial hyperfine. [[pubgrub-version-choice-heuristic]]
 
 ### Smaller / polish (pick opportunistically)
 
@@ -213,34 +224,22 @@ carry an effort estimate.
   ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
   ([[use-order-repo-layer]]). Folded into the 2026-08-20 PMS queue
   ([[pms-compliance]]).
-- **Unimplemented surface** (survey 2026-09-02): 14 `bail!("not
-  implemented")` sites. The one that breaks a real workflow is config-file
-  reconciliation — `em` writes `._cfgNNNN_` sidecars on every protected
-  merge and has no `etc-update`/`dispatch-conf` to consume them, which a
-  host's own tools cannot do under `--root`/`--prefix`/`--local`. Then
-  `emaint` (12 of 12 reachable 2026-09-02 — `logs`/`movebin` landed, `all` dropped in favour of `em clean all`, `cleanconfmem`/`merges` now say what they are). `em clean dist`/`pkg` ✅ 2026-09-02 (`d28bd91`),
-  and `portageq`/`grep` measured as not worth building — zero calls from any
-  inheritable eclass or live ebuild: [[unimplemented-surface]]
-- **Full `regression-matrix.sh --full` run 2026-09-02** — `stages --stage1
-  --root` PASSES (154 pkgs, a correct stage1); every `--prefix` leg fails,
-  for three unrelated reasons. Run record, including two wrong theories not
-  worth re-deriving and the script's own defects:
-  [[regression-matrix-run-2026-09-02]]
+- **Unimplemented surface** (survey 2026-09-02, updated 2026-11-20): no
+  `bail!("not implemented")` left. `em etc`, `em clean`, and `em grep`
+  landed. `portageq` still lacks metadata/contents/owners
+  ([[portageq-workalike-plan]]). `emaint merges` explains the missing
+  failed-merge registry. [[unimplemented-surface]]
+- ✅ **`regression-matrix.sh --full` run 2026-09-02** — historical. The
+  `--prefix` failures it filed were later fixed (prefix-guest, the
+  os-headers block, cycle split, `toolchain --prefix --setup`). The record
+  is [[regression-matrix-run-2026-09-02]]. The script's stage1 `--prefix`
+  legs still pass only `--prefix` and want `--prefix P --root B --target T`.
 - ✅ **Under `--prefix`, baselayout's VDB entry claimed `/sbin/openrc-run`**
   (found 2026-09-02): baselayout installs a stub there under `prefix-guest`,
   which `em setup --prefix` forced; 46695cb6 (2026-09-27) stopped forcing it.
   Not re-run live: [[prefix-baselayout-claims-openrc-run]]
-- **`regression-matrix.sh`'s stage1 `--prefix` legs cannot pass as written**
-  — `em stages --stage1` requires an explicit `--root` distinct from the
-  host install path, and both the `-p` and `--full` legs pass only
-  `--prefix DIR`, so they are rejected before anything runs. The `--full`
-  leg also pairs `--prefix` with the *native toolchain* dir rather than a
-  crossdev-populated one. Wants `--prefix P --root B --target T`.
-- 🟡 **`crossdev --setup --prefix` aborted on a phantom blocker** (found
-  2026-09-02 by `regression-matrix.sh --full`). The `os-headers` block came
-  from the forced `prefix-guest` and is fixed by 46695cb6; the `[ebuild R]`
-  rows may only be the bare run's packages in the shared `/` VDB. Open until a
-  `--prefix` run on an empty `/` shows `N`:
+- ✅ **`crossdev --setup --prefix` os-headers blocker** — caused by forced
+  `prefix-guest`, removed in 46695cb6. A later prefix setup exited 0.
   [[crossdev-prefix-spurious-os-headers-blocker]]
 - ✅ **Hard dependency cycles open with a split build** (flag off, build, flag on), on by default (`--cycle-split=n` to opt out). The live
   docbook case (`util-linux` `-nls -pam -su`) merged 98/98 on a fresh `--local` root, 2026-11-18: [[cycle-break-use-split]]
@@ -253,20 +252,8 @@ carry an effort estimate.
   consumed by `crossdev-stages`, so this is semver-visible and wants a
   consumer survey first — and it is *not* the orphan a dependency audit makes
   it look like: [[gentoo-stages-workspace-types]]
-- **usage-rs CLI migration (clap → usage-rs 6) — postponed 2026-09-04, not
-  abandoned.** Grok executed the full 9-PR design-doc plan
-  (`docs/design/usage-rs.md`) on branch `usage-rs`
-  (`~/Sources/portage-cli-usage-rs`); the hard architectural questions
-  (default-subcommand, Topology-as-root-global, same-type dual-mount of
-  MergeFlags/RootArg) are answered and correct. Held back on review: a
-  real bug (`em --info -r` silently drops the `-r` action), and — the real
-  reason to wait — a usage-rs 6 API limitation with no clean workaround
-  (`ValidationError` has no `.value()`, so every cross-field reject prints
-  `invalid value ''` instead of naming what's wrong). The failing test
-  (stale `help_tree.snap` + stale `docs/user/cli/` pages) is fixed
-  (`cc06a82c`); branch still needs a rebase onto current `master` (which
-  since dropped fakeroost, see below — this branch's `Privilege` enum
-  will need the same trim). Revisit in a few months.
+- ✅ **usage-rs CLI migration — dropped.** The CLI is winnow-args. `e0c517cc`
+  removed the plan. Do not rebase `~/Sources/portage-cli-usage-rs`.
   [[usage-rs-cli-migration]]
 - **Dropped the `fakeroost` privilege backend — 2026-09-04 (`31c90e42`).**
   Fork-pinned (no crates.io release upstream with the bad-path
@@ -331,6 +318,14 @@ carry an effort estimate.
 | `portage-resolve` extraction | 2026-07-16 | stages 1–7 done |
 | inherit / `E_IUSE` (#36) | verified 2026-07-18 | brush_compat `inherit_*` |
 | `em quickpkg`, `-f`/`--fetchonly` | 2026-07-18 | |
+
+**2026-11-20 prune pass:** moved to `todo/done/`: `activity-status` (bus, `em log`,
+ETA, and the bounded activity queue all landed), `regression-matrix-run-2026-09-02`
+(the run's `--prefix` failures were fixed later), `crossdev-local-python-sysroot-doubling`
+(fixed in addb6cbc), `crossdev-prefix-spurious-os-headers-blocker` (46695cb6,
+later prefix setup exited 0). Marked BF-511 done in [[bunny-findings]]. Left
+[[autounmask-cascading-fresh-slot-vs-version-pin]] in place: widening landed,
+and the alias `package.mask` dodge plus `# required by` provenance are still open.
 
 **2026-08-23 prune pass:** moved four closed/orphaned files to `todo/done/`:
 `for-sonnet.md` (live-verification handoff log — its headline open bug, the
@@ -648,11 +643,9 @@ blocked by the three independent findings above, tracked separately.
   closed upstream: `perl-module.eclass` now passes `--prefix "${EPREFIX}"/usr`
   (tree of 2026-11-06). No `em` fix needed.
   [[crossdev-local-perl-module-eprefix]]
-- 🟡 **`dev-python/flit-core` sysroot path doubling under `--local`**
-  (`/localtest/localtest/usr/...`) — `root_vars` exported SYSROOT equal to
-  EPREFIX, so distutils-r1's `--sysroot ${SYSROOT}` nested the prefix; fixed
-  in addb6cbc with a unit test, not re-run live.
-  [[crossdev-local-python-sysroot-doubling]]
+- ✅ **`dev-python/flit-core` sysroot path doubling under `--local`** —
+  `root_vars` exported SYSROOT equal to EPREFIX; fixed in addb6cbc with a
+  unit test, not re-run live. [[crossdev-local-python-sysroot-doubling]]
 - ✅ **`stages --stage1` into a disposable board `--root` couldn't find
   the crossdev toolchain's own libc headers — fixed and live-verified
   2026-08-27.** Root cause: the board-root decoupling (re-landed

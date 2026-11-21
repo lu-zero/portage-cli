@@ -204,9 +204,8 @@ specified there under **Sequencing**; Tier 1 is the active work.
       one package mutates the live root at a time. A failed build (without
       `--keep-going`) stops new launches and drains in-flight; a failed build
       dep strands its dependents (never started). `Scheduler` is unit-tested
-      (chain/diamond/multi-blocker/failed-blocker). *Known gap: the unguarded
-      fetch phase can race on a shared distfile (rare); per-distfile locking is
-      a later refinement.*
+      (chain/diamond/multi-blocker/failed-blocker). Per-distfile locking for
+      the shared fetch landed 2026-08-29 ([[distfile-fetch-reliability]]).
 
 **Gate:** a 2–3 package uninstalled chain (e.g. `app-text/tree` style leaf +
 a lib dep) merges into a fresh prefix in one `em --prefix` invocation;
@@ -317,7 +316,7 @@ compile once overnight when configure is clean.)
 
 ## Standing items (not milestone-gated)
 
-- [ ] Push master to origin (local `master` runs ahead of `origin/master`)
+- [ ] Push master to origin (even with origin on 2026-11-20 at `0e251ecf`; local master is ahead again)
 - [ ] Run `benchmarks/bench-em-vs-emerge.sh` after each milestone; parity
       regressions block
 - [ ] brush upstream: checkpoint/restore API

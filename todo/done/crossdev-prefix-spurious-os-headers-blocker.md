@@ -1,6 +1,6 @@
 # `crossdev --setup --prefix` aborts on a blocker between two uninstalled packages
 
-Status: 🟡 the blocker is fixed by 46695cb6 (2026-09-27: `em setup --prefix` no longer forces `prefix-guest`, test `overlay_prefix_does_not_force_prefix_guest`).
+Status: ✅ closed. 46695cb6 (2026-09-27) stopped `em setup --prefix` from forcing `prefix-guest`. A later `em crossdev --prefix /root/xp --target riscv64-unknown-linux-gnu --setup` exited 0 with no virtual/os-headers block. The body below is the 2026-09-02 finding, including the then-wrong claim that every `--prefix` build sets `prefix-guest`.
 The wrong `[ebuild R]` rows are unexplained: they may be the bare run's packages in the shared `/` VDB. Re-run on an empty `/` to close it.
 2026-11-18: `toolchain --prefix --setup` and `crossdev --setup --prefix` both pass in the regression sandbox; the `R` rows are still unexplained, not reproduced. Found 2026-09-02 by `regression-matrix.sh --full`.
 Blocks the `--prefix` crossdev path entirely — it never reaches the cross
