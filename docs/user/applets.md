@@ -30,11 +30,33 @@ The default applet: a bare `em <atoms>` takes the same path. Core resolving
 and merging match `emerge -p/-uD/-C/-c`, including binpkg build and use, sets
 and the root flags. The gaps below are tracked in the implementation queue.
 
+### Default options
+
+An emerge run (`em -ua @world`, `em emerge …`, or a mode flag such as `-r`)
+reads `EMERGE_DEFAULT_OPTS`, then `EM_DEFAULT_OPTS`, then the command line.
+A scalar flag's last value wins, so the command line overrides both.
+`--ignore-default-opts` skips the two variables.
+
+Each variable comes from the environment, or else from `make.conf` and
+`make.conf.d` under the config root. A prefix or local overlay's `make.conf`
+and `make.conf.d` are read after that and override it, including under
+`--target`. The file is not sourced: the value is the last plain assignment,
+quotes stripped, `${VAR}` left unexpanded. Words split on whitespace, with
+quotes and backslashes; `@file` stays a word.
+
+Flags `em` does not implement are dropped from `EMERGE_DEFAULT_OPTS`.
+`em info` lists them (`EMERGE_DEFAULT_OPTS: -j80 -l80 (ignored: --alert) [environment]`),
+with the source of each variable and the combined effective list. A normal
+run does not warn. An unknown flag in `EM_DEFAULT_OPTS`, or a bad value such
+as `--jobs=abc` in either variable, is an error that names the variable. A
+word that is not a flag is dropped from `EMERGE_DEFAULT_OPTS`; put atoms on
+the command line.
+
+`--ask` in the variables prompts, as it does for emerge. `--jobs` is how
+many packages build at once. `MAKEOPTS` is separate.
+
 **Not implemented:**
 
-- `EMERGE_DEFAULT_OPTS` is printed by `em info` but never applied, and
-  `--ignore-default-opts` is absent. A host carrying `-j8 --quiet-build=y`
-  runs `em` sequentially with full build output.
 - `--clean` has no workalike: `-P/--prune` keeps the highest version and
   ignores slots; emerge keeps the most recently installed version per slot.
 - The autounmask family beyond `--autounmask-write`: emerge generates USE,

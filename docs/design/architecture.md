@@ -300,6 +300,38 @@ anstream dependency (argv parsing and rendering stay in `portage-cli`).
 CLI-only pieces that stay in `portage-cli`: plan rendering (`output.rs`),
 autounmask write UX, and the `em query depgraph` command shape.
 
+## Default options
+
+`parse_cli_or_exit` parses the argv, and for an emerge run that did not pass
+`--ignore-default-opts` it parses again. The second argv is the kept words of
+`EMERGE_DEFAULT_OPTS`, then `EM_DEFAULT_OPTS`, then the original words. The
+words are inserted after a leading `emerge`, and at the front otherwise, so
+a leading flag still routes into emerge. `Cli::color`, quiet, verbose and
+pretend are read from that second parse.
+
+Words come from `winnow_args::response::split` (whitespace, quotes, one-byte
+escapes). `@file` is not read. An unclosed quote, a trailing `\`, or non-UTF-8
+is an error that names the variable. A word containing `=` is one group.
+Otherwise the flag is probed alone: success leaves the next word separate, and
+`UnknownFlag` or `MissingValue` takes the following word when it does not
+start with `-`. The group is then probed with `Cli::parse_from(["emerge", group])`.
+`UnknownFlag` drops it from `EMERGE_DEFAULT_OPTS` only; any other error is
+reported, for both variables. `--ignore-default-opts` is decided on that first
+parse, so a copy inside either variable does not skip them. `EM_DEFAULT_OPTS`
+rejects that copy; `EMERGE_DEFAULT_OPTS` drops it.
+
+The environment wins over `make.conf`. Files are read with `MakeConf::get`:
+`etc/make.conf`, then `etc/portage/make.conf`, then `etc/portage/make.conf.d`,
+under `roots().config()` (`/` when unset). A prefix or local overlay's
+`make.conf` and `make.conf.d` are last, including under `--target`, so they
+win over the sysroot file. No bash, so `${VAR}` and `+=` are not expanded.
+Dropped flags are a `debug` line and an `em info` section, not a warning on
+every run.
+
+A privilege re-exec forwards the original argv. The child is a new process
+and applies the defaults once. Forwarding the expanded argv as well would
+apply them twice.
+
 ## Target derivation: argv → request
 
 A command's targets are lowered to a single canonical **request**: a synthetic
