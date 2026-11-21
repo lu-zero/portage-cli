@@ -146,6 +146,25 @@ struct MemInfo {
 }
 
 #[derive(Serialize)]
+struct DefaultOptions {
+    variables: Vec<DefaultOptVar>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    effective: Vec<String>,
+    #[serde(skip)]
+    lines: Vec<String>,
+    ignored_this_run: bool,
+}
+
+#[derive(Serialize)]
+struct DefaultOptVar {
+    name: String,
+    source: String,
+    kept: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    ignored: Vec<String>,
+}
+
+#[derive(Serialize)]
 struct Info {
     em_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -181,6 +200,9 @@ struct Info {
     vars: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     unset: Vec<String>,
+    /// `EMERGE_DEFAULT_OPTS` / `EM_DEFAULT_OPTS` as `em` applies them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_options: Option<DefaultOptions>,
 }
 
 pub(crate) async fn run(cli: &Cli) -> Result<()> {
@@ -302,6 +324,26 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
     }
     vars.extend(var("PORTAGE_CONFIGROOT").map(|v| ("PORTAGE_CONFIGROOT".to_string(), v)));
 
+    let defaults = crate::default_opts::explain(cli)?;
+    let default_options = (!defaults.variables.is_empty()).then(|| DefaultOptions {
+        lines: defaults.lines(),
+        variables: defaults
+            .variables
+            .iter()
+            .map(|var| DefaultOptVar {
+                name: var.name.to_owned(),
+                source: var.source.clone(),
+                kept: var.kept.clone(),
+                ignored: var.dropped.clone(),
+            })
+            .collect(),
+        effective: defaults.effective.clone(),
+        ignored_this_run: matches!(
+            &cli.applet,
+            Some(crate::cli::Applet::Emerge(args)) if args.ignore_default_opts
+        ),
+    });
+
     let info = Info {
         em_version: env!("CARGO_PKG_VERSION").to_string(),
         profile,
@@ -317,6 +359,7 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
         use_flags,
         vars,
         unset,
+        default_options,
     };
 
     if cli.merge_flags().json {
@@ -482,6 +525,15 @@ fn print_text(info: &Info) -> Result<()> {
     }
     if !info.unset.is_empty() {
         writeln!(out, "{C_DIM}Unset:{C_DIM:#}  {}", info.unset.join(", "))?;
+    }
+    if let Some(defaults) = &info.default_options {
+        writeln!(out, "\n{C_BOLD}Default options:{C_BOLD:#}")?;
+        for line in &defaults.lines {
+            writeln!(out, "{line}")?;
+        }
+        if defaults.ignored_this_run {
+            writeln!(out, "(not applied: --ignore-default-opts)")?;
+        }
     }
 
     Ok(())
