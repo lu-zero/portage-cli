@@ -14,7 +14,7 @@ A candidate binpkg is reusable for a given plan entry iff all of these match:
 |------|------|------------------|
 | **CPV** | exact | required |
 | **USE ∩ IUSE** | equal (Portage bug #453400) | — |
-| **CHOST** | equal | either side empty → skip the gate |
+| **CHOST** | equal | an entry that omits it inherits the index header; skip only when that is empty too, or when the desired CHOST is empty |
 | **Build-env key** | equal | **asymmetric**: an unkeyed binpkg (no recorded flags — old GPKG, backward compat) always matches; an unkeyed *desired* build never matches a binpkg that *is* keyed |
 
 The CHOST axis handles cross-compilation (host tools vs. a `--target`

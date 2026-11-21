@@ -54,7 +54,7 @@ pub struct IndexRow {
     pub size: Option<u64>,
     /// Recorded `BUILD_ID`, if the index has one
     pub build_id: Option<u32>,
-    /// Recorded `CHOST` ("" if the index omitted it)
+    /// Recorded `CHOST`, or the index header's when the entry omits it.
     pub chost: String,
     /// Recorded `CFLAGS` ("" if absent) — display only
     pub cflags: String,
@@ -64,6 +64,10 @@ pub struct IndexRow {
 }
 
 fn parse_index_rows(text: &str) -> Vec<IndexRow> {
+    let header_chost = crate::index::parse_index_header(text)
+        .get("CHOST")
+        .cloned()
+        .unwrap_or_default();
     parse_index_blocks(text)
         .into_iter()
         .map(|fields| IndexRow {
@@ -73,7 +77,7 @@ fn parse_index_rows(text: &str) -> Vec<IndexRow> {
             sha1: fields.get("SHA1").map(|s| s.to_string()),
             size: fields.get("SIZE").and_then(|s| s.parse().ok()),
             build_id: fields.get("BUILD_ID").and_then(|s| s.parse().ok()),
-            chost: fields.get("CHOST").copied().unwrap_or("").to_string(),
+            chost: crate::index::recorded_chost(&header_chost, fields.get("CHOST").copied()),
             cflags: fields.get("CFLAGS").copied().unwrap_or("").to_string(),
             build_env_key: crate::index::build_env_key_from_fields(&fields),
         })

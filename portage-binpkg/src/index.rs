@@ -29,7 +29,8 @@ pub struct BinpkgEntry {
     pub use_set: HashSet<String>,
     /// The package's `IUSE`, prefix-stripped (`+flag`/`-flag` → `flag`)
     pub iuse: HashSet<String>,
-    /// Build `CHOST` from the entry (or empty if the index omitted it)
+    /// Build `CHOST`. An entry that omits the field inherits the index
+    /// header's `CHOST`; empty only when the header omits it too.
     ///
     /// Reuse rejects a mismatch against the live desired CHOST so an aarch64
     /// PKGDIR entry is never taken for a riscv64 plan (and vice versa).
@@ -153,8 +154,9 @@ impl BinpkgIndex {
     /// Version and slot match by `cpv` lookup (a binpkg for a cpv is that
     /// ebuild's slot).
     ///
-    /// `desired_chost` empty skips the CHOST gate (legacy/test callers); a
-    /// missing CHOST on the binpkg also skips it so sparse indexes still work.
+    /// `desired_chost` empty skips the CHOST gate (legacy/test callers). An
+    /// entry that omits `CHOST` still carries the header value; the gate
+    /// skips only when that is empty too.
     ///
     /// `desired_build_env_key` empty skips the build_env_key gate (backward compat);
     /// a missing/empty build_env_key on the binpkg also skips it.
@@ -204,10 +206,9 @@ pub(crate) fn split_iuse(s: &str) -> HashSet<String> {
 /// Split a `Packages` text into `(header, body)` at the first blank line or
 /// the first `CPV:` line, whichever comes first.
 ///
-/// Real portage's reader tolerates the header glued directly onto the
-/// first entry (no blank line), so must we: a naive `split("\n\n")` would
-/// drop a glued header's fields or merge them into the first entry,
-/// leaking e.g. `CHOST:` into an entry that legitimately omitted one.
+/// The header may sit on the same block as the first entry. Splitting at
+/// `CPV:` keeps those keys out of the entry map. `CHOST` is filled in later
+/// from the header when the entry omits it.
 fn split_header_body(text: &str) -> (&str, &str) {
     let mut pos = 0usize;
     let mut rest = text;
@@ -311,11 +312,26 @@ pub fn short_build_env_key(key: &str) -> String {
     }
 }
 
+/// `CHOST` for one index entry.
+///
+/// The entry's own value wins. Otherwise the header value: the index omits
+/// the field when it equals that default. Empty only when both are empty.
+pub fn recorded_chost(header_chost: &str, entry_chost: Option<&str>) -> String {
+    entry_chost
+        .filter(|chost| !chost.is_empty())
+        .unwrap_or(header_chost)
+        .to_string()
+}
+
 /// Parse a `Packages` index into `cpv → entry`
 ///
 /// Shared by the local and remote consumers (the only difference is how
 /// `path` is resolved: a local `PKGDIR` join vs a remote `base_uri` join).
 pub fn parse_packages_entries(text: &str) -> BTreeMap<String, Vec<BinpkgEntry>> {
+    let header_chost = parse_index_header(text)
+        .get("CHOST")
+        .cloned()
+        .unwrap_or_default();
     let mut entries: BTreeMap<String, Vec<BinpkgEntry>> = BTreeMap::new();
     for fields in parse_index_blocks(text) {
         let Some(&cpv) = fields.get("CPV") else {
@@ -335,7 +351,7 @@ pub fn parse_packages_entries(text: &str) -> BTreeMap<String, Vec<BinpkgEntry>> 
             path: fields.get("PATH").copied().unwrap_or("").to_string(),
             use_set: split_use(fields.get("USE").copied().unwrap_or("")),
             iuse: split_iuse(fields.get("IUSE").copied().unwrap_or("")),
-            chost: fields.get("CHOST").copied().unwrap_or("").to_string(),
+            chost: recorded_chost(&header_chost, fields.get("CHOST").copied()),
             cflags,
             cxxflags,
             ldflags,
@@ -1210,10 +1226,8 @@ USE: nls
 
     #[test]
     fn glued_header_field_does_not_leak_into_first_entry() {
-        // The header carries a CHOST-shaped line; the entry itself has none.
-        // Before the shared header/body boundary, this would have merged
-        // into the first entry's fields (BTreeMap built from every line in
-        // the glued block) and made an unrelated binpkg falsely CHOST-gated.
+        // No blank line between header and entry. The raw block must not
+        // contain the header key; reuse still inherits it as the default.
         let text = "\
 VERSION: 0
 CHOST: this-is-a-header-value-not-an-entrys
@@ -1222,12 +1236,70 @@ IUSE: nls
 PATH: app-test/foo-1.0-1.gpkg.tar
 USE: nls
 ";
+        let raw = parse_index_blocks(text);
+        assert_eq!(raw.len(), 1);
+        assert!(raw[0].get("CHOST").is_none());
         let idx = BinpkgIndex::parse(text, PathBuf::from("/pkgdir"));
         let e = idx.get("app-test/foo-1.0").unwrap();
         assert_eq!(e.len(), 1);
+        assert_eq!(e[0].chost, "this-is-a-header-value-not-an-entrys");
+    }
+
+    #[test]
+    fn omitted_chost_inherits_header_and_loses_to_an_explicit_match() {
+        // Higher BUILD_ID omits CHOST because it matches the header (the
+        // host arch). The older entry names the target triple. A riscv
+        // plan must take the older one.
+        let text = "\
+VERSION: 0
+CHOST: aarch64-unknown-linux-gnu
+
+CPV: sys-libs/glibc-2.44-r4
+BUILD_ID: 2
+IUSE: nls
+PATH: sys-libs/glibc/glibc-2.44-r4-2.gpkg.tar
+USE: nls
+
+CPV: sys-libs/glibc-2.44-r4
+BUILD_ID: 1
+CHOST: riscv64-unknown-linux-gnu
+IUSE: nls
+PATH: sys-libs/glibc/glibc-2.44-r4-1.gpkg.tar
+USE: nls
+";
+        let idx = BinpkgIndex::parse(text, PathBuf::from("/pkgdir"));
+        let entries = idx.get("sys-libs/glibc-2.44-r4").unwrap();
+        let host = entries.iter().find(|e| e.build_id == 2).unwrap();
+        assert_eq!(host.chost, "aarch64-unknown-linux-gnu");
+        assert!(
+            parse_index_blocks(text)
+                .iter()
+                .find(|fields| fields.get("BUILD_ID") == Some(&"2"))
+                .unwrap()
+                .get("CHOST")
+                .is_none()
+        );
         assert_eq!(
-            e[0].chost, "",
-            "the header's CHOST must not leak into the entry"
+            idx.find_reusable(
+                "sys-libs/glibc-2.44-r4",
+                &desired(&["nls"]),
+                "riscv64-unknown-linux-gnu",
+                ""
+            ),
+            Some(PathBuf::from(
+                "/pkgdir/sys-libs/glibc/glibc-2.44-r4-1.gpkg.tar"
+            ))
+        );
+        assert_eq!(
+            idx.find_reusable(
+                "sys-libs/glibc-2.44-r4",
+                &desired(&["nls"]),
+                "aarch64-unknown-linux-gnu",
+                ""
+            ),
+            Some(PathBuf::from(
+                "/pkgdir/sys-libs/glibc/glibc-2.44-r4-2.gpkg.tar"
+            ))
         );
     }
 
