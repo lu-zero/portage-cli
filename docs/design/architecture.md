@@ -315,14 +315,15 @@ is an error that names the variable. A word containing `=` is one group.
 Otherwise the flag is probed alone: success leaves the next word separate, and
 `UnknownFlag` or `MissingValue` takes the following word when it does not
 start with `-`. The group is then probed with `Cli::parse_from(["emerge", group])`.
-`EMERGE_DEFAULT_OPTS` is `Policy::Lenient`: Portage's `--flag y`, `=True` and
-`=n` forms are rewritten first, and `UnknownFlag` or `MissingValue` drops the
-group. `EM_DEFAULT_OPTS` is `Policy::Strict`. Any other error is reported. `--ignore-default-opts` is decided on that first
+`EMERGE_DEFAULT_OPTS` is `Policy::Lenient`: Portage's `--flag y`, `-a n`, `=True`
+and `=n` forms and its optional `--jobs`/`--load-average` values are rewritten
+first, and `UnknownFlag` or `MissingValue` drops the group. `EM_DEFAULT_OPTS` is `Policy::Strict`. Any other error is reported. `--ignore-default-opts` is decided on that first
 parse, so a copy inside either variable does not skip them. `EM_DEFAULT_OPTS`
 rejects that copy; `EMERGE_DEFAULT_OPTS` drops it.
 
 The environment wins over `make.conf`. Files are read with
-`MakeConf::expand_assignments`, sharing one variable map:
+`MakeConf::expand_assignments`, sharing one variable map. A value holding `$`
+also sees make.globals and the profile's `make.defaults`:
 `etc/make.conf`, then `etc/portage/make.conf`, then `etc/portage/make.conf.d`,
 under `roots().config()` (`/` when unset). A prefix or local overlay's
 `make.conf` and `make.conf.d` are last, including under `--target`, so they

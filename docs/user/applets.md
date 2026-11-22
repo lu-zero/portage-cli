@@ -41,13 +41,14 @@ Each variable comes from the environment, or else from `make.conf` and
 `make.conf.d` under the config root. A prefix or local overlay's `make.conf`
 and `make.conf.d` are read after that and override it, including under
 `--target`. The files are not sourced: as in Portage, `$VAR` and `${VAR}`
-expand from earlier assignments across those files, `+=` is ignored and
-`$(...)` is not run. Words split on whitespace, with quotes and backslashes;
+expand from make.globals, the profile's `make.defaults` and earlier
+assignments, `+=` is ignored and `$(...)` is not run. Words split on whitespace, with quotes and backslashes;
 `@file` stays a word.
 
 `EMERGE_DEFAULT_OPTS` also takes Portage's boolean spellings: `--ask=y`,
-`--ask y`, `--ask=True`, and `--ask=n` to cancel an earlier `--ask`. A bare
-`--jobs` or `--load-average` is dropped, since `em` has no unlimited value.
+`--ask y`, `-a n`, `--ask=True`, and `--ask=n` to cancel an earlier `--ask` or
+`-a`. A bare `--jobs` means no limit, and a bare `--load-average` clears an
+earlier limit.
 `EM_DEFAULT_OPTS` takes `em`'s own syntax only.
 
 Flags `em` does not implement are dropped from `EMERGE_DEFAULT_OPTS`.
