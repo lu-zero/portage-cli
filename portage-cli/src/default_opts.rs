@@ -131,11 +131,11 @@ fn load(
     let config = roots.config().unwrap_or(Utf8Path::new("/"));
     let mut variables = Vec::new();
     let mut effective = Vec::new();
-    for (name, strict) in [(EMERGE, false), (EM, true)] {
+    for (name, policy) in [(EMERGE, Policy::Lenient), (EM, Policy::Strict)] {
         let Some(spec) = source_of(name, config, roots.config_overlay(), env)? else {
             continue;
         };
-        let class = classify(name, &spec.value, strict)?;
+        let class = classify(name, &spec.value, policy)?;
         if class.kept.is_empty() && class.dropped.is_empty() {
             continue;
         }
@@ -231,63 +231,92 @@ struct Classified {
     dropped: Vec<String>,
 }
 
-fn classify(name: &str, raw: &str, strict: bool) -> Result<Classified, Error> {
+/// How a variable treats words `em` cannot apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Policy {
+    /// `EMERGE_DEFAULT_OPTS`, shared with Portage: read its spellings and drop the rest.
+    Lenient,
+    /// `EM_DEFAULT_OPTS`: `em`'s own syntax, anything else is an error.
+    Strict,
+}
+
+/// What one flag group does to the kept list.
+enum Decision {
+    Keep(Vec<String>),
+    Drop(Vec<String>),
+    /// `--flag=n`: remove an earlier `flag` and report the group as dropped.
+    Cancel {
+        flag: String,
+        group: Vec<String>,
+    },
+}
+
+fn classify(name: &str, raw: &str, policy: Policy) -> Result<Classified, Error> {
     let words = split_words(name, raw)?;
-    let words = if strict {
-        words
-    } else {
-        portage_spellings(words)
+    let words = match policy {
+        Policy::Strict => words,
+        Policy::Lenient => portage_spellings(words),
     };
     let mut kept = Vec::new();
     let mut dropped = Vec::new();
     let mut i = 0;
     while i < words.len() {
-        if !looks_like_flag(&words[i]) {
-            if strict {
-                return Err(Error::invalid(format!(
-                    "{name}: unexpected word `{}`",
-                    words[i]
-                )));
-            }
-            dropped.push(words[i].clone());
-            i += 1;
-            continue;
-        }
-        let (group, next) = group_at(name, &words, i)?;
-        let group = match boolean_value(&group).filter(|_| !strict) {
-            Some((flag, true)) => vec![flag.to_owned()],
-            Some((flag, false)) => {
-                kept.retain(|word| word != flag);
-                dropped.extend(group);
-                i = next;
-                continue;
-            }
-            None => group,
+        let (group, next) = if looks_like_flag(&words[i]) {
+            group_at(name, &words, i)?
+        } else {
+            (vec![words[i].clone()], i + 1)
         };
-        match probe(&group) {
-            // Decided on the first parse. Inserting a copy would mark the run
-            // as ignored after the options had already been applied.
-            Ok(()) if group.iter().any(|word| word == "--ignore-default-opts") => {
-                if strict {
-                    return Err(Error::invalid(format!(
-                        "{name}: --ignore-default-opts is only read from the command line"
-                    )));
-                }
+        match decide(name, group, policy)? {
+            Decision::Keep(group) => kept.extend(group),
+            Decision::Drop(group) => dropped.extend(group),
+            Decision::Cancel { flag, group } => {
+                kept.retain(|word| *word != flag);
                 dropped.extend(group);
             }
-            Ok(()) => kept.extend(group),
-            // A bare `--jobs` means unlimited in Portage, which `em` cannot express.
-            Err(err)
-                if !strict
-                    && matches!(err.kind(), ErrorKind::UnknownFlag | ErrorKind::MissingValue) =>
-            {
-                dropped.extend(group)
-            }
-            Err(err) => return Err(refuse(name, &group, err)),
         }
         i = next;
     }
     Ok(Classified { kept, dropped })
+}
+
+fn decide(name: &str, group: Vec<String>, policy: Policy) -> Result<Decision, Error> {
+    if !looks_like_flag(&group[0]) {
+        return match policy {
+            Policy::Lenient => Ok(Decision::Drop(group)),
+            Policy::Strict => Err(Error::invalid(format!(
+                "{name}: unexpected word `{}`",
+                group[0]
+            ))),
+        };
+    }
+    let boolean = match policy {
+        Policy::Lenient => boolean_value(&group).map(|(flag, on)| (flag.to_owned(), on)),
+        Policy::Strict => None,
+    };
+    let group = match boolean {
+        Some((flag, true)) => vec![flag],
+        Some((flag, false)) => return Ok(Decision::Cancel { flag, group }),
+        None => group,
+    };
+    match probe(&group) {
+        // Decided on the first parse. Inserting a copy would mark the run
+        // as ignored after the options had already been applied.
+        Ok(()) if group.iter().any(|word| word == "--ignore-default-opts") => match policy {
+            Policy::Lenient => Ok(Decision::Drop(group)),
+            Policy::Strict => Err(Error::invalid(format!(
+                "{name}: --ignore-default-opts is only read from the command line"
+            ))),
+        },
+        Ok(()) => Ok(Decision::Keep(group)),
+        // A bare `--jobs` means unlimited in Portage, which `em` cannot express.
+        Err(err)
+            if policy == Policy::Lenient
+                && matches!(err.kind(), ErrorKind::UnknownFlag | ErrorKind::MissingValue) =>
+        {
+            Ok(Decision::Drop(group))
+        }
+        Err(err) => Err(refuse(name, &group, err)),
+    }
 }
 
 /// Rewrites Portage's `--flag y`, `--flag=True` and `--color=y|n` to `--flag=y|n` or `em`'s value.
@@ -453,38 +482,48 @@ mod tests {
 
     #[test]
     fn splitter_keeps_quotes_and_names_a_broken_value() {
-        let class = classify(EMERGE, r#"-j4 '--load-average=8'"#, false).unwrap();
+        let class = classify(EMERGE, r#"-j4 '--load-average=8'"#, Policy::Lenient).unwrap();
         assert_eq!(class.kept, ["-j4", "--load-average=8"]);
 
-        let err = classify(EMERGE, "'--jobs=4", false).unwrap_err();
+        let err = classify(EMERGE, "'--jobs=4", Policy::Lenient).unwrap_err();
         let text = err.to_string();
         assert!(text.contains(EMERGE) && text.contains("unclosed"), "{text}");
 
-        let err = classify(EM, "--jobs=4\\", true).unwrap_err();
+        let err = classify(EM, "--jobs=4\\", Policy::Strict).unwrap_err();
         let text = err.to_string();
         assert!(text.contains(EM) && text.contains("trailing"), "{text}");
     }
 
     #[test]
     fn unknown_groups_are_dropped_and_a_bad_value_is_an_error() {
-        let class = classify(EMERGE, "--alert=yes --alert foo --jobs=4 --alert", false).unwrap();
+        let class = classify(
+            EMERGE,
+            "--alert=yes --alert foo --jobs=4 --alert",
+            Policy::Lenient,
+        )
+        .unwrap();
         assert_eq!(class.kept, ["--jobs=4"]);
         assert_eq!(class.dropped, ["--alert=yes", "--alert", "foo", "--alert"]);
 
-        let class = classify(EMERGE, "--jobs 4 --keep-going", false).unwrap();
+        let class = classify(EMERGE, "--jobs 4 --keep-going", Policy::Lenient).unwrap();
         assert_eq!(class.kept, ["--jobs", "4", "--keep-going"]);
 
-        let class = classify(EMERGE, "-j80 -l80 --jobs=65 --load-average 128", false).unwrap();
+        let class = classify(
+            EMERGE,
+            "-j80 -l80 --jobs=65 --load-average 128",
+            Policy::Lenient,
+        )
+        .unwrap();
         assert_eq!(
             class.kept,
             ["-j80", "-l80", "--jobs=65", "--load-average", "128"]
         );
 
-        let err = classify(EMERGE, "--jobs=abc", false).unwrap_err();
+        let err = classify(EMERGE, "--jobs=abc", Policy::Lenient).unwrap_err();
         let text = err.to_string();
         assert!(text.contains(EMERGE) && text.contains("jobs"), "{text}");
 
-        let err = classify(EM, "--alert --jobs=4", true).unwrap_err();
+        let err = classify(EM, "--alert --jobs=4", Policy::Strict).unwrap_err();
         let text = err.to_string();
         assert!(text.contains(EM) && text.contains("alert"), "{text}");
     }
@@ -494,31 +533,36 @@ mod tests {
         let class = classify(
             EMERGE,
             "--ask=y --usepkg y --getbinpkg=True --color=n",
-            false,
+            Policy::Lenient,
         );
         assert_eq!(
             class.unwrap().kept,
             ["--ask", "--usepkg", "--getbinpkg", "--color=never"]
         );
 
-        let class = classify(EMERGE, "--ask --usepkg --ask=n --usepkg n -v", false).unwrap();
+        let class = classify(
+            EMERGE,
+            "--ask --usepkg --ask=n --usepkg n -v",
+            Policy::Lenient,
+        )
+        .unwrap();
         assert_eq!(class.kept, ["-v"]);
         assert_eq!(class.dropped, ["--ask=n", "--usepkg=n"]);
 
-        let class = classify(EMERGE, "--with-bdeps=True --jobs", false).unwrap();
+        let class = classify(EMERGE, "--with-bdeps=True --jobs", Policy::Lenient).unwrap();
         assert_eq!(class.kept, ["--with-bdeps=y"]);
         assert_eq!(class.dropped, ["--jobs"]);
 
-        assert!(classify(EM, "--ask=y", true).is_err());
+        assert!(classify(EM, "--ask=y", Policy::Strict).is_err());
     }
 
     #[test]
     fn a_stray_word_is_dropped_from_emerge_and_rejected_from_em() {
-        let class = classify(EMERGE, "--jobs=4 sys-libs/zlib @jobs", false).unwrap();
+        let class = classify(EMERGE, "--jobs=4 sys-libs/zlib @jobs", Policy::Lenient).unwrap();
         assert_eq!(class.kept, ["--jobs=4"]);
         assert_eq!(class.dropped, ["sys-libs/zlib", "@jobs"]);
 
-        let err = classify(EM, "--jobs=4 zlib", true).unwrap_err();
+        let err = classify(EM, "--jobs=4 zlib", Policy::Strict).unwrap_err();
         assert!(err.to_string().contains("unexpected word `zlib`"));
     }
 
@@ -576,11 +620,11 @@ mod tests {
 
     #[test]
     fn ignore_default_opts_inside_a_variable_does_not_stick() {
-        let class = classify(EMERGE, "--ignore-default-opts --jobs=4", false).unwrap();
+        let class = classify(EMERGE, "--ignore-default-opts --jobs=4", Policy::Lenient).unwrap();
         assert_eq!(class.kept, ["--jobs=4"]);
         assert_eq!(class.dropped, ["--ignore-default-opts"]);
 
-        let err = classify(EM, "--ignore-default-opts", true).unwrap_err();
+        let err = classify(EM, "--ignore-default-opts", Policy::Strict).unwrap_err();
         assert!(
             err.to_string().contains(EM) && err.to_string().contains("command line"),
             "{err}"
