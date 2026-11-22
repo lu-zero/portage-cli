@@ -369,10 +369,27 @@ fn refuse(name: &str, group: &[String], err: Error) -> Error {
 }
 
 fn insert(args: &[OsString], words: &[String]) -> Vec<OsString> {
-    let at = match args.first().and_then(|arg| arg.to_str()) {
-        Some("emerge") => 1,
-        _ => 0,
-    };
+    let at = applet_word(args, words).map_or(0, |word| word + 1);
+    splice(args, at, words)
+}
+
+/// The `emerge` word naming the applet, not a flag's value or an atom.
+fn applet_word(args: &[OsString], words: &[String]) -> Option<usize> {
+    let atoms = Cli::parse_from(args).ok()?.atoms();
+    let same_atoms = |argv: &[OsString]| Cli::parse_from(argv).is_ok_and(|c| c.atoms() == atoms);
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .enumerate()
+        .filter(|(_, arg)| *arg == "emerge")
+        .map(|(i, _)| i)
+        .find(|&i| {
+            let mut without = args.to_vec();
+            without.remove(i);
+            same_atoms(&without) && same_atoms(&splice(args, i + 1, words))
+        })
+}
+
+fn splice(args: &[OsString], at: usize, words: &[String]) -> Vec<OsString> {
     let mut out = Vec::with_capacity(args.len() + words.len());
     out.extend(args[..at].iter().cloned());
     out.extend(words.iter().map(OsString::from));
@@ -518,6 +535,21 @@ mod tests {
         );
         assert_eq!(show(&insert(&os(&["zlib"]), &jobs)), "--jobs=4 zlib");
         assert_eq!(show(&insert(&os(&["-r"]), &jobs)), "--jobs=4 -r");
+        assert_eq!(
+            show(&insert(
+                &os(&["--root", "/x", "emerge", "-p", "zlib"]),
+                &jobs
+            )),
+            "--root /x emerge --jobs=4 -p zlib"
+        );
+        assert_eq!(
+            show(&insert(&os(&["--root", "emerge", "emerge", "zlib"]), &jobs)),
+            "--root emerge emerge --jobs=4 zlib"
+        );
+        assert_eq!(
+            show(&insert(&os(&["zlib", "emerge"]), &jobs)),
+            "--jobs=4 zlib emerge"
+        );
     }
 
     #[test]
