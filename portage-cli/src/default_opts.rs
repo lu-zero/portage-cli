@@ -4,10 +4,11 @@
 //! then the command line. A scalar flag's last value wins. Unknown flags are
 //! dropped from the first variable and rejected from the second.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::sync::OnceLock;
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use winnow_args::{Args, Error, ErrorKind};
 
 use crate::cli::{Applet, Cli, Validated};
@@ -170,24 +171,48 @@ fn source_of(
             source: "environment".to_owned(),
         }));
     }
-    let mut vars = std::collections::BTreeMap::new();
-    let mut found = None;
+    let mut confs = Vec::new();
     for path in candidates(config, overlay) {
-        let Some(conf) = make_conf(&path, name)? else {
-            continue;
-        };
-        conf.expand_assignments(&mut vars);
-        if conf.get(name).is_some() {
-            found = vars.get(name).map(|value| Spec {
-                value: value.clone(),
-                source: path.to_string(),
-            });
+        if let Some(conf) = make_conf(&path, name)? {
+            confs.push((path, conf));
         }
     }
-    Ok(found)
+    let Some((source, raw)) = confs
+        .iter()
+        .rev()
+        .find_map(|(path, conf)| Some((path.to_string(), conf.get(name)?)))
+    else {
+        return Ok(None);
+    };
+    let mut vars = if raw.contains('$') {
+        inherited_vars(config, overlay)
+    } else {
+        BTreeMap::new()
+    };
+    for (_, conf) in &confs {
+        conf.expand_assignments(&mut vars);
+    }
+    Ok(vars.remove(name).map(|value| Spec { value, source }))
 }
 
-fn candidates(config: &Utf8Path, overlay: Option<&Utf8Path>) -> Vec<camino::Utf8PathBuf> {
+/// What `make.conf` can reference from below it: make.globals, then the profile's make.defaults.
+fn inherited_vars(config: &Utf8Path, overlay: Option<&Utf8Path>) -> BTreeMap<String, String> {
+    let mut paths = vec![Utf8PathBuf::from(crate::settings::MAKE_GLOBALS)];
+    if let Ok(Some(stack)) = crate::settings::profile_stack(config, overlay) {
+        paths.extend(stack.profiles().iter().filter_map(|profile| {
+            Utf8PathBuf::from_path_buf(profile.path().join("make.defaults")).ok()
+        }));
+    }
+    let mut vars = BTreeMap::new();
+    for path in paths {
+        if let Ok(conf) = portage_repo::MakeConf::load(&path) {
+            conf.expand_assignments(&mut vars);
+        }
+    }
+    vars
+}
+
+fn candidates(config: &Utf8Path, overlay: Option<&Utf8Path>) -> Vec<Utf8PathBuf> {
     let mut paths = vec![
         config.join("etc/make.conf"),
         config.join("etc/portage/make.conf"),
@@ -710,6 +735,25 @@ mod tests {
         assert_eq!(validated.0.merge_flags().jobs, Some(3));
         assert!(validated.0.quiet());
         assert_eq!(explanation.effective, ["--jobs=3", "--quiet"]);
+    }
+
+    #[test]
+    fn references_see_the_profile_make_defaults() {
+        let (dir, args) = scratch(&["-p", "sys-libs/zlib"]);
+        write_conf(dir.path(), "profile/eapi", "8\n");
+        write_conf(dir.path(), "profile/make.defaults", "FROM_PROFILE=7\n");
+        write_conf(
+            dir.path(),
+            "etc/portage/make.conf",
+            "EMERGE_DEFAULT_OPTS=\"--jobs=${FROM_PROFILE}\"\n",
+        );
+        std::os::unix::fs::symlink(
+            dir.path().join("profile"),
+            dir.path().join("etc/portage/make.profile"),
+        )
+        .unwrap();
+        let (validated, _) = apply(&args, &no_env).unwrap();
+        assert_eq!(validated.0.merge_flags().jobs, Some(7));
     }
 
     #[test]

@@ -14,7 +14,7 @@ use portage_resolve::Roots;
 use crate::cli::Cli;
 
 /// Portage's defaults for a host install; a prefix has none of its own yet
-const MAKE_GLOBALS: &str = "/usr/share/portage/config/make.globals";
+pub(crate) const MAKE_GLOBALS: &str = "/usr/share/portage/config/make.globals";
 
 /// The globals layer without a make.globals: what em does by default that a switch can turn off,
 /// and the `GENTOO_MIRRORS` default make.globals ships
