@@ -50,18 +50,10 @@ pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     }
 }
 
-/// `--info` with no atoms and no other mode flag (`-r`/`-s`/`-C`/...), so
-/// `em --info -r` doesn't silently drop `-r` in favor of printing info.
+/// `--info` with no atoms. As in emerge, it is the action and `-r`, `-W` or `-O` are options.
 fn info_wins(cli: &cli::Cli) -> bool {
     match &cli.applet {
-        Some(Applet::Emerge(a)) => {
-            a.mode.info
-                && a.atoms.is_empty()
-                && cli::EmergeModeArgs {
-                    info: false,
-                    ..a.mode.clone()
-                } == cli::EmergeModeArgs::default()
-        }
+        Some(Applet::Emerge(a)) => a.mode.info && a.atoms.is_empty(),
         _ => false,
     }
 }
@@ -814,11 +806,10 @@ mod tests {
     }
 
     #[test]
-    fn info_loses_to_an_unrelated_mode_flag() {
-        // `em --info -r` now parses (both flags are recognized), but `-r`
-        // means `--info` must not win — `info_wins` checks the mode flags,
-        // not just the atom list.
-        assert!(!info_wins(&parse_cli(&["em", "--info", "-r"])));
+    fn info_is_the_action_over_option_like_modes() {
+        for flag in ["-r", "-W", "-O"] {
+            assert!(info_wins(&parse_cli(&["em", "--info", flag])), "{flag}");
+        }
     }
 
     #[test]
