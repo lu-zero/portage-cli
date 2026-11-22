@@ -170,11 +170,16 @@ fn source_of(
             source: "environment".to_owned(),
         }));
     }
+    let mut vars = std::collections::BTreeMap::new();
     let mut found = None;
     for path in candidates(config, overlay) {
-        if let Some(value) = assignment(&path, name)? {
-            found = Some(Spec {
-                value,
+        let Some(conf) = make_conf(&path, name)? else {
+            continue;
+        };
+        conf.expand_assignments(&mut vars);
+        if conf.get(name).is_some() {
+            found = vars.get(name).map(|value| Spec {
+                value: value.clone(),
                 source: path.to_string(),
             });
         }
@@ -198,9 +203,9 @@ fn candidates(config: &Utf8Path, overlay: Option<&Utf8Path>) -> Vec<camino::Utf8
     paths
 }
 
-fn assignment(path: &Utf8Path, name: &str) -> Result<Option<String>, Error> {
+fn make_conf(path: &Utf8Path, name: &str) -> Result<Option<portage_repo::MakeConf>, Error> {
     match portage_repo::MakeConf::load(path) {
-        Ok(conf) => Ok(conf.get(name).map(str::to_owned)),
+        Ok(conf) => Ok(Some(conf)),
         Err(portage_repo::Error::Io { source, .. })
             if source.kind() == std::io::ErrorKind::NotFound =>
         {
@@ -610,6 +615,25 @@ mod tests {
         assert_eq!(validated.0.merge_flags().jobs, Some(7));
         assert!(!validated.0.quiet(), "an append is not sourced");
         assert!(explanation.variables[0].source.ends_with("make.conf.d"));
+    }
+
+    #[test]
+    fn references_expand_across_make_conf_layers() {
+        let (dir, args) = scratch(&["-p", "sys-libs/zlib"]);
+        write_conf(
+            dir.path(),
+            "etc/portage/make.conf",
+            "J=3\nEMERGE_DEFAULT_OPTS=\"--jobs=${J}\"\n",
+        );
+        write_conf(
+            dir.path(),
+            "etc/portage/make.conf.d/zz.conf",
+            "EMERGE_DEFAULT_OPTS=\"${EMERGE_DEFAULT_OPTS} --quiet\"\n",
+        );
+        let (validated, explanation) = apply(&args, &no_env).unwrap();
+        assert_eq!(validated.0.merge_flags().jobs, Some(3));
+        assert!(validated.0.quiet());
+        assert_eq!(explanation.effective, ["--jobs=3", "--quiet"]);
     }
 
     #[test]

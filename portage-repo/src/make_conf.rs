@@ -79,6 +79,52 @@ where
     Ok(out)
 }
 
+/// Replaces `$NAME` and `${NAME}`; an unset name is empty and any other `$` form stays literal.
+fn expand_references(raw: &str, vars: &std::collections::BTreeMap<String, String>) -> String {
+    let is_name = |name: &str| {
+        name.chars().next().is_some_and(|c| !c.is_ascii_digit())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(at) = rest.find(['$', '\\']) {
+        out.push_str(&rest[..at]);
+        let marker = rest[at..].chars().next().unwrap_or('$');
+        let after = &rest[at + 1..];
+        if marker == '\\' {
+            let mut chars = after.chars();
+            match chars.next() {
+                Some('$') => out.push('$'),
+                Some(c) => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                None => out.push('\\'),
+            }
+            rest = chars.as_str();
+            continue;
+        }
+        let (name, tail) = match after.strip_prefix('{') {
+            Some(braced) => braced.split_once('}').unwrap_or(("", after)),
+            None => {
+                let end = after
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .unwrap_or(after.len());
+                after.split_at(end)
+            }
+        };
+        if is_name(name) {
+            out.push_str(vars.get(name).map_or("", String::as_str));
+            rest = tail;
+        } else {
+            out.push('$');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// One element in the tiled decomposition of the source file
 enum Entry {
     /// Raw bytes not covered by the AST
@@ -208,6 +254,26 @@ impl MakeConf {
             }
         }
         None
+    }
+
+    /// Applies plain assignments in order, expanding `$NAME` and `${NAME}` from `vars`.
+    ///
+    /// Follows Portage's config reader: `NAME+=VALUE` is ignored and nothing is executed.
+    pub fn expand_assignments(&self, vars: &mut std::collections::BTreeMap<String, String>) {
+        for entry in &self.entries {
+            let Entry::Statement { vars: assigned, .. } = entry else {
+                continue;
+            };
+            for var in assigned.iter().filter(|var| !var.append) {
+                let raw = &self.src[var.value.clone()];
+                let value = if var.quote == Quote::Single {
+                    raw.to_owned()
+                } else {
+                    expand_references(raw, vars)
+                };
+                vars.insert(var.name.clone(), value);
+            }
+        }
     }
 
     /// Apply this file's assignments to `env` the way `bash source` would
@@ -918,6 +984,21 @@ impl std::fmt::Display for MakeConf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expand_assignments_follows_portage_config_rules() {
+        let conf = MakeConf::parse(
+            "A=1\nB=\"${A}-$A-${UNSET}x\"\nC='$A'\nD=\"\\$A $(echo no) ${A:-z}\"\nA+=\" 2\"\n"
+                .to_owned(),
+        )
+        .unwrap();
+        let mut vars = std::collections::BTreeMap::new();
+        conf.expand_assignments(&mut vars);
+        assert_eq!(vars["A"], "1");
+        assert_eq!(vars["B"], "1-1-x");
+        assert_eq!(vars["C"], "$A");
+        assert_eq!(vars["D"], "$A $(echo no) ${A:-z}");
+    }
 
     fn parse(src: &str) -> MakeConf {
         MakeConf::parse(src.to_owned()).expect("parse failed")
