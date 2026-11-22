@@ -26,6 +26,7 @@ winnow-args; the usage-rs migration note stays in `todo/done/`.
 | Item | Status | Detail |
 |------|--------|--------|
 | emerge/crossdev gaps and em-only additions, tracked in both directions | 🔴 backlog | [[em-crossdev-parity]] |
+| `em --info <atom>` package section | 🔴 filed | [[info-package-section]] |
 
 ## Latest (2026-11-15) — repository storage, sync verification, search
 
