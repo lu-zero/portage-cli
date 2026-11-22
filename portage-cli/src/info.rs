@@ -19,6 +19,11 @@ use serde::Serialize;
 
 use crate::cli::Cli;
 
+mod packages;
+
+/// Width of the `=` rules between report sections.
+const RULE_WIDTH: usize = 65;
+
 // Real `emerge --info` has no coloring at all (verified: zero ANSI escapes
 // even under --color=y) — there's no portage convention to match here, so
 // this reuses `em`'s own established -pv palette instead: plain green for
@@ -203,16 +208,15 @@ struct Info {
     /// `EMERGE_DEFAULT_OPTS` / `EM_DEFAULT_OPTS` as `em` applies them.
     #[serde(skip_serializing_if = "Option::is_none")]
     default_options: Option<DefaultOptions>,
+    /// Installed packages the atoms matched
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    packages: Vec<packages::PackageInfo>,
+    #[serde(skip)]
+    has_atoms: bool,
 }
 
 pub(crate) async fn run(cli: &Cli) -> Result<()> {
-    let atoms = cli.atoms();
-    if !atoms.is_empty() {
-        crate::style::warn_line!(
-            "--info has no package section yet, not reported: {}",
-            atoms.join(" ")
-        );
-    }
+    let matched = packages::matching(cli)?;
     let roots = cli.roots();
     let repo = crate::crossdev::main_repo(cli)?;
     let loaded = crate::settings::load(cli).await?;
@@ -356,7 +360,10 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
         ),
     });
 
+    let packages = packages::describe(cli, &matched, &var).await;
+
     let info = Info {
+        has_atoms: !cli.atoms().is_empty(),
         em_version: env!("CARGO_PKG_VERSION").to_string(),
         profile,
         has_profile,
@@ -372,6 +379,7 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
         vars,
         unset,
         default_options,
+        packages,
     };
 
     if cli.merge_flags().json {
@@ -393,7 +401,11 @@ fn print_text(info: &Info) -> Result<()> {
         info.chost.as_deref().map(|_| ", ").unwrap_or(""),
         info.chost.as_deref().unwrap_or(""),
     )?;
-    writeln!(out, "{}", "=".repeat(65))?;
+    if info.has_atoms {
+        writeln!(out, "{}", "=".repeat(RULE_WIDTH))?;
+        write_title(&mut out, "System Settings")?;
+    }
+    writeln!(out, "{}", "=".repeat(RULE_WIDTH))?;
     if !info.has_profile {
         use crate::style::C_WARN;
         writeln!(
@@ -547,7 +559,14 @@ fn print_text(info: &Info) -> Result<()> {
             writeln!(out, "(not applied: --ignore-default-opts)")?;
         }
     }
+    packages::print(&mut out, &info.packages)?;
 
+    Ok(())
+}
+
+fn write_title(out: &mut impl std::io::Write, title: &str) -> Result<()> {
+    let width = (RULE_WIDTH + title.len()) / 2;
+    writeln!(out, "{title:>width$}")?;
     Ok(())
 }
 

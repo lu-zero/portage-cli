@@ -288,7 +288,8 @@ fn use_deps_satisfied(dep: &Dep, entry: &AvailEntry) -> bool {
         .all(|ud| use_dep_satisfied(ud, enabled, iuse))
 }
 
-fn use_dep_satisfied(
+/// Whether `enabled` meets one USE dep; forms needing the parent's flags count as met.
+pub fn use_dep_satisfied(
     ud: &UseDep,
     enabled: &[Interned<DefaultInterner>],
     iuse: &[Interned<DefaultInterner>],

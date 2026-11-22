@@ -1,11 +1,10 @@
 # `em --info <atom>`: the package section
 
-Status: 🔴 filed 2026-11-23.
+Status: 🟡 steps 1 and 2 landed 2026-11-23; `pkg_info`, uninstalled packages and suggestions open.
 
 ## Why
 
-`emerge --info` takes optional atoms. `em --info <atom>` prints the system report and warns that
-the atoms were not reported.
+`emerge --info` takes optional atoms and reports how each match was built.
 
 ## What emerge does
 
@@ -13,9 +12,11 @@ Checked against Portage 3.0.83.
 
 **Atoms, before any output.** One bad atom means exit 1 and no report.
 
-- Not a valid package atom (`@set` included): an error.
+- Not a valid package atom: an error. `@set` is valid and expands, and bare `world` and `system`
+  are sets too. An unknown set is an error.
 - A short name expands against the installed packages, then the repositories, then binary
-  packages under `--usepkg`. More than one category: an ambiguity error listing them.
+  packages under `--usepkg`. A real package beats a `virtual/` or `acct-*` of that name. Several
+  real packages with no such shadow are an ambiguity error.
 - No installed, repository, or (`--usepkg`) binary package for the name:
   `emerge: there are no ebuilds to satisfy "x".`, plus similar-name suggestions.
 - The name exists but nothing matches, for example an uninstalled version: no error, no entry.
@@ -46,9 +47,10 @@ LDFLAGS="..."
 
 ## Plan
 
-1. Validate atoms and fail before the report.
-2. Print `System Settings` and `Package Settings` for installed matches, in text and `--json`.
-3. Run `pkg_info`. This executes ebuild code from `--info`, so settle its privileges and sandbox
+1. ✅ Validate atoms and sets, and fail before the report.
+2. ✅ Print `System Settings` and `Package Settings` for installed matches, in text and `--json`.
+   All 785 installed packages without `pkg_info` matched `emerge --info` on the development host.
+3. 🔴 Run `pkg_info`. This executes ebuild code from `--info`, so settle its privileges and sandbox
    first. One of 786 packages defines it on the development host.
-4. Report uninstalled ebuilds and binary packages.
-5. Add similar-name suggestions to the no-match error.
+4. 🔴 Report uninstalled ebuilds and binary packages.
+5. 🔴 Add similar-name suggestions to the no-match error.

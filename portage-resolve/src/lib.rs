@@ -14,6 +14,7 @@
 #![warn(missing_docs)]
 
 mod bdepend_avail;
+pub use bdepend_avail::use_dep_satisfied;
 /// Post-solve trim: drop plan entries only pulled for `BDEPEND` already
 /// satisfied on BROOT or by earlier within-run merges
 pub mod bdepend_trim;

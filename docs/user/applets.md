@@ -80,8 +80,8 @@ many packages build at once. `MAKEOPTS` is separate.
 - Scheduler knobs beyond `-j`/`-l`; merges are serialised.
 - `-r/--resume` re-solves the saved atoms instead of replaying a pinned merge
   list, so a dependency change between runs changes the resumed plan.
-- `--info [atom]`: prints the system report and never merges, but has no
-  per-package section yet. Named atoms get a warning.
+- `--info [atom]`: reports how installed matches were built, but does not run
+  `pkg_info` or report uninstalled packages.
 - `--color` takes `auto|always|never`, not emerge's `y|n`.
 
 **Intentional differences:** `--autounmask` is a no-op and `--complete-graph`
