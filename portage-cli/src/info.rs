@@ -324,7 +324,12 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
     }
     vars.extend(var("PORTAGE_CONFIGROOT").map(|v| ("PORTAGE_CONFIGROOT".to_string(), v)));
 
-    let defaults = crate::default_opts::explain(cli)?;
+    // Reached with a broken variable only under `--ignore-default-opts`.
+    let defaults = crate::default_opts::explain(cli).unwrap_or_else(|err| {
+        let text = err.to_string();
+        crate::style::warn_line!("{}", text.lines().next().unwrap_or_default());
+        Default::default()
+    });
     let default_options = (!defaults.variables.is_empty()).then(|| DefaultOptions {
         lines: defaults.lines(),
         variables: defaults
