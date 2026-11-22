@@ -92,3 +92,76 @@ pub struct EmergeModeArgs {
     )]
     pub info: bool,
 }
+
+/// The operation an emerge run performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmergeAction {
+    /// `-r`: replay the saved merge
+    Resume,
+    /// `-C`: remove matches without regard to dependencies
+    Unmerge,
+    /// `-c`: remove what `@world` does not need
+    Depclean,
+    /// `-P`: remove all but the highest installed version
+    Prune,
+    /// `-W`: edit the world file only
+    Deselect,
+    /// `-s`/`-S`: search, `descriptions` for `-S`
+    Search {
+        /// Whether descriptions are matched too
+        descriptions: bool,
+    },
+    /// No action flag: merge the atoms
+    Merge,
+}
+
+impl EmergeModeArgs {
+    /// The selected action. When several flags are set, the first in [`EmergeAction`] order wins.
+    pub fn action(&self) -> EmergeAction {
+        if self.resume {
+            EmergeAction::Resume
+        } else if self.unmerge {
+            EmergeAction::Unmerge
+        } else if self.depclean {
+            EmergeAction::Depclean
+        } else if self.prune {
+            EmergeAction::Prune
+        } else if self.deselect {
+            EmergeAction::Deselect
+        } else if self.search || self.searchdesc {
+            EmergeAction::Search {
+                descriptions: self.searchdesc,
+            }
+        } else {
+            EmergeAction::Merge
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_follows_dispatch_precedence() {
+        let mode = EmergeModeArgs {
+            resume: true,
+            unmerge: true,
+            ..Default::default()
+        };
+        assert_eq!(mode.action(), EmergeAction::Resume);
+        let mode = EmergeModeArgs {
+            deselect: true,
+            search: true,
+            ..Default::default()
+        };
+        assert_eq!(mode.action(), EmergeAction::Deselect);
+        let mode = EmergeModeArgs {
+            search: true,
+            searchdesc: true,
+            ..Default::default()
+        };
+        assert_eq!(mode.action(), EmergeAction::Search { descriptions: true });
+        assert_eq!(EmergeModeArgs::default().action(), EmergeAction::Merge);
+    }
+}

@@ -978,60 +978,19 @@ async fn emerge_atoms_inner(
 pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
     let mode = cli.mode();
     let atoms = cli.atoms();
-    // emerge -r/--resume: replaces the whole action, same precedence real
-    // emerge gives it (checked first, ahead of every other action flag).
-    if mode.resume {
-        return resume_atoms(cli).await;
-    }
-    // emerge -C: remove the matching installed packages directly, no
-    // dependency graph at all. Checked first: -C together with -s/-S makes
-    // no sense, and real emerge treats -C as its own action too.
-    if mode.unmerge {
-        return unmerge_atoms(cli, &atoms).await;
-    }
-    // emerge --depclean / -c: the safe alternative to -C, walking the
-    // installed dependency graph first.
-    if mode.depclean {
-        let merge_flags = cli.merge_flags();
-        return crate::depclean::run_with_targets(cli, &atoms, &merge_flags).await;
-    }
-    // emerge -P/--prune: like -C, but only the non-highest-version matches.
-    if mode.prune {
-        return prune_atoms(cli, &atoms).await;
-    }
-    // emerge -W/--deselect: world-file-only, no removal at all.
-    if mode.deselect {
-        return deselect_atoms(cli, &atoms);
-    }
-    // emerge -s / -S: the arguments are search patterns, not atoms.
-    if mode.search || mode.searchdesc {
-        let index = mode.search_index != Some(cli::YesNo::N);
-        let defaults = crate::search_key::KeyOptions::default();
-        let similarity = mode.search_similarity.unwrap_or(defaults.similarity);
-        if !(0.0..=100.0).contains(&similarity) {
-            bail!("invalid --search-similarity parameter (not between 0 and 100): '{similarity}'");
+    match mode.action() {
+        cli::EmergeAction::Resume => return resume_atoms(cli).await,
+        cli::EmergeAction::Unmerge => return unmerge_atoms(cli, &atoms).await,
+        cli::EmergeAction::Depclean => {
+            let merge_flags = cli.merge_flags();
+            return crate::depclean::run_with_targets(cli, &atoms, &merge_flags).await;
         }
-        let key = crate::search_key::KeyOptions {
-            fuzzy: mode.fuzzy_search != Some(cli::YesNo::N),
-            similarity,
-            regex_auto: mode.regex_search_auto != Some(cli::YesNo::N),
-        };
-        let policy = search_policy(cli).await;
-        let roots = cli.roots();
-        let env = search::SearchEnv {
-            policy: policy.as_ref(),
-            verbose: cli.verbose() > 0,
-            config_root: roots.config(),
-        };
-        return search::run_emerge_style(
-            &cli.search_repos(),
-            &atoms,
-            mode.searchdesc,
-            index,
-            key,
-            &env,
-        )
-        .await;
+        cli::EmergeAction::Prune => return prune_atoms(cli, &atoms).await,
+        cli::EmergeAction::Deselect => return deselect_atoms(cli, &atoms),
+        cli::EmergeAction::Search { descriptions } => {
+            return search_emerge_style(cli, &mode, &atoms, descriptions).await;
+        }
+        cli::EmergeAction::Merge => {}
     }
     if atoms.is_empty() {
         crate::style::error_line!("no atoms or applet specified. Use --help for usage.");
@@ -1057,6 +1016,42 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             extra_package_use: &[],
             pending_config: None,
         },
+    )
+    .await
+}
+
+/// `-s`/`-S`: the arguments are search patterns, not atoms.
+async fn search_emerge_style(
+    cli: &cli::Cli,
+    mode: &cli::EmergeModeArgs,
+    patterns: &[String],
+    descriptions: bool,
+) -> Result<()> {
+    let index = mode.search_index != Some(cli::YesNo::N);
+    let defaults = crate::search_key::KeyOptions::default();
+    let similarity = mode.search_similarity.unwrap_or(defaults.similarity);
+    if !(0.0..=100.0).contains(&similarity) {
+        bail!("invalid --search-similarity parameter (not between 0 and 100): '{similarity}'");
+    }
+    let key = crate::search_key::KeyOptions {
+        fuzzy: mode.fuzzy_search != Some(cli::YesNo::N),
+        similarity,
+        regex_auto: mode.regex_search_auto != Some(cli::YesNo::N),
+    };
+    let policy = search_policy(cli).await;
+    let roots = cli.roots();
+    let env = search::SearchEnv {
+        policy: policy.as_ref(),
+        verbose: cli.verbose() > 0,
+        config_root: roots.config(),
+    };
+    search::run_emerge_style(
+        &cli.search_repos(),
+        patterns,
+        descriptions,
+        index,
+        key,
+        &env,
     )
     .await
 }
