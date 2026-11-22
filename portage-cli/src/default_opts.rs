@@ -228,6 +228,11 @@ struct Classified {
 
 fn classify(name: &str, raw: &str, strict: bool) -> Result<Classified, Error> {
     let words = split_words(name, raw)?;
+    let words = if strict {
+        words
+    } else {
+        portage_spellings(words)
+    };
     let mut kept = Vec::new();
     let mut dropped = Vec::new();
     let mut i = 0;
@@ -244,6 +249,16 @@ fn classify(name: &str, raw: &str, strict: bool) -> Result<Classified, Error> {
             continue;
         }
         let (group, next) = group_at(name, &words, i)?;
+        let group = match boolean_value(&group).filter(|_| !strict) {
+            Some((flag, true)) => vec![flag.to_owned()],
+            Some((flag, false)) => {
+                kept.retain(|word| word != flag);
+                dropped.extend(group);
+                i = next;
+                continue;
+            }
+            None => group,
+        };
         match probe(&group) {
             // Decided on the first parse. Inserting a copy would mark the run
             // as ignored after the options had already been applied.
@@ -256,12 +271,55 @@ fn classify(name: &str, raw: &str, strict: bool) -> Result<Classified, Error> {
                 dropped.extend(group);
             }
             Ok(()) => kept.extend(group),
-            Err(err) if err.kind() == ErrorKind::UnknownFlag && !strict => dropped.extend(group),
+            // A bare `--jobs` means unlimited in Portage, which `em` cannot express.
+            Err(err)
+                if !strict
+                    && matches!(err.kind(), ErrorKind::UnknownFlag | ErrorKind::MissingValue) =>
+            {
+                dropped.extend(group)
+            }
             Err(err) => return Err(refuse(name, &group, err)),
         }
         i = next;
     }
     Ok(Classified { kept, dropped })
+}
+
+/// Rewrites Portage's `--flag y`, `--flag=True` and `--color=y|n` to `--flag=y|n` or `em`'s value.
+fn portage_spellings(words: Vec<String>) -> Vec<String> {
+    let mut out = Vec::with_capacity(words.len());
+    let mut words = words.into_iter().peekable();
+    while let Some(word) = words.next() {
+        let bare_long = word.len() > 2 && word.starts_with("--") && !word.contains('=');
+        let value = bare_long
+            .then(|| words.next_if(|next| matches!(next.as_str(), "y" | "n" | "True")))
+            .flatten();
+        let word = value.map_or(word.clone(), |value| format!("{word}={value}"));
+        out.push(match word.as_str() {
+            "--color=y" | "--color=True" => "--color=always".to_owned(),
+            "--color=n" => "--color=never".to_owned(),
+            _ => match word.strip_suffix("=True") {
+                Some(flag) => format!("{flag}=y"),
+                None => word,
+            },
+        });
+    }
+    out
+}
+
+/// `(--flag, on)` for `--flag=y|n` on a flag `em` parses as a plain switch.
+fn boolean_value(group: &[String]) -> Option<(&str, bool)> {
+    let [word] = group else {
+        return None;
+    };
+    let (flag, value) = word.split_once('=')?;
+    let on = match value {
+        "y" => true,
+        "n" => false,
+        _ => return None,
+    };
+    let err = probe(group).err()?;
+    (err.kind() == ErrorKind::UnexpectedValue).then_some((flag, on))
 }
 
 fn group_at(name: &str, words: &[String], i: usize) -> Result<(Vec<String>, usize), Error> {
@@ -407,6 +465,29 @@ mod tests {
         let err = classify(EM, "--alert --jobs=4", true).unwrap_err();
         let text = err.to_string();
         assert!(text.contains(EM) && text.contains("alert"), "{text}");
+    }
+
+    #[test]
+    fn portage_boolean_spellings_are_accepted_from_emerge_only() {
+        let class = classify(
+            EMERGE,
+            "--ask=y --usepkg y --getbinpkg=True --color=n",
+            false,
+        );
+        assert_eq!(
+            class.unwrap().kept,
+            ["--ask", "--usepkg", "--getbinpkg", "--color=never"]
+        );
+
+        let class = classify(EMERGE, "--ask --usepkg --ask=n --usepkg n -v", false).unwrap();
+        assert_eq!(class.kept, ["-v"]);
+        assert_eq!(class.dropped, ["--ask=n", "--usepkg=n"]);
+
+        let class = classify(EMERGE, "--with-bdeps=True --jobs", false).unwrap();
+        assert_eq!(class.kept, ["--with-bdeps=y"]);
+        assert_eq!(class.dropped, ["--jobs"]);
+
+        assert!(classify(EM, "--ask=y", true).is_err());
     }
 
     #[test]
