@@ -36,3 +36,6 @@ em log time [OPTIONS] [ATOM]
 
   Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf.
 * `--root <PATH>` — Installation root (the offset an applet installs into / queries)
+* `--sysroot <PATH>` — Build-against tree (`SYSROOT`).
+
+  Also read from the `SYSROOT` environment variable when this flag is absent. Does not move `--root` or `--config-root`.
