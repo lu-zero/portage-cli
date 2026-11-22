@@ -305,8 +305,8 @@ autounmask write UX, and the `em query depgraph` command shape.
 `parse_cli_or_exit` parses the argv, and for an emerge run that did not pass
 `--ignore-default-opts` it parses again. The second argv is the kept words of
 `EMERGE_DEFAULT_OPTS`, then `EM_DEFAULT_OPTS`, then the original words. The
-words are inserted after a leading `emerge`, and at the front otherwise, so
-a leading flag still routes into emerge. `Cli::color`, quiet, verbose and
+words are inserted after the `emerge` applet word, wherever parent flags put
+it, and at the front otherwise, so a leading flag still routes into emerge. `Cli::color`, quiet, verbose and
 pretend are read from that second parse.
 
 Words come from `winnow_args::response::split` (whitespace, quotes, one-byte
@@ -315,16 +315,19 @@ is an error that names the variable. A word containing `=` is one group.
 Otherwise the flag is probed alone: success leaves the next word separate, and
 `UnknownFlag` or `MissingValue` takes the following word when it does not
 start with `-`. The group is then probed with `Cli::parse_from(["emerge", group])`.
-`UnknownFlag` drops it from `EMERGE_DEFAULT_OPTS` only; any other error is
-reported, for both variables. `--ignore-default-opts` is decided on that first
+`EMERGE_DEFAULT_OPTS` is `Policy::Lenient`: Portage's `--flag y`, `=True` and
+`=n` forms are rewritten first, and `UnknownFlag` or `MissingValue` drops the
+group. `EM_DEFAULT_OPTS` is `Policy::Strict`. Any other error is reported. `--ignore-default-opts` is decided on that first
 parse, so a copy inside either variable does not skip them. `EM_DEFAULT_OPTS`
 rejects that copy; `EMERGE_DEFAULT_OPTS` drops it.
 
-The environment wins over `make.conf`. Files are read with `MakeConf::get`:
+The environment wins over `make.conf`. Files are read with
+`MakeConf::expand_assignments`, sharing one variable map:
 `etc/make.conf`, then `etc/portage/make.conf`, then `etc/portage/make.conf.d`,
 under `roots().config()` (`/` when unset). A prefix or local overlay's
 `make.conf` and `make.conf.d` are last, including under `--target`, so they
-win over the sysroot file. No bash, so `${VAR}` and `+=` are not expanded.
+win over the sysroot file. No bash: `$VAR` and `${VAR}` expand, `+=` is ignored
+and `$(...)` is not run, matching Portage's config reader.
 Dropped flags are a `debug` line and an `em info` section, not a warning on
 every run.
 
