@@ -73,7 +73,7 @@ impl TryFrom<Cli> for Validated {
     }
 }
 
-fn rooted_applet_name(applet: &Option<Applet>) -> Option<&'static str> {
+fn rootless_applet_name(applet: &Option<Applet>) -> Option<&'static str> {
     match applet {
         Some(Applet::Crossdev(_)) => Some("crossdev"),
         Some(Applet::Active(_)) => Some("active"),
@@ -83,7 +83,7 @@ fn rooted_applet_name(applet: &Option<Applet>) -> Option<&'static str> {
 }
 
 fn validate(cli: &Cli) -> Result<(), ValidationError> {
-    if let Some(name) = rooted_applet_name(&cli.applet) {
+    if let Some(name) = rootless_applet_name(&cli.applet) {
         if let Some(root) = cli.root_topology.root.as_deref() {
             return Err(invalid(
                 "--root",
@@ -98,8 +98,9 @@ fn validate(cli: &Cli) -> Result<(), ValidationError> {
                 format!("not valid with the '{name}' applet"),
             ));
         }
+    } else {
+        reject_sysroot_when_root_is_host(cli)?;
     }
-    reject_sysroot_when_root_is_host(cli)?;
     if applet_privilege(cli) == Privilege::Auto {
         privilege_from_env()?;
     }
@@ -110,22 +111,13 @@ fn validate(cli: &Cli) -> Result<(), ValidationError> {
 }
 
 /// `SYSROOT` other than `/` is refused when the install root is `/`.
-///
-/// Checked only when the flag or the environment actually names one, so a
-/// normal host invocation does not resolve roots just to accept them.
 fn reject_sysroot_when_root_is_host(cli: &Cli) -> Result<(), ValidationError> {
-    let from_flag = cli.applet_sysroot().is_some() || cli.root_topology.sysroot.is_some();
-    let from_env = std::env::var("SYSROOT")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty());
-    if !from_flag && !from_env {
+    let (_, root) = cli.topology_and_root();
+    let Some(sysroot) = root.sysroot else {
         return Ok(());
-    }
-    let roots = cli.roots();
-    if let Some(sysroot) = roots.sysroot_explicit()
-        && roots.merge_root().as_str() == "/"
-        && sysroot.as_str() != "/"
-    {
+    };
+    if sysroot.as_str() != "/" && cli.roots().merge_root().as_str() == "/" {
+        let from_flag = cli.applet_sysroot().is_some() || cli.root_topology.sysroot.is_some();
         let field = if from_flag { "--sysroot" } else { "SYSROOT" };
         return Err(invalid(field, sysroot.as_str(), "must be / when ROOT is /"));
     }
@@ -362,10 +354,16 @@ impl Cli {
                 .applet_root()
                 .map(str::to_string)
                 .or_else(|| self.root_topology.root.clone()),
-            sysroot: self
-                .applet_sysroot()
-                .map(str::to_string)
-                .or_else(|| self.root_topology.sysroot.clone()),
+            sysroot: rootless_applet_name(&self.applet)
+                .is_none()
+                .then(|| {
+                    let flag = self
+                        .applet_sysroot()
+                        .map(str::to_string)
+                        .or_else(|| self.root_topology.sysroot.clone());
+                    topology::resolved_sysroot(&flag)
+                })
+                .flatten(),
         };
         (topology, root)
     }
@@ -949,6 +947,29 @@ mod tests {
         ])
         .expect("sysroot may equal ROOT");
         parse_cli_into(&["em", "--sysroot", "/", "-p", "sys-libs/zlib"]).expect("host sysroot");
+    }
+
+    #[test]
+    fn sysroot_env_applies_only_to_applets_with_a_root() {
+        let (_active, _guard) = crate::test_support::isolate_active_state();
+        let saved = std::env::var("SYSROOT").ok();
+        unsafe { std::env::set_var("SYSROOT", "/tmp/sysroot") };
+        let active = parse_cli_into(&["em", "active", "show"]);
+        let emerge = parse_cli_into(&["em", "-p", "sys-libs/zlib"]);
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("SYSROOT", v),
+                None => std::env::remove_var("SYSROOT"),
+            }
+        }
+        assert!(
+            active
+                .expect("active ignores SYSROOT")
+                .roots()
+                .sysroot_explicit()
+                .is_none()
+        );
+        assert!(emerge.unwrap_err().contains("InvalidValue SYSROOT"));
     }
 
     #[test]

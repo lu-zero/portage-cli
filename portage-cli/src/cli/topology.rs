@@ -144,7 +144,8 @@ pub struct Topology {
 #[derive(Debug, Clone, Default)]
 pub struct RootArg {
     pub root: Option<String>,
-    pub sysroot: Option<String>,
+    /// `--sysroot` or `SYSROOT`, normalized. `None` for an applet without a root.
+    pub sysroot: Option<Utf8PathBuf>,
 }
 
 /// `root.root`, falling back to the `ROOT` environment variable.
@@ -257,7 +258,7 @@ impl RootedTopology {
             },
             RootArg {
                 root: self.root.clone(),
-                sysroot: self.sysroot.clone(),
+                sysroot: resolved_sysroot(&self.sysroot),
             },
         )
     }
@@ -359,7 +360,7 @@ impl Topology {
     /// An explicit `--sysroot`, or `SYSROOT` when the flag is absent, replaces
     /// the build-against tree afterwards and does not move `ROOT` or `--config-root`.
     pub fn roots(&self, root: &RootArg) -> Roots {
-        apply_explicit_sysroot(self.compute_roots(root), resolved_sysroot(&root.sysroot))
+        apply_explicit_sysroot(self.compute_roots(root), root.sysroot.clone())
     }
 
     fn compute_roots(&self, root: &RootArg) -> Roots {
