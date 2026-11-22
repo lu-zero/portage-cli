@@ -100,13 +100,18 @@ struct JobStatus {
     merge_root: Arc<str>,
     base_root: Arc<str>,
     mode: ActivityMode,
-    /// Regen only: an indicatif bar that owns TTY detection, redraw-rate
-    /// limiting, and non-tty suppression for us — see `regen_bar_style`.
-    /// `None` for merge/other modes, and under `--quiet` (no bar to show).
-    regen_bar: Option<ProgressBar>,
-    /// Regen only: the base `regen ::repo` message, so a failure count can
-    /// be appended without losing it (`ProgressBar` has no "get message").
-    regen_banner: String,
+    /// `Some` exactly for [`ActivityMode::Regen`].
+    regen: Option<RegenProgress>,
+}
+
+/// A regen session's progress display
+struct RegenProgress {
+    /// The base `regen ::repo` message, so a failure count can be appended
+    /// without losing it (`ProgressBar` has no "get message").
+    banner: String,
+    /// Owns TTY detection, redraw-rate limiting and non-tty suppression.
+    /// `None` under `--quiet`.
+    bar: Option<ProgressBar>,
 }
 
 fn regen_bar_style() -> ProgressStyle {
@@ -192,11 +197,11 @@ impl HumanStdoutSink {
         let Some(js) = jobs.get_mut(job_id) else {
             return;
         };
-        if js.mode == ActivityMode::Regen {
-            if let Some(bar) = &js.regen_bar {
+        if let Some(regen) = &js.regen {
+            if let Some(bar) = &regen.bar {
                 bar.set_position(js.completed as u64);
                 if js.failed > 0 {
-                    bar.set_message(format!("{} ({} failed)", js.regen_banner, js.failed));
+                    bar.set_message(format!("{} ({} failed)", regen.banner, js.failed));
                 }
             }
             return;
@@ -308,16 +313,19 @@ impl ActivitySink for HumanStdoutSink {
                 ..
             } => {
                 // Driver puts `regen ::repo (N ebuilds)` in argv[1] when present.
-                let regen_banner = argv
-                    .get(1)
-                    .cloned()
-                    .unwrap_or_else(|| format!("regen ({plan_total} ebuilds)"));
-                let regen_bar = (*mode == ActivityMode::Regen && !self.quiet).then(|| {
-                    let bar = ProgressBar::new(u64::from(*plan_total));
-                    bar.set_draw_target(ProgressDrawTarget::stderr());
-                    bar.set_style(regen_bar_style());
-                    bar.set_message(regen_banner.clone());
-                    bar
+                let regen = (*mode == ActivityMode::Regen).then(|| {
+                    let banner = argv
+                        .get(1)
+                        .cloned()
+                        .unwrap_or_else(|| format!("regen ({plan_total} ebuilds)"));
+                    let bar = (!self.quiet).then(|| {
+                        let bar = ProgressBar::new(u64::from(*plan_total));
+                        bar.set_draw_target(ProgressDrawTarget::stderr());
+                        bar.set_style(regen_bar_style());
+                        bar.set_message(banner.clone());
+                        bar
+                    });
+                    RegenProgress { banner, bar }
                 });
                 self.jobs.lock().unwrap_or_else(|e| e.into_inner()).insert(
                     job_id.clone(),
@@ -331,8 +339,7 @@ impl ActivitySink for HumanStdoutSink {
                         merge_root: merge_root.clone(),
                         base_root: base_root.clone(),
                         mode: *mode,
-                        regen_bar,
-                        regen_banner,
+                        regen,
                     },
                 );
                 if self.quiet || *mode == ActivityMode::Regen {
@@ -354,8 +361,8 @@ impl ActivitySink for HumanStdoutSink {
                 let Some(js) = jobs.remove(job_id) else {
                     return;
                 };
-                if js.mode == ActivityMode::Regen {
-                    if let Some(bar) = js.regen_bar {
+                if let Some(regen) = js.regen {
+                    if let Some(bar) = regen.bar {
                         bar.finish_and_clear();
                     }
                     if !self.quiet {
@@ -372,13 +379,13 @@ impl ActivitySink for HumanStdoutSink {
                         // "regen ::gentoo (32637 ebuilds)" -> "::gentoo" —
                         // the ebuild count is already in `completed` below,
                         // repeating it here would be redundant.
-                        let label = js
-                            .regen_banner
+                        let label = regen
+                            .banner
                             .strip_prefix("regen ")
-                            .unwrap_or(&js.regen_banner)
+                            .unwrap_or(&regen.banner)
                             .split(" (")
                             .next()
-                            .unwrap_or(&js.regen_banner);
+                            .unwrap_or(&regen.banner);
                         eprintln!(
                             ">>> {label}: regenerated {completed} ebuild(s) in {seconds:.1}s ({rate:.0}/s){failed_suffix}"
                         );
@@ -537,7 +544,7 @@ impl ActivitySink for HumanStdoutSink {
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner())
                                 .get(job_id)
-                                .and_then(|js| js.regen_bar.clone())
+                                .and_then(|js| js.regen.as_ref()?.bar.clone())
                         });
                         match bar.flatten() {
                             // `println` suspends the bar, prints the line
