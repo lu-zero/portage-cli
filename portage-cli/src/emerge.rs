@@ -753,8 +753,7 @@ async fn emerge_atoms_inner(
     // unmerge. `-f`/`-B` never install, so they never unmerge either — the
     // `--ask` prompt below must not promise a removal that skip_unmerge means
     // never actually happens.
-    let skip_unmerge =
-        merge_flags.fetchonly || merge_flags.fetch_all_uri || merge_flags.buildpkgonly;
+    let skip_unmerge = merge_flags.fetches_only() || merge_flags.buildpkgonly;
     if !skip_unmerge {
         crate::merge::check_merge_roots_writable(&outcome.plan, &roots, cli)?;
     }
@@ -828,7 +827,7 @@ async fn emerge_atoms_inner(
     let parent_job_id = activity_session.parent_job_id.clone();
     let live_root = roots.merge_root().to_owned();
     let session_started = crate::activity::ActivityEvent::now();
-    let mode = if merge_flags.fetchonly || merge_flags.fetch_all_uri {
+    let mode = if merge_flags.fetches_only() {
         crate::activity::ActivityMode::FetchOnly
     } else if merge_flags.buildpkgonly {
         crate::activity::ActivityMode::BuildpkgOnly
@@ -869,7 +868,7 @@ async fn emerge_atoms_inner(
             update: merge_flags.update,
             deep: depgraph_flags.0,
             keep_going: merge_flags.keep_going,
-            fetchonly: merge_flags.fetchonly || merge_flags.fetch_all_uri,
+            fetchonly: merge_flags.fetches_only(),
             buildpkgonly: merge_flags.buildpkgonly,
         },
         plan: activity_plan,

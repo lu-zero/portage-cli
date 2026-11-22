@@ -221,6 +221,11 @@ impl<'de> serde::Deserialize<'de> for YesNo {
 }
 
 impl MergeFlags {
+    /// Whether the run stops after fetching: `-f` or `-F`
+    pub fn fetches_only(&self) -> bool {
+        self.fetchonly || self.fetch_all_uri
+    }
+
     /// Whether the plan may build a package twice to open a dependency cycle: all but `--cycle-split=n`
     pub fn cycle_split(&self) -> bool {
         self.cycle_split != Some(YesNo::N)

@@ -76,7 +76,7 @@ struct BinpkgReuse {
 
 impl BinpkgReuse {
     fn kind(&self, flags: &ActionFlags) -> crate::activity::PkgKind {
-        if flags.fetchonly || flags.fetch_all_uri {
+        if flags.fetches_only() {
             crate::activity::PkgKind::FetchOnly
         } else if self.local.is_some() || self.remote.is_some() {
             crate::activity::PkgKind::Binpkg
@@ -254,6 +254,12 @@ struct ActionFlags {
     enforce_no_source: bool,
     quiet: bool,
     self_contained_bootstrap: bool,
+}
+
+impl ActionFlags {
+    fn fetches_only(&self) -> bool {
+        self.fetchonly || self.fetch_all_uri
+    }
 }
 
 impl MergeRun<'_> {
@@ -502,7 +508,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // resolution mode inside the fetch phase — see `merge_flags.fetch_all_uri`'s
     // own doc comment); every top-level "did anything actually get merged"
     // gate below treats the two identically.
-    let fetchonly = merge_flags.fetchonly || merge_flags.fetch_all_uri;
+    let fetchonly = merge_flags.fetches_only();
     let usepkg = merge_flags.usepkg;
     let getbinpkg = merge_flags.getbinpkg;
     let getbinpkgonly = merge_flags.getbinpkgonly;
@@ -1001,7 +1007,7 @@ fn record_package_outcome(
             true
         }
         Err(e) => {
-            let fail_verb = if flags.fetchonly || flags.fetch_all_uri {
+            let fail_verb = if flags.fetches_only() {
                 "fetch"
             } else {
                 "emerge"
