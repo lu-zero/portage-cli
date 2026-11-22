@@ -206,6 +206,13 @@ struct Info {
 }
 
 pub(crate) async fn run(cli: &Cli) -> Result<()> {
+    let atoms = cli.atoms();
+    if !atoms.is_empty() {
+        crate::style::warn_line!(
+            "--info has no package section yet, not reported: {}",
+            atoms.join(" ")
+        );
+    }
     let roots = cli.roots();
     let repo = crate::crossdev::main_repo(cli)?;
     let loaded = crate::settings::load(cli).await?;

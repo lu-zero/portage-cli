@@ -1965,7 +1965,7 @@ mod tests {
     }
 
     #[test]
-    fn info_firefox_is_emerge_not_info_only() {
+    fn info_keeps_its_atom_on_the_emerge_applet() {
         let cli = parse_cli(&["em", "--info", "firefox"]);
         assert!(cli.mode().info);
         assert_eq!(emerge_applet(&cli).atoms, ["firefox"]);

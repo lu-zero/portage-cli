@@ -115,9 +115,10 @@ pub(crate) fn will_build(cli: &Cli) -> bool {
             let mode = cli.mode();
             // Removals mutate the root even though they skip the merge
             // engine entirely; search/deselect never touch it.
-            mode.unmerge
-                || mode.depclean
-                || (!cli.atoms().is_empty() && !mode.search && !mode.searchdesc)
+            !mode.info
+                && (mode.unmerge
+                    || mode.depclean
+                    || (!cli.atoms().is_empty() && !mode.search && !mode.searchdesc))
         }
         Some(
             Applet::Ebuild(_)
@@ -730,6 +731,13 @@ mod hakoniwa {
 #[cfg(all(test, feature = "hakoniwa", target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn info_with_an_atom_does_not_build() {
+        assert!(!will_build(&crate::cli::parse_cli(&[
+            "em", "--info", "firefox"
+        ])));
+    }
 
     #[test]
     fn userns_knob_zero_means_unavailable() {

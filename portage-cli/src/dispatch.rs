@@ -28,9 +28,8 @@ use crate::{binpkg, maint, pkg, query, regen, search, select, setup, use_flags, 
 /// Dispatch one parsed invocation to its applet or the default emerge path.
 ///
 /// `None` is leftover when default-subcommand emerge did not fire (`em -p`
-/// with nothing else). `--info` (an `EmergeModeArgs` field) wins only for
-/// empty-atom emerge with no other mode flag; a named applet always wins, and
-/// `em --info firefox` emerges `firefox`.
+/// with nothing else). `--info` (an `EmergeModeArgs` field) is the action of
+/// any emerge run it is on, with or without atoms.
 pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     if info_wins(cli) {
         return crate::info::run(cli).await;
@@ -50,10 +49,10 @@ pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     }
 }
 
-/// `--info` with no atoms. As in emerge, it is the action and `-r`, `-W` or `-O` are options.
+/// `--info` on an emerge run. As in emerge, it never merges its atoms.
 fn info_wins(cli: &cli::Cli) -> bool {
     match &cli.applet {
-        Some(Applet::Emerge(a)) => a.mode.info && a.atoms.is_empty(),
+        Some(Applet::Emerge(a)) => a.mode.info,
         _ => false,
     }
 }
@@ -813,12 +812,15 @@ mod tests {
     }
 
     #[test]
-    fn info_loses_to_atoms() {
-        assert!(!info_wins(&parse_cli(&["em", "--info", "firefox"])));
+    fn info_wins_over_atoms() {
+        assert!(info_wins(&parse_cli(&["em", "--info", "firefox"])));
+        assert!(info_wins(&parse_cli(&[
+            "em", "emerge", "--info", "firefox"
+        ])));
     }
 
     #[test]
     fn info_loses_to_a_named_applet() {
-        assert!(!info_wins(&parse_cli(&["em", "--info", "use"])));
+        assert!(!info_wins(&parse_cli(&["em", "use", "--info", "ssl"])));
     }
 }
