@@ -101,6 +101,15 @@ fn validate(cli: &Cli) -> Result<(), ValidationError> {
     } else {
         reject_sysroot_when_root_is_host(cli)?;
     }
+    if let Some(Applet::Emerge(args)) = &cli.applet {
+        let actions = args.mode.exclusive_actions();
+        if actions.len() > 1 {
+            return Err(ValidationError::invalid(format!(
+                "multiple actions requested, choose one: {}",
+                actions.join(", ")
+            )));
+        }
+    }
     if applet_privilege(cli) == Privilege::Auto {
         privilege_from_env()?;
     }

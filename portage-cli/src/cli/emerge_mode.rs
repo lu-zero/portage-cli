@@ -136,6 +136,20 @@ impl EmergeModeArgs {
             EmergeAction::Merge
         }
     }
+
+    /// The set flags among those emerge refuses to combine; `-r` and `-W` are options there.
+    pub(super) fn exclusive_actions(&self) -> Vec<&'static str> {
+        [
+            (self.unmerge, "--unmerge"),
+            (self.depclean, "--depclean"),
+            (self.prune, "--prune"),
+            (self.search || self.searchdesc, "--search"),
+            (self.info, "--info"),
+        ]
+        .into_iter()
+        .filter_map(|(set, flag)| set.then_some(flag))
+        .collect()
+    }
 }
 
 #[cfg(test)]
@@ -163,5 +177,23 @@ mod tests {
         };
         assert_eq!(mode.action(), EmergeAction::Search { descriptions: true });
         assert_eq!(EmergeModeArgs::default().action(), EmergeAction::Merge);
+    }
+
+    #[test]
+    fn only_emerge_actions_are_exclusive() {
+        let mode = EmergeModeArgs {
+            unmerge: true,
+            depclean: true,
+            resume: true,
+            ..Default::default()
+        };
+        assert_eq!(mode.exclusive_actions(), ["--unmerge", "--depclean"]);
+        let mode = EmergeModeArgs {
+            search: true,
+            searchdesc: true,
+            deselect: true,
+            ..Default::default()
+        };
+        assert_eq!(mode.exclusive_actions(), ["--search"]);
     }
 }
