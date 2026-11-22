@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use camino::{Utf8Path, Utf8PathBuf};
 use winnow_args::{Args, Error, ErrorKind};
 
-use crate::cli::{Applet, Cli, Validated};
+use crate::cli::{Applet, Cli, UNLIMITED_JOBS, Validated};
 
 const EMERGE: &str = "EMERGE_DEFAULT_OPTS";
 const EM: &str = "EM_DEFAULT_OPTS";
@@ -379,7 +379,6 @@ fn decide(name: &str, group: Vec<String>, policy: Policy) -> Result<Decision, Er
             ))),
         },
         Ok(()) => Ok(Decision::Keep(group)),
-        // A bare `--jobs` means unlimited in Portage, which `em` cannot express.
         Err(err)
             if policy == Policy::Lenient
                 && matches!(err.kind(), ErrorKind::UnknownFlag | ErrorKind::MissingValue) =>
@@ -404,6 +403,22 @@ fn portage_spellings(words: Vec<String>) -> Vec<String> {
             out.push(format!("-{target}={value}"));
             continue;
         }
+        if let Some(flag) = optional_value_flag(&word) {
+            if words.peek().is_some_and(|next| valid_value(flag, next)) {
+                out.push(word);
+                out.extend(words.next());
+                continue;
+            }
+            let long_value = (word == "--jobs")
+                .then(|| words.next_if(|next| matches!(next.as_str(), "y" | "n")))
+                .flatten();
+            out.push(match (flag, long_value.as_deref()) {
+                ("--jobs", Some("n")) => "--jobs=n".to_owned(),
+                ("--jobs", _) => format!("--jobs={UNLIMITED_JOBS}"),
+                _ => "--load-average=n".to_owned(),
+            });
+            continue;
+        }
         let bare_long = word.len() > 2 && word.starts_with("--") && !word.contains('=');
         let value = bare_long
             .then(|| words.next_if(|next| matches!(next.as_str(), "y" | "n" | "True")))
@@ -412,6 +427,7 @@ fn portage_spellings(words: Vec<String>) -> Vec<String> {
         out.push(match word.as_str() {
             "--color=y" | "--color=True" => "--color=always".to_owned(),
             "--color=n" => "--color=never".to_owned(),
+            "--jobs=y" | "--jobs=True" => format!("--jobs={UNLIMITED_JOBS}"),
             _ => match word.strip_suffix("=True") {
                 Some(flag) => format!("{flag}=y"),
                 None => word,
@@ -419,6 +435,22 @@ fn portage_spellings(words: Vec<String>) -> Vec<String> {
         });
     }
     out
+}
+
+/// The long name of a flag whose value Portage treats as optional.
+fn optional_value_flag(word: &str) -> Option<&'static str> {
+    match word {
+        "--jobs" | "-j" => Some("--jobs"),
+        "--load-average" | "-l" => Some("--load-average"),
+        _ => None,
+    }
+}
+
+fn valid_value(flag: &str, word: &str) -> bool {
+    match flag {
+        "--jobs" => word.parse::<u32>().is_ok(),
+        _ => word.parse::<f64>().is_ok_and(|load| load >= 0.0),
+    }
 }
 
 /// Short flags Portage lets read a following `y` or `n`, in the order it assigns them.
@@ -445,6 +477,9 @@ fn boolean_value(group: &[String]) -> Option<(&str, bool)> {
         "n" => false,
         _ => return None,
     };
+    if !on && optional_value_flag(flag).is_some() {
+        return Some((flag, false));
+    }
     if flag.len() == 2 {
         return probe(&[flag.to_owned()]).ok().map(|()| (flag, on));
     }
@@ -646,8 +681,8 @@ mod tests {
         assert_eq!(class.dropped, ["--ask=n", "--usepkg=n"]);
 
         let class = classify(EMERGE, "--with-bdeps=True --jobs", Policy::Lenient).unwrap();
-        assert_eq!(class.kept, ["--with-bdeps=y"]);
-        assert_eq!(class.dropped, ["--jobs"]);
+        assert_eq!(class.kept, ["--with-bdeps=y", "--jobs=4294967295"]);
+        assert!(class.dropped.is_empty());
 
         assert!(classify(EM, "--ask=y", Policy::Strict).is_err());
     }
@@ -664,6 +699,22 @@ mod tests {
         assert_eq!(kept("-a y"), ["-a"]);
         assert_eq!(kept("-pa n"), ["-pa"]);
         assert_eq!(kept("-a --ask=n -a"), ["-a"]);
+    }
+
+    #[test]
+    fn optional_values_follow_portage() {
+        let kept = |raw| classify(EMERGE, raw, Policy::Lenient).unwrap().kept;
+        let unlimited = format!("--jobs={UNLIMITED_JOBS}");
+        assert_eq!(kept("-j"), [unlimited.as_str()]);
+        assert_eq!(kept("--jobs y"), [unlimited.as_str()]);
+        assert_eq!(kept("-j4 --jobs"), ["-j4", unlimited.as_str()]);
+        assert_eq!(kept("-j n"), [unlimited.as_str()]);
+        assert_eq!(kept("-j 4"), ["-j", "4"]);
+        assert!(kept("--jobs=4 --jobs n").is_empty());
+        assert!(kept("-j4 --jobs=n").is_empty());
+        assert!(kept("--load-average=8 -l").is_empty());
+        assert_eq!(kept("-vl 8 --load-average"), ["-v"]);
+        assert_eq!(kept("-l 8"), ["-l", "8"]);
     }
 
     #[test]

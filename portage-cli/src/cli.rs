@@ -22,6 +22,7 @@ pub use context::{
 pub use depgraph_flags::DepgraphFlags;
 pub use display_flags::DisplayArgs;
 pub use emerge_mode::{EmergeAction, EmergeModeArgs};
+pub(crate) use merge_flags::UNLIMITED_JOBS;
 pub use merge_flags::{MergeFlags, YesNo};
 pub use topology::{RootArg, RootTopology, RootedTopology, Topology};
 

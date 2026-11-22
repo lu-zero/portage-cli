@@ -347,9 +347,19 @@ fn package_estimates(store: &DurationStore, pkgs: &[EtaPkg], k: usize) -> Packag
     (durations, known, unknown, per_pkg, serial)
 }
 
+/// An unlimited `--jobs` runs at most one build per package.
+fn bounded_jobs(jobs: u32, pkgs: usize) -> u32 {
+    if jobs == crate::cli::UNLIMITED_JOBS {
+        u32::try_from(pkgs).unwrap_or(jobs).max(1)
+    } else {
+        jobs
+    }
+}
+
 /// Median of last `k` successes per cpn; unknown use global median if any
 /// Wall time ≈ serial / max(jobs, 1) (no build-order constraints).
 pub fn estimate_remaining(store: &DurationStore, pkgs: &[EtaPkg], jobs: u32, k: usize) -> Eta {
+    let jobs = bounded_jobs(jobs, pkgs.len());
     let (durations, known, unknown, per_pkg, serial) = package_estimates(store, pkgs, k);
     let j = jobs.max(1) as f64;
     let _ = durations;
@@ -376,6 +386,7 @@ pub fn estimate_remaining_with_blockers(
     jobs: u32,
     k: usize,
 ) -> Eta {
+    let jobs = bounded_jobs(jobs, pkgs.len());
     let (durations, known, unknown, per_pkg, serial) = package_estimates(store, pkgs, k);
     let n = pkgs.len();
     let wall = if n == 0 {

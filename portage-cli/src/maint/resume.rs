@@ -542,7 +542,11 @@ fn format_slot_report(root: &Utf8Path, name: &str, s: &ResumeState) -> String {
         extras.push("nodeps".to_string());
     }
     if let Some(j) = s.merge_flags.jobs {
-        extras.push(format!("jobs={j}"));
+        extras.push(if j == crate::cli::UNLIMITED_JOBS {
+            "jobs=unlimited".to_string()
+        } else {
+            format!("jobs={j}")
+        });
     }
     if !s.merge_flags.exclude.is_empty() {
         extras.push(format!("exclude={}", s.merge_flags.exclude.len()));

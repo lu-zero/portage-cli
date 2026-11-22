@@ -220,6 +220,9 @@ impl<'de> serde::Deserialize<'de> for YesNo {
     }
 }
 
+/// `--jobs` value for Portage's bare `--jobs`: no limit on concurrent builds.
+pub(crate) const UNLIMITED_JOBS: u32 = u32::MAX;
+
 impl MergeFlags {
     /// Whether the run stops after fetching: `-f` or `-F`
     pub fn fetches_only(&self) -> bool {
