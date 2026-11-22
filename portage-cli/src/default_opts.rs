@@ -292,16 +292,62 @@ fn classify(name: &str, raw: &str, policy: Policy) -> Result<Classified, Error> 
             (vec![words[i].clone()], i + 1)
         };
         match decide(name, group, policy)? {
-            Decision::Keep(group) => kept.extend(group),
+            Decision::Keep(group) => kept.push(group),
             Decision::Drop(group) => dropped.extend(group),
             Decision::Cancel { flag, group } => {
-                kept.retain(|word| *word != flag);
+                kept = kept
+                    .into_iter()
+                    .filter_map(|earlier| without_flag(earlier, &flag))
+                    .collect();
                 dropped.extend(group);
             }
         }
         i = next;
     }
-    Ok(Classified { kept, dropped })
+    Ok(Classified {
+        kept: kept.into_iter().flatten().collect(),
+        dropped,
+    })
+}
+
+/// `group` with `flag` removed, in any spelling and from a short cluster; `None` if nothing is left.
+fn without_flag(group: Vec<String>, flag: &str) -> Option<Vec<String>> {
+    let word = &group[0];
+    let Some(letters) = word.strip_prefix('-').filter(|l| !l.starts_with('-')) else {
+        let name = word.split('=').next().unwrap_or(word);
+        return (!same_flag(name, flag)).then_some(group);
+    };
+    let mut rest = String::new();
+    for (at, letter) in letters.char_indices() {
+        let short = format!("-{letter}");
+        let switch = probe(std::slice::from_ref(&short)).is_ok();
+        if same_flag(&short, flag) {
+            if !switch {
+                // The remainder, or the next word, was this flag's value.
+                return (!rest.is_empty()).then(|| vec![format!("-{rest}")]);
+            }
+        } else if switch {
+            rest.push(letter);
+        } else {
+            rest.push_str(&letters[at..]);
+            break;
+        }
+    }
+    (!rest.is_empty()).then(|| {
+        let mut out = vec![format!("-{rest}")];
+        out.extend(group[1..].iter().cloned());
+        out
+    })
+}
+
+/// Whether two spellings set the same option: they parse identically given the same value.
+fn same_flag(a: &str, b: &str) -> bool {
+    let parsed = |flag: &str| {
+        Cli::parse_from(["emerge", flag, "1"])
+            .ok()
+            .map(|cli| format!("{cli:?}"))
+    };
+    a == b || parsed(a).is_some_and(|cli| Some(cli) == parsed(b))
 }
 
 fn decide(name: &str, group: Vec<String>, policy: Policy) -> Result<Decision, Error> {
@@ -349,6 +395,15 @@ fn portage_spellings(words: Vec<String>) -> Vec<String> {
     let mut out = Vec::with_capacity(words.len());
     let mut words = words.into_iter().peekable();
     while let Some(word) = words.next() {
+        if let Some((others, target)) = short_boolean(&word)
+            && let Some(value) = words.next_if(|next| matches!(next.as_str(), "y" | "n"))
+        {
+            if !others.is_empty() {
+                out.push(format!("-{others}"));
+            }
+            out.push(format!("-{target}={value}"));
+            continue;
+        }
         let bare_long = word.len() > 2 && word.starts_with("--") && !word.contains('=');
         let value = bare_long
             .then(|| words.next_if(|next| matches!(next.as_str(), "y" | "n" | "True")))
@@ -366,6 +421,19 @@ fn portage_spellings(words: Vec<String>) -> Vec<String> {
     out
 }
 
+/// Short flags Portage lets read a following `y` or `n`, in the order it assigns them.
+const SHORT_BOOLEANS: &str = "aAbgGkKqvwW";
+
+/// Splits a cluster of [`SHORT_BOOLEANS`] into the other letters and the one that reads the value.
+fn short_boolean(word: &str) -> Option<(String, char)> {
+    let letters = word.strip_prefix('-').filter(|l| !l.starts_with('-'))?;
+    if !letters.chars().all(|c| SHORT_BOOLEANS.contains(c)) {
+        return None;
+    }
+    let target = SHORT_BOOLEANS.chars().rfind(|c| letters.contains(*c))?;
+    Some((letters.chars().filter(|c| *c != target).collect(), target))
+}
+
 /// `(--flag, on)` for `--flag=y|n` on a flag `em` parses as a plain switch.
 fn boolean_value(group: &[String]) -> Option<(&str, bool)> {
     let [word] = group else {
@@ -377,6 +445,9 @@ fn boolean_value(group: &[String]) -> Option<(&str, bool)> {
         "n" => false,
         _ => return None,
     };
+    if flag.len() == 2 {
+        return probe(&[flag.to_owned()]).ok().map(|()| (flag, on));
+    }
     let err = probe(group).err()?;
     (err.kind() == ErrorKind::UnexpectedValue).then_some((flag, on))
 }
@@ -579,6 +650,20 @@ mod tests {
         assert_eq!(class.dropped, ["--jobs"]);
 
         assert!(classify(EM, "--ask=y", Policy::Strict).is_err());
+    }
+
+    #[test]
+    fn a_cancel_reaches_short_flags_as_portage_does() {
+        let kept = |raw| classify(EMERGE, raw, Policy::Lenient).unwrap().kept;
+        assert!(kept("-a --ask=n").is_empty());
+        assert!(kept("-a n").is_empty());
+        assert!(kept("--verbose -v n").is_empty());
+        assert_eq!(kept("-av --ask=n"), ["-v"]);
+        assert_eq!(kept("-av n"), ["-a"]);
+        assert_eq!(kept("-va n"), ["-a"]);
+        assert_eq!(kept("-a y"), ["-a"]);
+        assert_eq!(kept("-pa n"), ["-pa"]);
+        assert_eq!(kept("-a --ask=n -a"), ["-a"]);
     }
 
     #[test]
