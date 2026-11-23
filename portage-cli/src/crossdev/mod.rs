@@ -137,7 +137,18 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
             if target.llvm {
                 target.llvm_slot = llvm_slot(&main_repo(globals)?);
             }
-            let spec = spec::SysrootSpec::builtin(&target, &extras);
+            let mut all_extras = extras.clone();
+            if args.setup {
+                let base = spec::SysrootSpec::builtin(&target, &[]).packages();
+                let mut recorded: Vec<Cpn> = alias_packages(&target, globals)
+                    .into_iter()
+                    .flatten()
+                    .filter(|cpn| !base.contains(cpn) && !all_extras.contains(cpn))
+                    .collect();
+                recorded.sort_by_key(ToString::to_string);
+                all_extras.extend(recorded);
+            }
+            let spec = spec::SysrootSpec::builtin(&target, &all_extras);
             (target, spec)
         }
     };
@@ -194,6 +205,16 @@ fn ex_pkg_atoms(args: &CrossdevArgs) -> Result<Vec<Cpn>> {
     Ok(atoms)
 }
 
+/// The real packages the target's on-disk alias declares, if it has been initialized
+fn alias_packages(target: &CrossTarget, globals: &Cli) -> Option<std::collections::HashSet<Cpn>> {
+    let dir = setup_root(globals).join("etc/portage/repos.conf");
+    let conf = ReposConf::load_from(std::slice::from_ref(&dir)).ok()?;
+    match &conf.find(&overlay_name(target))?.location {
+        portage_repo::Location::Alias { aliases, .. } => aliases.get(&target.category()).cloned(),
+        _ => None,
+    }
+}
+
 /// `em crossdev <tuple> --setup`: bootstrap the cross toolchain into the prefix
 /// (`/usr/<chost>`)
 ///
@@ -218,10 +239,17 @@ async fn setup(
     // native and install into host paths (collisions with real packages).
     // Real crossdev has the same limit — reject early.
     reject_same_arch_target(&target.tuple, &host_chost())?;
+    // `FillGapsOnly` cannot add an extra to an existing alias, so its step could never resolve.
+    if let Some(known) = alias_packages(target, globals)
+        && let Some(cpn) = spec.extras().into_iter().find(|c| !known.contains(c))
+    {
+        bail!(
+            "{cpn} is not part of the initialized target {}: run --init-target --ex-pkg {cpn} first",
+            target.tuple
+        );
+    }
     // `init_target` is `-p`/`-a`-aware. `FillGapsOnly`: implied config for
-    // `--setup` only creates missing files so hand edits survive. Adding
-    // `--ex-pkg` to an already-init'd target needs an explicit `--init-target`
-    // (see docs/user/crossdev.md).
+    // `--setup` only creates missing files so hand edits survive.
     // A declined `-a` config write must stop here, not fall through to
     // building the toolchain against config that was never actually
     // written — `Outcome::applied()` alone can't tell that apart from a
@@ -2150,7 +2178,7 @@ fn host_cross_config(
     let base = globals.base_roots();
     let category = target.category();
     let pins = spec.pins();
-    let repo = if pins.is_empty() {
+    let repo = if pins.is_empty() && spec.extra.is_empty() {
         None
     } else {
         Some(main_repo(globals)?)
@@ -2182,10 +2210,11 @@ fn host_cross_config(
         keywords.push((atom, vec![AcceptToken::Any]));
     }
     // `--ex-pkg`/`--ex-gdb` extras: always the host-ABI branch, like crossdev's own extras.
-    for cpn in spec.extras() {
-        let (real_cat, pkg) = (cpn.category.as_str(), cpn.package.as_str());
-        let atom = host_arch_keyword(&base, gentoo, &category, pkg, real_cat, pkg)?;
-        keywords.push((atom, vec![AcceptToken::Any]));
+    if let Some(repo) = &repo {
+        for dep in &spec.extra {
+            let atom = extra_keyword(repo, &base, &category, dep)?;
+            keywords.push((atom, vec![AcceptToken::Any]));
+        }
     }
     let (package_mask, package_unmask) = if derived.is_some() {
         let cross = |pin: &Dep| Dep {
@@ -2211,18 +2240,57 @@ fn host_cross_config(
 /// The cross package's keyword atom under a spec pin: every version up to the release branch
 /// of the newest keyworded one the pin allows, so a live ebuild the pin also matches stays out
 fn pinned_keyword(repo: &Repository, category: &str, pin: &Dep) -> Result<Dep> {
-    let (cat, pkg) = (pin.cpn.category.as_str(), pin.cpn.package.as_str());
-    let newest = ebuild_versions(repo.path(), cat, pkg)
+    let pkg = pin.cpn.package.as_str();
+    let newest = newest_keyworded(repo, pin)
+        .with_context(|| format!("no keyworded version of {} matches {pin}", pin.cpn))?;
+    Ok(versioned(
+        Cpn::new(category, pkg),
+        Operator::Less,
+        branch_bound(&newest),
+    ))
+}
+
+/// The newest version matching `dep` that some arch keywords
+fn newest_keyworded(repo: &Repository, dep: &Dep) -> Option<Version> {
+    let (cat, pkg) = (dep.cpn.category.as_str(), dep.cpn.package.as_str());
+    ebuild_versions(repo.path(), cat, pkg)
         .into_iter()
         .filter(|version| {
-            let cpv = Cpv::new(pin.cpn, version.clone());
+            let cpv = Cpv::new(dep.cpn, version.clone());
             repo.cache_entry(&cpv).ok().flatten().is_some_and(|entry| {
                 !entry.metadata.keywords.is_empty()
-                    && pin.matches_cpv(&cpv, Some(&entry.metadata.slot))
+                    && dep.matches_cpv(&cpv, Some(&entry.metadata.slot))
             })
         })
         .max()
-        .with_context(|| format!("no keyworded version of {} matches {pin}", pin.cpn))?;
+}
+
+/// The keyword atom of an extra package: the host's installed version for a bare atom, else up
+/// to the newest keyworded release, so an unreleased ebuild never wins over one
+///
+/// A package with no keyworded version at all (`sys-devel/rust-std`) takes its newest ebuild.
+fn extra_keyword(
+    repo: &Repository,
+    base: &portage_resolve::Roots,
+    category: &str,
+    dep: &Dep,
+) -> Result<Dep> {
+    let (cat, pkg) = (dep.cpn.category.as_str(), dep.cpn.package.as_str());
+    let bare = *dep == Dep::new(dep.cpn);
+    if bare && !host_installed_versions(base, cat, pkg).is_empty() {
+        return host_arch_keyword(base, repo.path(), category, pkg, cat, pkg);
+    }
+    let newest = newest_keyworded(repo, dep).or_else(|| {
+        ebuild_versions(repo.path(), cat, pkg)
+            .into_iter()
+            .filter(|version| {
+                let cpv = Cpv::new(dep.cpn, version.clone());
+                let slot = repo.cache_entry(&cpv).ok().flatten();
+                dep.matches_cpv(&cpv, slot.as_ref().map(|e| &e.metadata.slot))
+            })
+            .max()
+    });
+    let newest = newest.with_context(|| format!("no version of {} matches {dep}", dep.cpn))?;
     Ok(versioned(
         Cpn::new(category, pkg),
         Operator::Less,
@@ -2889,6 +2957,37 @@ mod tests {
             .in_memory_cache()
             .open(gentoo)
             .unwrap()
+    }
+
+    // An unreleased, unkeyworded slot must not beat the newest keyworded one.
+    #[test]
+    fn extra_keyword_stops_at_the_newest_keyworded_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let repo = clang_repo(
+            &root.join("gentoo"),
+            &[("22.1.0", "arm64"), ("23.1.4", "~arm64"), ("24.0.0", "")],
+        );
+        let roots = portage_resolve::Roots::for_test(root.as_str());
+        let keyword = |atom: &str| {
+            extra_keyword(&repo, &roots, "cross-t", &Dep::parse(atom).unwrap())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(keyword("llvm-core/clang"), "<cross-t/clang-23.1.9999");
+        assert_eq!(keyword("<llvm-core/clang-23"), "<cross-t/clang-22.1.9999");
+    }
+
+    // A package nothing keywords still resolves, to its newest ebuild.
+    #[test]
+    fn extra_keyword_takes_the_newest_ebuild_when_nothing_is_keyworded() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let repo = clang_repo(&root.join("gentoo"), &[("1.94.0", ""), ("1.95.0", "")]);
+        let roots = portage_resolve::Roots::for_test(root.as_str());
+        let dep = Dep::parse("llvm-core/clang").unwrap();
+        let atom = extra_keyword(&repo, &roots, "cross-t", &dep).unwrap();
+        assert_eq!(atom.to_string(), "<cross-t/clang-1.95.9999");
     }
 
     // The newest release wins whatever the host has installed; live ebuilds carry no KEYWORDS.

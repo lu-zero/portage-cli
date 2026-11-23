@@ -285,9 +285,12 @@ more host-arch tools onto an established target — crossdev's own "Extra
 Fun". These are **per-invocation**, not persisted: a later `--init-target`
 that omits the flag drops the extra again, exactly like real crossdev.
 
-`--init-target` writes the extra into the target's spec and exits; `--setup`
-then builds it. Both steps are needed — `--setup` on an already initialized
-target only fills gaps and does not add a new extra.
+`--init-target` records the extra and exits; `--setup` builds what is recorded,
+after the toolchain. `--setup --ex-pkg X` also works on a target not initialized
+yet. On an initialized target it refuses an extra not recorded there: run
+`--init-target --ex-pkg X` first. Without a version, an extra resolves to the
+host's installed version or the newest keyworded release; a spec's `extra` may
+bound it, e.g. `"<sys-devel/clang-crossdev-wrappers-24"`.
 
 ```
 # Build a cross-gdb (dev-debug/gdb) alongside the toolchain:

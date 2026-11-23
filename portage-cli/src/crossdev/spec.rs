@@ -301,7 +301,7 @@ impl SysrootSpec {
         }
     }
 
-    /// The toolchain packages the spec constrains to some versions; the clang compiler's slot
+    /// The toolchain and extra packages the spec constrains to some versions; the clang compiler's slot
     /// is the LLVM binding instead (see [`Self::llvm_slot`])
     pub fn pins(&self) -> Vec<&Dep> {
         let Toolchains { gcc, clang } = &self.toolchain;
@@ -320,6 +320,7 @@ impl SysrootSpec {
                 &t.cxx,
             ]);
         }
+        roles.extend(&self.extra);
         roles.retain(|dep| **dep != Dep::new(dep.cpn));
         roles
     }

@@ -454,6 +454,15 @@ pub fn toolchain_plan(
             into_sysroot: true,
         });
     }
+    for dep in &spec.extra {
+        steps.push(StageStep {
+            label: format!("extra {}", dep.cpn.package),
+            atoms: vec![dep_atom(dep)],
+            use_override: vec![],
+            nodeps: false,
+            into_sysroot: false,
+        });
+    }
     StagePlan { steps }
 }
 
@@ -764,6 +773,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn extras_are_built_after_the_toolchain() {
+        let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
+        let extra = portage_atom::Cpn::new("dev-debug", "gdb");
+        let spec = SysrootSpec::builtin(&target, &[extra]);
+        let plan = toolchain_plan(&BootstrapKind::Cross(target), &spec, false, false);
+        let last = plan.steps.last().unwrap();
+        assert_eq!(last.label, "extra gdb");
+        assert_eq!(last.atoms, ["cross-riscv64-unknown-linux-gnu/gdb"]);
+        assert!(!last.into_sysroot);
     }
 
     #[test]
