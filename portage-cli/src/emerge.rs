@@ -1342,26 +1342,13 @@ pub(crate) async fn run_unmerge_batch(
     execute_unmerge_batch(cli, vdb, packages, exclude, verb, gerund).await
 }
 
-/// Disk-mutating half of [`run_unmerge_batch`]: profile-env'd shell, one
-/// preserve-libs graph for the batch, per-package removal, `env-update`.
-///
-/// No `--pretend`/`--ask` — callers that already confirmed (blocker unmerge
-/// during a real merge) use this directly.
-async fn execute_unmerge_batch(
+/// A shell with the profile and settings loaded, for phases of installed packages.
+pub(crate) async fn installed_phase_shell(
     cli: &cli::Cli,
-    vdb: &portage_vdb::Vdb,
-    packages: &[portage_vdb::InstalledPackage],
-    exclude: &std::collections::HashSet<portage_atom::Cpv>,
-    verb: &str,
-    gerund: &str,
-) -> Result<()> {
+    doing: &str,
+) -> Result<portage_repo::EbuildShell> {
     let roots = cli.roots();
-    let root = roots.merge_root().to_owned();
     let broot = cli.host_roots();
-    // Scratch trees for pkg_prerm/postrm land where builds would
-    // (`emerge_atoms_inner`'s relocation rule).
-    let work_base = ebuild::default_work_base(roots.relocate_root());
-
     let repo = crate::crossdev::main_repo(cli)?;
     let mut shell = repo.shell().await.context("creating shell")?;
     let ld_library_path =
@@ -1378,7 +1365,7 @@ async fn execute_unmerge_batch(
         crate::style::warn_line!(
             "no usable profile at {}/etc/portage/make.profile — {} without profile defaults",
             roots.config().unwrap_or(Utf8Path::new("/")),
-            gerund.to_lowercase()
+            doing.to_lowercase()
         );
     }
     let settings = crate::settings::load(cli).await?;
@@ -1388,6 +1375,29 @@ async fn execute_unmerge_batch(
     crate::settings::export_provided_features(&mut shell, settings.as_deref()).await?;
     // Each removal restores this, so one package's functions do not run for the next.
     shell.save_profile_session();
+
+    Ok(shell)
+}
+
+/// Disk-mutating half of [`run_unmerge_batch`]: profile-env'd shell, one
+/// preserve-libs graph for the batch, per-package removal, `env-update`.
+///
+/// No `--pretend`/`--ask` — callers that already confirmed (blocker unmerge
+/// during a real merge) use this directly.
+async fn execute_unmerge_batch(
+    cli: &cli::Cli,
+    vdb: &portage_vdb::Vdb,
+    packages: &[portage_vdb::InstalledPackage],
+    exclude: &std::collections::HashSet<portage_atom::Cpv>,
+    verb: &str,
+    gerund: &str,
+) -> Result<()> {
+    let roots = cli.roots();
+    let root = roots.merge_root().to_owned();
+    // Scratch trees for pkg_prerm/postrm land where builds would
+    // (`emerge_atoms_inner`'s relocation rule).
+    let work_base = ebuild::default_work_base(roots.relocate_root());
+    let mut shell = installed_phase_shell(cli, gerund).await?;
 
     // One shared graph + registry for the whole batch, not rebuilt per
     // package — see `preserve_libs::build_link_graph`'s doc.
