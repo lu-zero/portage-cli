@@ -19,6 +19,8 @@ user configuration directory, so a spec converts in two places:
 | packages another toolchain builds (`system.exceptions`) | `<sysroot>/etc/portage/package.env/cross-sysroot` + `env/<toolchain>-toolchain.conf` | Portage reads `package.env` only from user config |
 | `package-use` | the derived profile's `package.use` | a profile file |
 | `cflags` | `<sysroot>/etc/portage/make.conf` today; the profile's `make.defaults` is the natural place | |
+| `[make-conf]` | appended to `<sysroot>/etc/portage/make.conf` | user-level settings, above the profile |
+| `extra` | the cross alias, a final `--setup` step each, and pins as for a toolchain package | built on the host like crossdev's `--ex-pkg` |
 
 Built-in tuples get neither: their `make.profile` links the `::gentoo` profile directly, as before specs.
 

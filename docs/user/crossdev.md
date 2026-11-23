@@ -87,10 +87,14 @@ containing `/` or ending in `.toml` is read as a file):
 ```
 $ em crossdev --target riscv64-unknown-linux-gnu --print-spec > k3.toml
 $ $EDITOR k3.toml          # e.g. cflags = "-O3 -march=rva23u64 -pipe"
-$ em crossdev --target ./k3.toml --init-target
+$ em crossdev --target ./k3.toml --setup
 ```
 
-With a spec file, `--init-target` gives the sysroot its own profile: an overlay at
+`--setup` with a spec file applies the whole spec, creating the target if needed and replacing
+what it generated before, so no separate `--init-target` is needed. Given just the tuple, `--setup`
+reads the saved spec and only fills gaps, so hand edits survive.
+
+With a spec file, `--init-target` and `--setup` give the sysroot its own profile: an overlay at
 `<sysroot>/var/db/repos/cross-sysroot`, listed in the sysroot's `repos.conf`, whose
 `profiles/sysroot` inherits the spec's `profile` from `::gentoo` (`gentoo:<profile>`, the
 `portage-2` profile format) and holds the spec as `cross-sysroot.toml`. `make.profile` links
@@ -108,6 +112,8 @@ clang the target's compiler and keeps gcc for the listed packages, and `--setup`
 toolchain and the libc first, then the clang wrappers and LLVM's runtimes. `profile` may list several
 parents (e.g. the arch profile plus `features/llvm`), `[package-use]` gives packages the flags the
 toolchain needs, and `[toolchain.<name>.env]` overrides the variables that select a toolchain.
+`[make-conf]` adds variables to the sysroot's `make.conf` (`FEATURES`, `ACCEPT_KEYWORDS`, …), after the
+generated ones so it wins. `ARCH`, `CBUILD`, `CFLAGS`, `CHOST` and `ROOT` are refused there.
 
 A spec is refused when read if it asks for other toolchain packages than the tuple's, has gcc and
 clang but not gcc building the libc, names an undefined toolchain, or pins with a blocker, USE

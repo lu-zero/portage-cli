@@ -45,7 +45,13 @@ pub struct SysrootSpec {
         with = "package_use_table"
     )]
     pub package_use: Vec<(Dep, Vec<String>)>,
+    /// Further `make.conf` variables for the sysroot (`FEATURES`, `ACCEPT_KEYWORDS`, …)
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub make_conf: BTreeMap<String, String>,
 }
+
+/// `make.conf` variables a spec sets through its own fields or the tuple
+const RESERVED_MAKE_CONF: &[&str] = &["ARCH", "CBUILD", "CFLAGS", "CHOST", "ROOT"];
 
 /// The toolchains a spec defines; only those some `built-by` names get built
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +176,7 @@ impl SysrootSpec {
                 exceptions: BTreeMap::new(),
             },
             package_use: Vec::new(),
+            make_conf: BTreeMap::new(),
         };
         if let Some(slot) = target.llvm_slot {
             spec.bind_llvm_slot(slot);
@@ -220,6 +227,7 @@ impl SysrootSpec {
                 exceptions: BTreeMap::new(),
             },
             package_use: Vec::new(),
+            make_conf: BTreeMap::new(),
         }
     }
 
@@ -395,6 +403,19 @@ impl SysrootSpec {
             ensure!(
                 slot.parse::<u64>().is_ok(),
                 "LLVM slot {slot} is not a major version"
+            );
+        }
+        for (key, value) in &self.make_conf {
+            let valid_name = key.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            ensure!(valid_name, "make-conf: {key:?} is not a variable name");
+            ensure!(
+                !RESERVED_MAKE_CONF.contains(&key.as_str()),
+                "make-conf: {key} is set by the spec's tuple or cflags"
+            );
+            ensure!(
+                !value.contains(['"', '\n']),
+                "make-conf: the value of {key} has a quote or a newline"
             );
         }
         Ok(())
@@ -887,6 +908,25 @@ exceptions.gcc = ["sys-libs/glibc", "sys-devel/gcc"]
                 .pins()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn make_conf_round_trips_and_refuses_what_the_spec_owns() {
+        let gnu = builtin("riscv64-unknown-linux-gnu", false)
+            .to_toml()
+            .unwrap();
+        let with = |table: &str| format!("{gnu}\n[make-conf]\n{table}\n");
+        let spec = load_text(&with("FEATURES = \"parallel-install\"")).unwrap();
+        assert_eq!(spec.make_conf["FEATURES"], "parallel-install");
+        assert_eq!(load_text(&spec.to_toml().unwrap()).unwrap(), spec);
+        for (table, why) in [
+            ("CFLAGS = \"-O2\"", "set by the spec"),
+            ("\"A-B\" = \"x\"", "not a variable name"),
+            ("X = 'a\"b'", "quote or a newline"),
+        ] {
+            let err = load_text(&with(table)).unwrap_err();
+            assert!(format!("{err:#}").contains(why), "{table}: {err:#}");
+        }
     }
 
     #[test]

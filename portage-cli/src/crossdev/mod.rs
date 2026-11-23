@@ -222,9 +222,9 @@ fn alias_packages(target: &CrossTarget, globals: &Cli) -> Option<std::collection
 /// the compiler is not usable until the libc step lands, so toolchain and stage1 libc are
 /// one bootstrap.
 ///
-/// Lays down the FS config via `init_target`'s `FillGapsOnly` policy — only
-/// creates what's missing, so a hand edit between an earlier
-/// `--init-target` and this `--setup` survives — then runs each step of the
+/// Lays down the FS config through `init_target`: a spec file given on this command is
+/// applied in full, otherwise only what's missing is created, so a hand edit survives.
+/// Then runs each step of the
 /// ordered [`StagePlan`](stages::StagePlan) through the shared merge path
 /// ([`crate::emerge_atoms`]) — per-step `USE` override + `--nodeps`. With
 /// `-p` each step prints its plan instead of building.
@@ -239,8 +239,15 @@ async fn setup(
     // native and install into host paths (collisions with real packages).
     // Real crossdev has the same limit — reject early.
     reject_same_arch_target(&target.tuple, &host_chost())?;
+    // A spec file given here is the target's whole configuration; otherwise hand edits survive.
+    let policy = if globals.target_spec().is_some() {
+        config_plan::RefreshPolicy::Sync
+    } else {
+        config_plan::RefreshPolicy::FillGapsOnly
+    };
     // `FillGapsOnly` cannot add an extra to an existing alias, so its step could never resolve.
-    if let Some(known) = alias_packages(target, globals)
+    if policy == config_plan::RefreshPolicy::FillGapsOnly
+        && let Some(known) = alias_packages(target, globals)
         && let Some(cpn) = spec.extras().into_iter().find(|c| !known.contains(c))
     {
         bail!(
@@ -248,21 +255,12 @@ async fn setup(
             target.tuple
         );
     }
-    // `init_target` is `-p`/`-a`-aware. `FillGapsOnly`: implied config for
-    // `--setup` only creates missing files so hand edits survive.
+    // `init_target` is `-p`/`-a`-aware.
     // A declined `-a` config write must stop here, not fall through to
     // building the toolchain against config that was never actually
     // written — `Outcome::applied()` alone can't tell that apart from a
     // `-p` preview (both skip the "ready" banner), so check explicitly.
-    let init_outcome = init_target(
-        target,
-        globals,
-        args,
-        spec,
-        derived,
-        config_plan::RefreshPolicy::FillGapsOnly,
-    )
-    .await?;
+    let init_outcome = init_target(target, globals, args, spec, derived, policy).await?;
     if matches!(init_outcome, config_plan::Outcome::Declined) {
         return Ok(());
     }
@@ -362,9 +360,9 @@ async fn setup(
                     .collect(),
                 layer: derived.map(|d| d.layer.clone()),
             }),
-            make_conf: Some(make_conf_body(
+            make_conf: Some(sysroot_make_conf(
                 target,
-                &spec.cflags,
+                spec,
                 globals.outer_roots().merge_root(),
             )),
             ..Default::default()
@@ -1582,7 +1580,7 @@ fn sysroot_config_entries(
     // of bug just fixed for the alias-packages entry.
     entries.push(config_plan::ConfigEntry::File {
         path: portage.join("make.conf"),
-        desired: make_conf_body(target, &spec.cflags, outer_root),
+        desired: sysroot_make_conf(target, spec, outer_root),
     });
 
     // Link make.profile DIRECTLY (absolute) to the target-arch profile — eselect
@@ -1865,6 +1863,16 @@ fn sysroot_repos_conf_entries(
 /// *only* one they read, so there is no other source for build parallelism.
 /// 128-core host because this was missing.
 ///
+/// The sysroot's `make.conf`: the generated body, then the spec's `[make-conf]`, which wins
+fn sysroot_make_conf(
+    target: &CrossTarget,
+    spec: &spec::SysrootSpec,
+    outer_root: &Utf8Path,
+) -> String {
+    let body = make_conf_body(target, &spec.cflags, outer_root);
+    format!("{body}{}", env_lines(&spec.make_conf))
+}
+
 /// Deliberately no static `PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_LIBDIR` here
 /// (dropped 2026-08-26, was a net-libs/libtirpc host-`.pc`-leak fix): being
 /// ambient for the whole phase, it leaked into `econf_build`'s native
