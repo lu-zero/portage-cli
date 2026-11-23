@@ -1,6 +1,6 @@
 # `em --info <atom>`: the package section
 
-Status: 🟡 steps 1 and 2 landed 2026-11-23; `pkg_info`, uninstalled packages and suggestions open.
+Status: 🟡 steps 1 to 3 landed 2026-11-23; uninstalled packages and suggestions open.
 
 ## Why
 
@@ -50,7 +50,9 @@ LDFLAGS="..."
 1. ✅ Validate atoms and sets, and fail before the report.
 2. ✅ Print `System Settings` and `Package Settings` for installed matches, in text and `--json`.
    All 785 installed packages without `pkg_info` matched `emerge --info` on the development host.
-3. 🔴 Run `pkg_info`. This executes ebuild code from `--info`, so settle its privileges and sandbox
-   first. One of 786 packages defines it on the development host.
-4. 🔴 Report uninstalled ebuilds and binary packages.
+3. ✅ Run `pkg_info` of installed packages, stricter than Portage, which leaves the phase on the
+   host network and as root: a container with no network, read-only trees and a private `/tmp`.
+   Root drops to `portage` first. Without a container the phase is skipped with a warning.
+4. 🔴 Report uninstalled ebuilds and binary packages. Never run `pkg_info` from a binary package
+   without an explicit opt-in.
 5. 🔴 Add similar-name suggestions to the no-match error.

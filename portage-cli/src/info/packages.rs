@@ -32,6 +32,8 @@ pub(super) struct PackageInfo {
     differs: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     unset: Vec<String>,
+    #[serde(skip)]
+    defines_info: bool,
 }
 
 /// `USE` or one `USE_EXPAND` variable, with `-off` and `(forced)` tokens.
@@ -291,7 +293,34 @@ fn describe_one(
         use_flags: use_groups(&enabled, &iuse, &pinned, layout),
         differs,
         unset,
+        defines_info: defines_info(pkg),
     }
+}
+
+fn defines_info(pkg: &InstalledPackage) -> bool {
+    std::fs::read_to_string(pkg.path().join("DEFINED_PHASES"))
+        .is_ok_and(|phases| phases.split_whitespace().any(|phase| phase == "info"))
+}
+
+/// Runs the phase of the installed `cpv`, inside the confinement set up by the parent.
+pub(super) async fn run_phase(cli: &Cli, cpv: &str) -> Result<()> {
+    let vdb = crate::vdb::open_cli_vdb(cli)?;
+    let Some(pkg) = vdb
+        .packages()
+        .into_iter()
+        .find(|pkg| pkg.cpv().to_string() == cpv)
+    else {
+        bail!("{cpv} is not installed");
+    };
+    let mut shell = crate::emerge::installed_phase_shell(cli, "running pkg_info").await?;
+    let roots = cli.roots();
+    crate::ebuild::run_installed_info(
+        &mut shell,
+        &pkg,
+        camino::Utf8Path::new("/tmp/em-pkg-info"),
+        roots.merge_root(),
+    )
+    .await
 }
 
 /// The package's flags under the profile's `use.force` and `use.mask`.
@@ -454,7 +483,7 @@ fn closes(text: &str, quote: char) -> bool {
 }
 
 /// Writes the `Package Settings` section; nothing when no package matched.
-pub(super) fn print(out: &mut impl Write, packages: &[PackageInfo]) -> Result<()> {
+pub(super) fn print(cli: &Cli, out: &mut impl Write, packages: &[PackageInfo]) -> Result<()> {
     if packages.is_empty() {
         return Ok(());
     }
@@ -478,6 +507,15 @@ pub(super) fn print(out: &mut impl Write, packages: &[PackageInfo]) -> Result<()
         }
         if !pkg.unset.is_empty() {
             writeln!(out, "Unset: {}", pkg.unset.join(", "))?;
+        }
+        if pkg.defines_info {
+            writeln!(out, "\n>>> Attempting to run pkg_info() for '{}'", pkg.cpv)?;
+            out.flush()?;
+            match crate::privilege::run_pkg_info(cli, &pkg.cpv) {
+                Ok(0) => {}
+                Ok(code) => crate::style::warn_line!("pkg_info of {} exited {code}", pkg.cpv),
+                Err(e) => crate::style::warn_line!("pkg_info of {} not run: {e:#}", pkg.cpv),
+            }
         }
     }
     Ok(())

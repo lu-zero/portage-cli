@@ -216,6 +216,15 @@ struct Info {
 }
 
 pub(crate) async fn run(cli: &Cli) -> Result<()> {
+    match crate::privilege::pkg_info_stage() {
+        Some(crate::privilege::PkgInfoStage::Confine(cpv)) => {
+            std::process::exit(crate::privilege::run_pkg_info(cli, &cpv)?)
+        }
+        Some(crate::privilege::PkgInfoStage::Run(cpv)) => {
+            return packages::run_phase(cli, &cpv).await;
+        }
+        None => {}
+    }
     let matched = packages::matching(cli)?;
     let roots = cli.roots();
     let repo = crate::crossdev::main_repo(cli)?;
@@ -385,12 +394,12 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
     if cli.merge_flags().json {
         println!("{}", serde_json::to_string_pretty(&info)?);
     } else {
-        print_text(&info)?;
+        print_text(cli, &info)?;
     }
     Ok(())
 }
 
-fn print_text(info: &Info) -> Result<()> {
+fn print_text(cli: &Cli, info: &Info) -> Result<()> {
     let mut out = anstream::stdout();
 
     writeln!(
@@ -559,7 +568,7 @@ fn print_text(info: &Info) -> Result<()> {
             writeln!(out, "(not applied: --ignore-default-opts)")?;
         }
     }
-    packages::print(&mut out, &info.packages)?;
+    packages::print(cli, &mut out, &info.packages)?;
 
     Ok(())
 }

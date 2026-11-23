@@ -2758,6 +2758,44 @@ pub async fn unmerge_standalone(
     Ok(())
 }
 
+/// Runs `pkg_info` from the ebuild and saved environment of an installed package.
+pub async fn run_installed_info(
+    shell: &mut portage_repo::EbuildShell,
+    pkg: &InstalledPackage,
+    work_root: &Utf8Path,
+    root: &Utf8Path,
+) -> Result<()> {
+    let pf = pkg.pf();
+    let source = pkg.path().join(format!("{pf}.ebuild"));
+    std::fs::create_dir_all(work_root.join("temp").as_std_path())
+        .with_context(|| format!("creating {work_root}"))?;
+    let path = work_root.join(format!("{pf}.ebuild"));
+    std::fs::copy(source.as_std_path(), path.as_std_path())
+        .with_context(|| format!("no ebuild found at {source}"))?;
+    let ebuild = Ebuild::with_cpv(pkg.cpv().clone(), &path);
+    let env_file = pkg.path().join("environment.bz2");
+    match std::fs::read(env_file.as_std_path()) {
+        Ok(saved) => {
+            let shield = Shield {
+                plain: HashSet::new(),
+                exported: variable_names(shell, work_root).await?,
+            };
+            restore_package_environment(shell, &ebuild, work_root, &saved, &shield).await?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(anyhow!("reading {env_file}: {e}")),
+    }
+    let recorded = pkg.use_flags().unwrap_or_default();
+    let recorded: Vec<&str> = recorded.iter().map(|flag| flag.as_str()).collect();
+    shell
+        .set_use_flags(&recorded)
+        .context("setting the recorded USE")?;
+    shell
+        .run_phase(&ebuild, "info", work_root.as_std_path(), root.as_std_path())
+        .await
+        .context("pkg_info failed")
+}
+
 /// Decompress `environment.bz2` from the VDB into `work_root/temp/` so
 /// prerm/postrm can both use it after the VDB directory is removed.
 fn stage_env_bz2(pkg: &InstalledPackage, work_root: &Utf8Path) -> Option<Utf8PathBuf> {
@@ -5200,6 +5238,32 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn pkg_info_runs_with_what_the_build_saved() {
+        let probe = Probe::new();
+        let ebuild = probe.ebuild(
+            "probe",
+            "1",
+            &format!(
+                "IUSE=\"foo\"\n{INSTALLS_A_FILE}\
+                 pkg_setup() {{ FROM_BUILD=kept; }}\n\
+                 pkg_info() {{ note \"${{EBUILD_PHASE}}:${{FROM_BUILD}}:$(usex foo yes no)\"; }}\n"
+            ),
+        );
+        probe.run(&ebuild, BUILD_AND_MERGE).await.unwrap();
+        let root = probe.path("root");
+        let vdb = Vdb::open(root.join("var/db/pkg")).unwrap();
+        let pkg = vdb.packages().into_iter().next().unwrap();
+        fs::write(pkg.path().join("USE"), "foo\n").unwrap();
+        let repo = probe.repo();
+        let mut shell = repo.shell().await.unwrap();
+        run_installed_info(&mut shell, &pkg, &probe.path("info"), &root)
+            .await
+            .unwrap();
+        let log = probe.log();
+        assert!(log.contains("info:kept:yes"), "{log}");
     }
 
     // The removal phases see the USE the package was recorded with, groups included.

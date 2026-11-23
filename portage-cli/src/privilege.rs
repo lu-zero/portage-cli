@@ -474,6 +474,73 @@ fn reexec_sudo() -> i32 {
     }
 }
 
+/// The installed package whose `pkg_info` this re-exec of `em --info` runs
+const PKG_INFO_ENV: &str = "EM_PKG_INFO";
+/// Set inside the container, where the phase itself may run
+const PKG_INFO_CONFINED_ENV: &str = "EM_PKG_INFO_CONFINED";
+
+/// What a re-exec of `em --info` has to do for one package.
+pub(crate) enum PkgInfoStage {
+    /// Privileges are dropped: enter the container
+    Confine(String),
+    /// Inside the container: run the phase
+    Run(String),
+}
+
+/// The stage of this process, `None` for an ordinary `em --info`.
+pub(crate) fn pkg_info_stage() -> Option<PkgInfoStage> {
+    let cpv = std::env::var(PKG_INFO_ENV).ok()?;
+    Some(if std::env::var_os(PKG_INFO_CONFINED_ENV).is_some() {
+        PkgInfoStage::Run(cpv)
+    } else {
+        PkgInfoStage::Confine(cpv)
+    })
+}
+
+/// Runs `pkg_info` of `cpv` with no network, as `portage` when invoked as root.
+///
+/// Fails rather than run the phase with less confinement than that.
+pub(crate) fn run_pkg_info(cli: &Cli, cpv: &str) -> anyhow::Result<i32> {
+    if rustix::process::geteuid().is_root() {
+        return drop_to_portage(cpv);
+    }
+    std::cfg_select! {
+        all(feature = "hakoniwa", target_os = "linux") => {
+            hakoniwa::run_pkg_info(cli, cpv)
+        }
+        _ => {
+            let _ = cli;
+            anyhow::bail!("this build has no container support")
+        }
+    }
+}
+
+/// Re-execs as `portage`, with no supplementary groups, to enter the container from there.
+fn drop_to_portage(cpv: &str) -> anyhow::Result<i32> {
+    use std::os::unix::process::CommandExt as _;
+
+    use anyhow::Context as _;
+
+    let id = |db: &str| {
+        portage_repo::userdb::id_in_file(std::path::Path::new(db), "portage")
+            .filter(|id| *id != 0)
+            .with_context(|| format!("no unprivileged portage account in {db}"))
+    };
+    let (uid, gid) = (id("/etc/passwd")?, id("/etc/group")?);
+    let (exe, args) = self_invocation().context("locating the em binary")?;
+    let status = std::process::Command::new(exe)
+        .args(args)
+        .env(PKG_INFO_ENV, cpv)
+        .env_remove(PKG_INFO_CONFINED_ENV)
+        .current_dir("/")
+        .stdin(std::process::Stdio::null())
+        .gid(gid)
+        .uid(uid)
+        .status()
+        .context("dropping to the portage user")?;
+    Ok(status.code().unwrap_or(1))
+}
+
 /// `DISTDIR` from make.conf (root-aware, following `--config-root`/`--local`/
 /// `--prefix` like `crate::select::config_portage_dir`'s other callers, e.g.
 /// `mirrordist::gentoo_mirrors_list`), falling back to real portage's own
@@ -643,6 +710,75 @@ mod hakoniwa {
         )
     }
 
+    /// `paths` not already visible: a mount point cannot be created inside a read-only bind.
+    pub(super) fn ro_binds<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+        const ROOTFS: [&str; 7] = ["/bin", "/etc", "/lib", "/lib32", "/lib64", "/sbin", "/usr"];
+        let mut paths: Vec<&str> = paths.into_iter().collect();
+        paths.sort_by_key(|path| std::path::Path::new(*path));
+        let mut kept: Vec<&str> = Vec::new();
+        for path in paths {
+            let inside = |parent: &&str| std::path::Path::new(path).starts_with(parent);
+            if path != "/" && !ROOTFS.iter().any(&inside) && !kept.iter().any(&inside) {
+                kept.push(path);
+            }
+        }
+        kept
+    }
+
+    /// Re-execs `em --info` to run one `pkg_info`: read-only trees, no network, private /tmp.
+    pub fn run_pkg_info(cli: &Cli, cpv: &str) -> anyhow::Result<i32> {
+        use anyhow::Context as _;
+
+        let (exe, args) = super::self_invocation().context("locating the em binary")?;
+        let program = exe.to_str().context("non-UTF-8 em binary path")?;
+        let mut container = Container::new();
+        container.rootfs("/").context("setting up the container")?;
+        container
+            .unshare(Namespace::Network)
+            .unshare(Namespace::Ipc)
+            .unshare(Namespace::Uts)
+            .unshare(Namespace::Cgroup)
+            .devfsmount("/dev")
+            .tmpfsmount("/tmp")
+            // Only the private tmpfs stays writable; every bind below is read-only.
+            .runctl(Runctl::RootdirRW);
+        let roots = cli.roots();
+        let merge_root = roots.merge_root();
+        let vdb_tree = match merge_root.as_str() {
+            "/" => "/var/db/pkg",
+            root => root,
+        };
+        let repos = cli.search_repos();
+        let wanted = [roots.config(), roots.config_overlay(), roots.eprefix()]
+            .into_iter()
+            .flatten()
+            .map(|path| path.as_str())
+            .chain(repos.iter().filter_map(|repo| repo.to_str()))
+            .chain([vdb_tree, program]);
+        for path in ro_binds(wanted) {
+            bind_ro(&mut container, path);
+        }
+
+        let mut cmd = container.command(program);
+        for arg in &args {
+            cmd.arg(arg.to_str().context("non-UTF-8 argument")?);
+        }
+        for (key, val) in std::env::vars() {
+            cmd.env(&key, &val);
+        }
+        cmd.env(super::PKG_INFO_ENV, cpv)
+            .env(super::PKG_INFO_CONFINED_ENV, "1")
+            .env("HOME", "/tmp")
+            .env("TMPDIR", "/tmp")
+            .current_dir("/")
+            .stdin(std::fs::File::open("/dev/null").context("opening /dev/null")?);
+        let status = cmd.status().context("starting the container")?;
+        if status.code != 0 && !status.reason.is_empty() {
+            crate::style::warn_line!("container: {}", status.reason);
+        }
+        Ok(status.code)
+    }
+
     pub fn reexec(cli: &Cli) -> i32 {
         if !userns_available() {
             crate::style::error_line!(
@@ -737,6 +873,19 @@ mod tests {
         assert!(!will_build(&crate::cli::parse_cli(&[
             "em", "--info", "firefox"
         ])));
+    }
+
+    #[test]
+    fn container_binds_skip_what_is_already_visible() {
+        let binds = hakoniwa::ro_binds([
+            "/usr/local/bin/em",
+            "/",
+            "/srv/root/etc/portage",
+            "/srv/root",
+            "/srv/rootless",
+            "/var/db/pkg",
+        ]);
+        assert_eq!(binds, ["/srv/root", "/srv/rootless", "/var/db/pkg"]);
     }
 
     #[test]
