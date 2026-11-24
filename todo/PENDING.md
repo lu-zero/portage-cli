@@ -77,7 +77,7 @@ file, version atoms and `package.env` per toolchain open).
 | One resolved Portage config: `Settings` landed 2026-10-23 (envvar, --info, resolver, merge protection); build env seeding waits on FEATURES parity | 🟡 | [[portage-config-layering]], [[features-parity]] |
 | `config_changes_needed` events carry no change list; a failed build renders three times on stderr | 🔴 later | review 2026-10-25 |
 | `FEATURES=candy`: a progress-bar build display (indicatif) as an activity-bus sink, landed 2026-11-01 | ✅ | [[features-parity]] |
-| `for-portage-repo` is rebased on upstream main f550117d; master pins b80760c9 (2026-11-16, adds process substitution) | ✅ | — |
+| `for-portage-repo` is rebased on upstream main c7748ddd; master pins c506eaba (2026-11-24, upstream jiff + nested-word quoting, winnow pattern fixes) | ✅ | — |
 | Parity: a target atom's USE requirement was ignored (`sys-libs/zlib[minizip]`); fixed 2026-10-27, with emerge's `Missing IUSE` and version narrowing | ✅ | — |
 | Parity: `texlive-core` pulls a perl stack via `virtual/perl-File-Temp`; firefox misses `python-3.15` | 🔴 | found 2026-10-14 by `bench-em-vs-emerge.sh`, not yet filed |
 
