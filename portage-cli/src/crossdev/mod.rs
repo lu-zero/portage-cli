@@ -1437,11 +1437,9 @@ fn alias_repo_conf_entry(
         }
     }
 
-    let conf_dir = setup_root(globals).join("etc/portage/repos.conf");
-    let name = overlay_name(target);
     Ok(config_plan::ConfigEntry::Alias {
-        path: conf_dir.join(format!("{name}.conf")),
-        name,
+        path: HostConfigPaths::of(target, globals).alias,
+        name: overlay_name(target),
         category: category.to_owned(),
         packages_line: alias_packages_line(spec),
     })
@@ -2122,15 +2120,10 @@ fn cross_env_entries(
     // one exists (`--prefix`/`--local`: the user-writable
     // `<prefix>/etc/portage`, avoiding a privileged host write) and fall
     // back to the bare config root otherwise (`--root`/plain host).
-    let base = globals.base_roots();
-    let portage = if let Some(overlay) = base.config_overlay() {
-        overlay.to_owned()
-    } else {
-        base.merge_root().join("etc/portage")
-    };
+    let paths = HostConfigPaths::of(target, globals);
     let category = target.category();
 
-    let env_dir = portage.join("env").join(&category);
+    let env_dir = &paths.env_dir;
     let mut entries = Vec::new();
 
     let mut mappings = String::new();
@@ -2170,7 +2163,7 @@ fn cross_env_entries(
     }
 
     entries.push(config_plan::ConfigEntry::File {
-        path: portage.join("package.env").join(&category),
+        path: paths.package_env.clone(),
         desired: mappings,
     });
     if let Some(clang) = &spec.toolchain.clang {
@@ -2183,7 +2176,7 @@ fn cross_env_entries(
     // (`write_clang_cfg`); an LLVM-model one has no gcc to start from.
     if target.llvm {
         entries.push(config_plan::ConfigEntry::File {
-            path: clang_cfg_path(target, globals),
+            path: paths.clang_cfg.clone(),
             desired: clang_cfg(target, globals, ClangRuntimes::Llvm)?,
         });
     }
@@ -2197,17 +2190,17 @@ fn cross_env_entries(
         })
         .collect();
     entries.push(config_plan::ConfigEntry::Derived {
-        path: portage.join("package.accept_keywords").join(&category),
+        path: paths.accept_keywords.clone(),
         desired: keywords,
     });
     if derived.is_some() {
         entries.extend([
             config_plan::ConfigEntry::File {
-                path: portage.join("package.mask").join(&category),
+                path: paths.mask.clone(),
                 desired: dep_lines(&host.package_mask),
             },
             config_plan::ConfigEntry::File {
-                path: portage.join("package.unmask").join(&category),
+                path: paths.unmask.clone(),
                 desired: dep_lines(&host.package_unmask),
             },
         ]);
@@ -2368,6 +2361,50 @@ fn env_mapping(category: &str, pkg: &str, llvm: bool) -> String {
     format!("{category}/{pkg} {category}/{pkg}.conf{llvm_conf}\n")
 }
 
+/// Where `--init-target` writes a target's host-side config, outside its sysroot
+struct HostConfigPaths {
+    /// The alias `repos.conf` entry
+    alias: Utf8PathBuf,
+    /// The per-package env files, one directory
+    env_dir: Utf8PathBuf,
+    package_env: Utf8PathBuf,
+    accept_keywords: Utf8PathBuf,
+    mask: Utf8PathBuf,
+    unmask: Utf8PathBuf,
+    /// The config the per-target clang wrappers run `clang --config=` with
+    clang_cfg: Utf8PathBuf,
+}
+
+impl HostConfigPaths {
+    /// The paths for `target`: the setup root's `repos.conf`, and the config overlay when there
+    /// is one (`--prefix`/`--local`), else the merge root's `etc/portage`
+    fn of(target: &CrossTarget, globals: &Cli) -> Self {
+        let base = globals.base_roots();
+        let portage = base
+            .config_overlay()
+            .map(Utf8Path::to_owned)
+            .unwrap_or_else(|| base.merge_root().join("etc/portage"));
+        let etc = portage
+            .parent()
+            .map(Utf8Path::to_owned)
+            .unwrap_or(portage.clone());
+        let category = target.category();
+        Self {
+            alias: setup_root(globals)
+                .join("etc/portage/repos.conf")
+                .join(format!("{}.conf", overlay_name(target))),
+            env_dir: portage.join("env").join(&category),
+            package_env: portage.join("package.env").join(&category),
+            accept_keywords: portage.join("package.accept_keywords").join(&category),
+            mask: portage.join("package.mask").join(&category),
+            unmask: portage.join("package.unmask").join(&category),
+            clang_cfg: etc
+                .join("clang/cross")
+                .join(format!("{}.cfg", target.tuple)),
+        }
+    }
+}
+
 /// Which runtimes the per-target clang links against
 #[derive(Clone, Copy)]
 enum ClangRuntimes {
@@ -2375,18 +2412,6 @@ enum ClangRuntimes {
     Gcc,
     /// compiler-rt, libunwind and libc++, built for the target
     Llvm,
-}
-
-/// The config the per-target clang wrappers run `clang --config=` with
-fn clang_cfg_path(target: &CrossTarget, globals: &Cli) -> Utf8PathBuf {
-    let base = globals.base_roots();
-    let portage = base
-        .config_overlay()
-        .map(Utf8Path::to_owned)
-        .unwrap_or_else(|| base.merge_root().join("etc/portage"));
-    let etc = portage.parent().map(Utf8Path::to_owned).unwrap_or(portage);
-    etc.join("clang/cross")
-        .join(format!("{}.cfg", target.tuple))
 }
 
 /// The clang config for `target`, linking `runtimes`
@@ -2421,7 +2446,7 @@ fn clang_cfg(target: &CrossTarget, globals: &Cli, runtimes: ClangRuntimes) -> Re
 
 /// Point the per-target clang at `runtimes`
 fn write_clang_cfg(target: &CrossTarget, globals: &Cli, runtimes: ClangRuntimes) -> Result<()> {
-    let path = clang_cfg_path(target, globals);
+    let path = HostConfigPaths::of(target, globals).clang_cfg;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {dir}"))?;
     }
