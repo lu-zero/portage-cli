@@ -184,6 +184,31 @@ impl SysrootSpec {
         spec
     }
 
+    /// The spec `-L` gives a glibc `target`: clang builds the system, the gcc toolchain the libc
+    ///
+    /// `target` is the GCC model (`cross-<tuple>`); its `llvm_slot` binds clang.
+    pub fn clang_main(target: &CrossTarget, extras: &[Cpn]) -> Self {
+        let mut spec = Self::builtin(target, extras);
+        spec.toolchain.clang = Some(ClangToolchain::builtin(&spec.tuple));
+        spec.profile.push("features/llvm".into());
+        spec.system.built_by = ToolchainId::Clang;
+        spec.system
+            .exceptions
+            .insert(ToolchainId::Gcc, vec![spec.libc.atom.clone()]);
+        // Stage1's `USE="-* build"` drops the profile's static-libs; libunwind.a is linked by name.
+        spec.package_use = ["libcxx", "libcxxabi", "libunwind"]
+            .into_iter()
+            .map(|pkg| {
+                let dep = Dep::new(Cpn::new("llvm-runtimes", pkg));
+                (dep, vec!["static-libs".to_owned()])
+            })
+            .collect();
+        if let Some(slot) = target.llvm_slot {
+            spec.bind_llvm_slot(slot);
+        }
+        spec
+    }
+
     /// Bind the clang compiler to LLVM `slot`, unless the spec already names one
     pub fn bind_llvm_slot(&mut self, slot: u64) {
         if let Some(clang) = &mut self.toolchain.clang
@@ -605,24 +630,11 @@ fn is_pin(dep: &Dep) -> bool {
 }
 
 #[cfg(test)]
-/// clang as the system compiler on glibc, gcc kept for the libc and what clang cannot build
+/// The riscv64 glibc clang-main spec, bound to LLVM 23
 pub(crate) fn clang_main_spec() -> SysrootSpec {
-    let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-    let mut spec = SysrootSpec::builtin(&target, &[]);
-    let mut clang = ClangToolchain::builtin(&spec.tuple);
-    clang.compiler = Dep::parse("llvm-core/clang:23").unwrap();
-    spec.toolchain.clang = Some(clang);
-    spec.profile.push("features/llvm".into());
-    spec.system.built_by = ToolchainId::Clang;
-    spec.system.exceptions.insert(
-        ToolchainId::Gcc,
-        vec![Dep::parse("sys-libs/glibc").unwrap()],
-    );
-    spec.package_use.push((
-        Dep::parse("llvm-runtimes/libunwind").unwrap(),
-        vec!["static-libs".into()],
-    ));
-    spec
+    let mut target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
+    target.llvm_slot = Some(23);
+    SysrootSpec::clang_main(&target, &[])
 }
 
 #[cfg(test)]

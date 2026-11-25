@@ -13,9 +13,9 @@ em crossdev [OPTIONS]
 
 ## Options
 
-* `-L, --llvm` — Use the LLVM/Clang model (`cross_llvm-*`: host clang cross-targets, no per-target compiler)
+* `-L, --llvm` — Build the target with clang: the host clang cross-targets it, with LLVM's runtimes
 
-  Rejects glibc — use musl or a bare-metal target.
+  musl and bare-metal targets get no gcc (`cross_llvm-<tuple>`). A glibc target keeps the gcc toolchain to build glibc, and clang builds everything else (`cross-<tuple>`).
 * `--init-target` — Lay down the overlay + sysroot config without building anything
 * `--setup` — Bootstrap the cross toolchain into the prefix (`/usr/<tuple>`): the full intertwined sequence (binutils → headers → gcc-stage1 → libc → gcc-stage2). Implies `--init-target`.
 * `-r, --resume` — With `--setup`, skip the bootstrap steps an earlier run completed: steps recorded with the same spec whose packages are still installed. The first step that does not hold runs again, and every step after it.

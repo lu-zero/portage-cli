@@ -3468,10 +3468,10 @@ pub struct SetupArgs {
 /// there is no separate destination to redirect.
 #[derive(winnow_args::Args, Debug, Clone)]
 pub struct CrossdevArgs {
-    /// Use the LLVM/Clang model (`cross_llvm-*`: host clang cross-targets, no per-target
-    /// compiler)
+    /// Build the target with clang: the host clang cross-targets it, with LLVM's runtimes
     ///
-    /// Rejects glibc — use musl or a bare-metal target.
+    /// musl and bare-metal targets get no gcc (`cross_llvm-<tuple>`). A glibc target keeps the
+    /// gcc toolchain to build glibc, and clang builds everything else (`cross-<tuple>`).
     #[arg(short = 'L', long)]
     pub llvm: bool,
 

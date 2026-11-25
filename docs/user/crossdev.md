@@ -62,7 +62,7 @@ em crossdev [OPTIONS]
 | `--stage N` | bootstrap only through crossdev's stage `N` (0 binutils, 1 a bare C compiler, 2 kernel headers, 3 libc, 4 the full compiler and the extras); implies `--setup` |
 | `--ex-only` | build only the extras onto a target whose bootstrap is complete; implies `--setup` |
 | `-C` / `--clean` | uninstall the target: its `cross-<tuple>` packages, toolchain links, host config and sysroot |
-| `-L` / `--llvm` | use the LLVM/Clang model (`cross_llvm-<tuple>`: host clang cross-targets directly, no per-target compiler build) instead of GCC |
+| `-L` / `--llvm` | build with clang; see [LLVM/Clang](#llvmclang) below |
 | `--ex-pkg CATEGORY/PN` | build an extra package onto the target (repeatable); see [Extra packages](#extra-packages-ex-pkg) below |
 
 Plus `-p`/`--pretend` (preview, write nothing), `-a`/`--ask` (preview and
@@ -183,7 +183,7 @@ stages map onto em's steps (em builds gcc-stage1 before the headers, as crossdev
 | 1 | gcc-stage1 | kernel and libc headers, compiler-rt |
 | 2 | kernel headers | — |
 | 3 | libc | libc |
-| 4 | gcc-stage2, then the extras | libunwind, libc++abi, libc++ |
+| 4 | gcc-stage2, then the extras | libunwind, libc++abi, libc++, then the extras |
 
 ```
 em crossdev --target riscv64-unknown-linux-gnu --stage 1
@@ -372,17 +372,23 @@ checked to actually exist in `::gentoo` before the alias is written) — a
 malformed or nonexistent atom is rejected up front with a clear error rather
 than surfacing later as an opaque resolver failure.
 
-### LLVM/Clang model
+### LLVM/Clang
 
 ```
 em crossdev --target aarch64-unknown-linux-musl -L --show-target-cfg
 em crossdev --target aarch64-unknown-linux-musl -L --setup
+em crossdev --target riscv64-unknown-linux-gnu -L --setup
 ```
 
-No per-target compiler build — clang already cross-targets. The category is
-`cross_llvm-<tuple>` instead of `cross-<tuple>`, and the package set is the
-clang wrapper + LLVM runtimes (`compiler-rt`/`libunwind`/`libcxxabi`/
-`libcxx`) instead of the GCC toolchain stages.
+The host clang cross-targets the tuple through per-target wrappers, and the target gets LLVM's runtimes
+(`compiler-rt`, `libunwind`, `libcxxabi`, `libcxx`). What else `-L` builds depends on the libc:
+
+- **musl and bare metal**: no gcc at all. The category is `cross_llvm-<tuple>`.
+- **glibc**: glibc builds with gcc, so the target keeps the GCC toolchain for it and clang builds everything
+  else. The category stays `cross-<tuple>`. `--setup` runs the gcc bootstrap through glibc and gcc-stage2,
+  then the clang wrappers and the LLVM runtimes. The sysroot's profile adds `features/llvm`, makes clang the
+  default compiler and keeps gcc for `sys-libs/glibc` only. This is the built-in form of a
+  [spec](#spec-files) with both toolchains; `--print-spec` shows it.
 
 ## Gaps vs crossdev
 

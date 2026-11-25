@@ -79,11 +79,10 @@ impl CrossTarget {
             );
         };
 
-        // crossdev rejects glibc under LLVM ("cannot currently compile glibc").
+        // The LLVM-only model has no gcc, and glibc builds with gcc; `-L` on glibc keeps gcc for it.
         if llvm && libc == Libc::Glibc {
             bail!(
-                "LLVM/Clang cannot build glibc — use a musl (…-linux-musl) or \
-                 bare-metal (…-elf) target with -L, or drop -L for the GCC model"
+                "{tuple}: clang alone cannot build glibc; give the spec a gcc toolchain to build it"
             );
         }
 

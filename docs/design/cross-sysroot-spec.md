@@ -74,7 +74,8 @@ Built-in tuples get neither: their `make.profile` links the `::gentoo` profile d
 ## Mixed bootstrap (implemented)
 
 A spec defining both toolchains loads when gcc builds the libc; it stays a GCC-model target (`cross-<tuple>`
-category, so glibc is allowed). `toolchain_plan` builds the gcc toolchain and the libc as usual, then the clang
+category, so glibc is allowed). `em crossdev -L` on a glibc tuple builds this spec without a file
+(`SysrootSpec::clang_main`): clang builds the system, gcc stays as the exception for glibc. `toolchain_plan` builds the gcc toolchain and the libc as usual, then the clang
 wrappers and compiler-rt, libunwind (`static-libs`), libcxxabi and libcxx, each bound to the LLVM slot, and last
 the per-slot clang config packages (`clang-{rtlib,unwindlib,stdlib}-config`, `clang-linker-config`) into the
 sysroot: the target's own LLVM runtimes BDEPEND on them but read `${ESYSROOT}/etc/clang/<slot>/gentoo-*.cfg`.
@@ -115,6 +116,14 @@ plus `features/llvm`, `exceptions.gcc` = glibc and gcc, and `static-libs` on the
 - Bugs found and fixed on the way: post-install strip ran with em's own PATH (`llvm-strip` not found);
   the missing CPP and friends above; stage1 dropping `package-use`; the target's LLVM resolving above the
   cross slot; the sysroot lacking the clang config packages.
+
+## Clang-main via `-L`, run 2026-11-25
+
+Fresh crossdev-stages sandbox (arm64 host), `em crossdev -T riscv64-unknown-linux-gnu -L --setup`, 12 steps. glibc
+recorded `CC=<tuple>-gcc`; compiler-rt, libunwind, libc++abi, libc++ and every sysroot package `<tuple>-clang`. A
+C++ test program and `em --target <tuple> dev-libs/libfmt` link libc++, libc++abi and libunwind. `-r` skips all 12
+steps, `--show-target-cfg` without `-L` reads the saved spec, and `-C` leaves no target VDB, sysroot, wrappers or
+clang cross cfg.
 
 ## `-p` before `--init-target`
 

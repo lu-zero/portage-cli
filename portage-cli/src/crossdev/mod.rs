@@ -109,13 +109,12 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
     let last = stage_selection(args, &extras)?;
     let building = args.setup || last.is_some() || args.ex_only;
     let own = own_spec(globals)?;
-    // A spec from a file, or saved by an earlier one, gets the sysroot its own profile.
-    let own_profile = own.is_some();
-    let (target, spec) = match own {
+    // A spec with more than the tuple implies (a file, a saved one, clang-main) gets its own profile.
+    let (target, spec, own_profile) = match own {
         Some(mut spec) => {
             anyhow::ensure!(
-                !args.llvm,
-                "-L/--llvm picks a built-in target's toolchain; a spec file names its own"
+                !args.llvm || spec.toolchain.clang.is_some(),
+                "-L/--llvm picks a built-in target's toolchain; this target's spec has no clang"
             );
             let mut target = spec.cross_target()?;
             if spec.toolchain.clang.is_some() {
@@ -132,16 +131,23 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
                     spec.extra.push(Dep::new(cpn));
                 }
             }
-            (target, spec)
+            (target, spec, true)
         }
         None => {
-            let mut target = CrossTarget::parse(&tuple, args.llvm)?;
-            if target.llvm {
+            let (mut target, clang_main) = builtin_target(&tuple, args.llvm)?;
+            if args.llvm {
                 target.llvm_slot = llvm_slot(&main_repo(globals)?);
             }
+            let builtin = |extras: &[Cpn]| {
+                if clang_main {
+                    spec::SysrootSpec::clang_main(&target, extras)
+                } else {
+                    spec::SysrootSpec::builtin(&target, extras)
+                }
+            };
             let mut all_extras = extras.clone();
             if building {
-                let base = spec::SysrootSpec::builtin(&target, &[]).packages();
+                let base = builtin(&[]).packages();
                 let mut recorded: Vec<Cpn> = alias_packages(&target, globals)
                     .into_iter()
                     .flatten()
@@ -150,8 +156,8 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
                 recorded.sort_by_key(ToString::to_string);
                 all_extras.extend(recorded);
             }
-            let spec = spec::SysrootSpec::builtin(&target, &all_extras);
-            (target, spec)
+            let spec = builtin(&all_extras);
+            (target, spec, clang_main)
         }
     };
 
@@ -161,7 +167,7 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
     let derived = own_profile.then(|| DerivedProfile::of(&spec)).transpose()?;
 
     if args.show_target_cfg {
-        show_target_cfg(&target, globals, &extras);
+        show_target_cfg(&target, &spec, globals, &extras);
         return Ok(());
     }
     if args.print_spec {
@@ -190,6 +196,16 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
          overlay + sysroot config, --setup to bootstrap the cross toolchain, or \
          --show-target-cfg to preview the derived config"
     );
+}
+
+/// The target `-T <tuple>` names, and whether `-L` makes it clang-main: a glibc target keeps the GCC
+/// model for its libc and builds everything else with clang
+fn builtin_target(tuple: &str, llvm: bool) -> Result<(CrossTarget, bool)> {
+    let gcc = CrossTarget::parse(tuple, false)?;
+    if llvm && gcc.libc == target::Libc::Glibc {
+        return Ok((gcc, true));
+    }
+    Ok((CrossTarget::parse(tuple, llvm)?, false))
 }
 
 /// Parse the `--ex-pkg CATEGORY/PN` atoms: extra packages built onto an established cross
@@ -1337,27 +1353,23 @@ fn multilib_eclass(globals: &Cli) -> Result<String> {
         .with_context(|| format!("multilib.eclass not found in {}", gentoo.name()))
 }
 
-fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) {
+fn show_target_cfg(target: &CrossTarget, spec: &spec::SysrootSpec, globals: &Cli, extras: &[Cpn]) {
     let mut out = anstream::stdout();
     let row = |out: &mut dyn Write, k: &str, v: &str| {
         writeln!(out, "  {C_LABEL}{k:<9}{C_LABEL:#} {v}").ok();
     };
-    let model = match (target.llvm, target.llvm_slot) {
-        (true, Some(slot)) => format!("LLVM/Clang {slot}"),
-        (true, None) => "LLVM/Clang".to_owned(),
-        (false, _) => "GCC".to_owned(),
-    };
     row(&mut out, "Target", &target.tuple);
-    row(&mut out, "Model", &model);
+    row(&mut out, "Model", &model_name(spec));
     row(&mut out, "Category", &target.category());
     row(&mut out, "ARCH", &target.gentoo_arch());
-    row(&mut out, "Profile", &target.profile_path());
+    row(&mut out, "Profile", &spec.profile.join(" + "));
     row(&mut out, "Sysroot", sysroot(target, globals).as_str());
-    row(&mut out, "CFLAGS", target.cflags());
+    row(&mut out, "CFLAGS", &spec.cflags);
     writeln!(out, "  {C_LABEL}Packages{C_LABEL:#}").ok();
     let category = target.category();
-    for (cat, pkg, _) in target.packages() {
-        writeln!(out, "    {C_PKG}{category}/{pkg}{C_PKG:#} → {cat}/{pkg}").ok();
+    for cpn in spec.packages() {
+        let pkg = cpn.package;
+        writeln!(out, "    {C_PKG}{category}/{pkg}{C_PKG:#} → {cpn}").ok();
     }
     if !extras.is_empty() {
         writeln!(out, "  {C_LABEL}Extra (--ex-pkg, host-arch){C_LABEL:#}").ok();
@@ -1365,6 +1377,22 @@ fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) {
             let pkg = cpn.package;
             writeln!(out, "    {C_PKG}{category}/{pkg}{C_PKG:#} → {cpn}").ok();
         }
+    }
+}
+
+/// The toolchains a spec builds with, the system's first
+fn model_name(spec: &spec::SysrootSpec) -> String {
+    let clang = match spec.llvm_slot() {
+        Some(slot) => format!("LLVM/Clang {slot}"),
+        None => "LLVM/Clang".to_owned(),
+    };
+    match (&spec.toolchain.gcc, &spec.toolchain.clang) {
+        (Some(_), Some(_)) if spec.system.built_by == spec::ToolchainId::Clang => {
+            format!("{clang}, GCC for the libc")
+        }
+        (Some(_), Some(_)) => format!("GCC, {clang}"),
+        (None, Some(_)) => clang,
+        _ => "GCC".to_owned(),
     }
 }
 
@@ -2736,7 +2764,8 @@ mod tests {
         assert!(read(profile.join("make.defaults")).contains(&format!("CC=\"{t}-clang\"\n")));
         assert_eq!(
             read(profile.join("package.use")),
-            "llvm-runtimes/libunwind static-libs\n"
+            "llvm-runtimes/libcxx static-libs\nllvm-runtimes/libcxxabi static-libs\n\
+             llvm-runtimes/libunwind static-libs\n"
         );
         let mask = read(profile.join("package.mask"));
         assert!(
@@ -2758,11 +2787,18 @@ mod tests {
         let uses = DerivedProfile::of(&spec::clang_main_spec())
             .unwrap()
             .use_overrides();
-        let [(dep, flags)] = uses.as_slice() else {
-            panic!("{uses:?}")
-        };
-        assert_eq!(dep.to_string(), "llvm-runtimes/libunwind");
-        assert_eq!(flags.as_slice(), UseToken::user("static-libs").as_slice());
+        let deps: Vec<String> = uses.iter().map(|(dep, _)| dep.to_string()).collect();
+        assert_eq!(
+            deps,
+            [
+                "llvm-runtimes/libcxx",
+                "llvm-runtimes/libcxxabi",
+                "llvm-runtimes/libunwind"
+            ]
+        );
+        for (_, flags) in &uses {
+            assert_eq!(flags.as_slice(), UseToken::user("static-libs").as_slice());
+        }
     }
 
     #[test]
@@ -3061,6 +3097,23 @@ mod tests {
         args.ex_pkg = vec!["sys-devel/rust-std".to_owned()];
         let atoms = ex_pkg_atoms(&args).unwrap();
         assert_eq!(atoms, vec![Cpn::new("sys-devel", "rust-std")]);
+    }
+
+    #[test]
+    fn llvm_on_glibc_is_clang_main_on_the_gcc_model() {
+        for (tuple, llvm, expect_llvm, expect_clang_main) in [
+            ("riscv64-unknown-linux-gnu", true, false, true),
+            ("riscv64-unknown-linux-gnu", false, false, false),
+            ("aarch64-unknown-linux-musl", true, true, false),
+            ("riscv64-unknown-elf", true, true, false),
+        ] {
+            let (target, clang_main) = builtin_target(tuple, llvm).unwrap();
+            assert_eq!(
+                (target.llvm, clang_main),
+                (expect_llvm, expect_clang_main),
+                "{tuple} -L={llvm}"
+            );
+        }
     }
 
     #[test]
