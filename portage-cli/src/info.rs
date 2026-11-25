@@ -363,10 +363,7 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
             })
             .collect(),
         effective: defaults.effective.clone(),
-        ignored_this_run: matches!(
-            &cli.applet,
-            Some(crate::cli::Applet::Emerge(args)) if args.ignore_default_opts
-        ),
+        ignored_this_run: cli.merge_flags().ignore_default_opts,
     });
 
     let packages = packages::describe(cli, &matched, &var).await;

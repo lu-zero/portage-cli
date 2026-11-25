@@ -1,8 +1,10 @@
-//! `EMERGE_DEFAULT_OPTS` and `EM_DEFAULT_OPTS` for an emerge run.
+//! `EMERGE_DEFAULT_OPTS` and `EM_DEFAULT_OPTS` for an emerge run, and for the applets that merge
+//! (`crossdev`, `toolchain`, `stages`, `setup`, `revdep`, `depclean`).
 //!
 //! The argv is the kept words of `EMERGE_DEFAULT_OPTS`, then `EM_DEFAULT_OPTS`,
 //! then the command line. A scalar flag's last value wins. Unknown flags are
-//! dropped from the first variable and rejected from the second.
+//! dropped from the first variable and rejected from the second. Another applet
+//! gets only the words that mean the same to it as to emerge.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -75,7 +77,7 @@ impl ReportedVar {
     }
 }
 
-/// Parse `args` (after the program name). An emerge run without
+/// Parse `args` (after the program name). A merging run without
 /// `--ignore-default-opts` is parsed again with the default options inserted.
 pub(crate) fn parse(args: &[OsString]) -> Result<Validated, Error> {
     let (validated, explanation) = apply(args, &process_env)?;
@@ -112,16 +114,145 @@ fn apply(
     if explanation.effective.is_empty() {
         return Ok((Validated::try_from(cli)?, explanation));
     }
-    let argv = insert(args, &explanation.effective);
+    let name = applet(&cli).map_or("emerge", |(name, _)| name);
+    let argv = insert(args, &explanation.effective, name);
     let cli = Cli::parse_from(&argv)?;
     Ok((Validated::try_from(cli)?, explanation))
 }
 
 fn uses_defaults(cli: &Cli) -> bool {
-    match &cli.applet {
-        Some(Applet::Emerge(args)) => !args.ignore_default_opts,
-        _ => false,
+    applet(cli).is_some() && !cli.merge_flags().ignore_default_opts
+}
+
+/// The option groups an applet shares with emerge, as `Debug` text; `None` for a group it lacks.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Shared {
+    merge_flags: Option<String>,
+    depgraph_flags: Option<String>,
+    activity: Option<String>,
+    verbose_arg: Option<String>,
+    quiet_arg: Option<String>,
+    arch_arg: Option<String>,
+    repo_arg: Option<String>,
+    pretend_arg: Option<String>,
+    vdb_arg: Option<String>,
+    topology: Option<String>,
+}
+
+impl Shared {
+    fn groups(&self) -> [&Option<String>; 10] {
+        [
+            &self.merge_flags,
+            &self.depgraph_flags,
+            &self.activity,
+            &self.verbose_arg,
+            &self.quiet_arg,
+            &self.arch_arg,
+            &self.repo_arg,
+            &self.pretend_arg,
+            &self.vdb_arg,
+            &self.topology,
+        ]
     }
+}
+
+/// `Shared` with `$field`s of `$args` filled in.
+macro_rules! shared {
+    ($args:expr; $($field:ident),+) => {{
+        let mut shared = Shared::default();
+        $(shared.$field = Some(format!("{:?}", $args.$field));)+
+        shared
+    }};
+}
+
+/// A merging applet's name and shared groups.
+fn applet(cli: &Cli) -> Option<(&'static str, Shared)> {
+    Some(match cli.applet.as_ref()? {
+        Applet::Emerge(a) => (
+            "emerge",
+            shared!(a; merge_flags, depgraph_flags, activity, verbose_arg,
+            quiet_arg, arch_arg, repo_arg, pretend_arg, vdb_arg, topology),
+        ),
+        // Its `Topology` takes none of emerge's root flags.
+        Applet::Crossdev(a) => (
+            "crossdev",
+            shared!(a; merge_flags, depgraph_flags, activity, verbose_arg,
+            quiet_arg, arch_arg, repo_arg, pretend_arg),
+        ),
+        Applet::Toolchain(a) => (
+            "toolchain",
+            shared!(a; merge_flags, depgraph_flags, activity, verbose_arg,
+            quiet_arg, arch_arg, repo_arg, pretend_arg, topology),
+        ),
+        Applet::Stages(a) => (
+            "stages",
+            shared!(a; merge_flags, depgraph_flags, activity, verbose_arg,
+            quiet_arg, arch_arg, repo_arg, pretend_arg, topology),
+        ),
+        Applet::Setup(a) => (
+            "setup",
+            shared!(a; merge_flags, depgraph_flags, activity, verbose_arg,
+            quiet_arg, arch_arg, repo_arg, pretend_arg, topology),
+        ),
+        Applet::Revdep(a) => (
+            "revdep",
+            shared!(a; merge_flags, pretend_arg, vdb_arg, topology),
+        ),
+        Applet::Depclean(a) => (
+            "depclean",
+            shared!(a; merge_flags, pretend_arg, vdb_arg, topology),
+        ),
+        _ => return None,
+    })
+}
+
+/// Whether `group` means the same to `name` as to emerge: there it sets only groups `name` shares,
+/// and `name` parses it into the same values.
+fn fits(name: &str, group: &[String]) -> bool {
+    let parse = |first: &str, group: &[String]| {
+        let mut args = vec![first.to_owned()];
+        args.extend(group.iter().cloned());
+        Cli::parse_from(args).ok()
+    };
+    let (Some(emerge), Some(base), Some(other)) = (
+        parse("emerge", group),
+        parse("emerge", &[]),
+        parse(name, group),
+    ) else {
+        return false;
+    };
+    let (Some((_, by_emerge)), Some((_, unset)), Some((_, by_other))) =
+        (applet(&emerge), applet(&base), applet(&other))
+    else {
+        return false;
+    };
+    only_shared_groups(&emerge, &base)
+        && (by_other.groups().into_iter())
+            .zip(by_emerge.groups())
+            .zip(unset.groups())
+            .all(|((o, e), u)| if o.is_some() { o == e } else { e == u })
+}
+
+/// Whether `cli`'s emerge arguments differ from `base`'s only in [`Shared`]'s groups.
+fn only_shared_groups(cli: &Cli, base: &Cli) -> bool {
+    let (Some(Applet::Emerge(args)), Some(Applet::Emerge(base))) = (&cli.applet, &base.applet)
+    else {
+        return false;
+    };
+    let rest = crate::cli::EmergeArgs {
+        merge_flags: base.merge_flags.clone(),
+        depgraph_flags: base.depgraph_flags.clone(),
+        activity: base.activity.clone(),
+        verbose_arg: base.verbose_arg.clone(),
+        quiet_arg: base.quiet_arg.clone(),
+        arch_arg: base.arch_arg.clone(),
+        repo_arg: base.repo_arg.clone(),
+        pretend_arg: base.pretend_arg.clone(),
+        vdb_arg: base.vdb_arg.clone(),
+        topology: base.topology.clone(),
+        ..args.clone()
+    };
+    format!("{rest:?}") == format!("{base:?}")
 }
 
 fn load(
@@ -130,19 +261,20 @@ fn load(
 ) -> Result<Explanation, Error> {
     let roots = cli.roots();
     let config = roots.config().unwrap_or(Utf8Path::new("/"));
+    let name = applet(cli).map_or("emerge", |(name, _)| name);
     let mut variables = Vec::new();
     let mut effective = Vec::new();
-    for (name, policy) in [(EMERGE, Policy::Lenient), (EM, Policy::Strict)] {
-        let Some(spec) = source_of(name, config, roots.config_overlay(), env)? else {
+    for (var, policy) in [(EMERGE, Policy::Lenient), (EM, Policy::Strict)] {
+        let Some(spec) = source_of(var, config, roots.config_overlay(), env)? else {
             continue;
         };
-        let class = classify(name, &spec.value, policy)?;
+        let class = classify_for(var, &spec.value, policy, name)?;
         if class.kept.is_empty() && class.dropped.is_empty() {
             continue;
         }
         effective.extend(class.kept.iter().cloned());
         variables.push(ReportedVar {
-            name,
+            name: var,
             source: spec.source,
             kept: class.kept,
             dropped: class.dropped,
@@ -276,7 +408,13 @@ enum Decision {
     },
 }
 
+#[cfg(test)]
 fn classify(name: &str, raw: &str, policy: Policy) -> Result<Classified, Error> {
+    classify_for(name, raw, policy, "emerge")
+}
+
+/// Classify `raw` for the applet `applet`: a word emerge reads but `applet` does not is dropped.
+fn classify_for(name: &str, raw: &str, policy: Policy, applet: &str) -> Result<Classified, Error> {
     let words = split_words(name, raw)?;
     let words = match policy {
         Policy::Strict => words,
@@ -292,7 +430,8 @@ fn classify(name: &str, raw: &str, policy: Policy) -> Result<Classified, Error> 
             (vec![words[i].clone()], i + 1)
         };
         match decide(name, group, policy)? {
-            Decision::Keep(group) => kept.push(group),
+            Decision::Keep(group) if applet == "emerge" || fits(applet, &group) => kept.push(group),
+            Decision::Keep(group) => dropped.extend(group),
             Decision::Drop(group) => dropped.extend(group),
             Decision::Cancel { flag, group } => {
                 kept = kept
@@ -528,9 +667,31 @@ fn refuse(name: &str, group: &[String], err: Error) -> Error {
     Error::invalid(format!("{name}: {}: {rendered}", group.join(" ")))
 }
 
-fn insert(args: &[OsString], words: &[String]) -> Vec<OsString> {
-    let at = applet_word(args, words).map_or(0, |word| word + 1);
-    splice(args, at, words)
+fn insert(args: &[OsString], words: &[String], name: &str) -> Vec<OsString> {
+    let word = match name {
+        "emerge" => applet_word(args, words),
+        _ => named_word(args, words, name),
+    };
+    splice(args, word.map_or(0, |word| word + 1), words)
+}
+
+/// The word naming the applet `name`: the first one `words` can follow without changing the applet.
+fn named_word(args: &[OsString], words: &[String], name: &str) -> Option<usize> {
+    let kind = |argv: &[OsString]| {
+        Cli::parse_from(argv)
+            .ok()?
+            .applet
+            .map(|applet| std::mem::discriminant(&applet))
+    };
+    let applet = kind(args)?;
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .enumerate()
+        .filter(|(_, arg)| *arg == name)
+        .map(|(i, _)| i)
+        .find(|&i| kind(&splice(args, i + 1, words)) == Some(applet))
+        // A conflict with the command line then fails as the applet's own error.
+        .or_else(|| args.iter().position(|arg| arg == name))
 }
 
 /// The `emerge` word naming the applet, not a flag's value or an atom.
@@ -731,28 +892,36 @@ mod tests {
     fn insert_position_follows_the_first_word() {
         let jobs = ["--jobs=4".to_owned()];
         assert_eq!(
-            show(&insert(&os(&["emerge", "-p", "zlib"]), &jobs)),
+            show(&insert(&os(&["emerge", "-p", "zlib"]), &jobs, "emerge")),
             "emerge --jobs=4 -p zlib"
         );
         assert_eq!(
-            show(&insert(&os(&["-p", "zlib"]), &jobs)),
+            show(&insert(&os(&["-p", "zlib"]), &jobs, "emerge")),
             "--jobs=4 -p zlib"
         );
-        assert_eq!(show(&insert(&os(&["zlib"]), &jobs)), "--jobs=4 zlib");
-        assert_eq!(show(&insert(&os(&["-r"]), &jobs)), "--jobs=4 -r");
+        assert_eq!(
+            show(&insert(&os(&["zlib"]), &jobs, "emerge")),
+            "--jobs=4 zlib"
+        );
+        assert_eq!(show(&insert(&os(&["-r"]), &jobs, "emerge")), "--jobs=4 -r");
         assert_eq!(
             show(&insert(
                 &os(&["--root", "/x", "emerge", "-p", "zlib"]),
-                &jobs
+                &jobs,
+                "emerge"
             )),
             "--root /x emerge --jobs=4 -p zlib"
         );
         assert_eq!(
-            show(&insert(&os(&["--root", "emerge", "emerge", "zlib"]), &jobs)),
+            show(&insert(
+                &os(&["--root", "emerge", "emerge", "zlib"]),
+                &jobs,
+                "emerge"
+            )),
             "--root emerge emerge --jobs=4 zlib"
         );
         assert_eq!(
-            show(&insert(&os(&["zlib", "emerge"]), &jobs)),
+            show(&insert(&os(&["zlib", "emerge"]), &jobs, "emerge")),
             "--jobs=4 zlib emerge"
         );
     }
@@ -798,11 +967,56 @@ mod tests {
         assert!(
             matches!(
                 &validated.0.applet,
-                Some(Applet::Emerge(emerge)) if !emerge.ignore_default_opts
+                Some(Applet::Emerge(emerge)) if !emerge.merge_flags.ignore_default_opts
             ),
             "a copy inside the variable does not mark the run ignored"
         );
         assert_eq!(explanation.effective, ["--jobs=4"]);
+    }
+
+    #[test]
+    fn a_merging_applet_gets_only_the_words_it_reads_alike() {
+        let tuple = "riscv64-unknown-linux-gnu";
+        let dir = tempfile::tempdir().unwrap();
+        let argv = |rest: &[&str]| {
+            let mut args = os(&[
+                "--config-root",
+                dir.path().to_str().unwrap(),
+                "crossdev",
+                "-T",
+                tuple,
+            ]);
+            args.extend(os(rest));
+            args
+        };
+        let args = argv(&["--setup"]);
+        let (validated, explanation) =
+            apply(&args, &env_of(Some("--jobs=17 -C --load-average 32"), None)).unwrap();
+        let Some(Applet::Crossdev(crossdev)) = &validated.0.applet else {
+            panic!("{:?}", validated.0.applet);
+        };
+        assert_eq!(crossdev.merge_flags.jobs, Some(17));
+        assert_eq!(crossdev.merge_flags.load_average, Some(32.0));
+        // Emerge's `-C` unmerges; crossdev's would remove the target.
+        assert!(!crossdev.clean, "emerge's -C reached crossdev");
+        assert_eq!(explanation.variables[0].dropped, ["-C"]);
+
+        let args = argv(&["--setup", "--ignore-default-opts"]);
+        let (validated, _) = apply(&args, &env_of(Some("--jobs=17"), None)).unwrap();
+        assert_eq!(validated.0.merge_flags().jobs, None);
+    }
+
+    #[test]
+    fn a_named_applet_takes_the_words_after_its_name() {
+        let jobs = ["--jobs=4".to_owned()];
+        assert_eq!(
+            show(&insert(
+                &os(&["--root", "crossdev", "crossdev", "-T", "x"]),
+                &jobs,
+                "crossdev"
+            )),
+            "--root crossdev crossdev --jobs=4 -T x"
+        );
     }
 
     #[test]

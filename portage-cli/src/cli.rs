@@ -3738,10 +3738,6 @@ pub struct EmergeArgs {
     #[arg(long, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 
-    /// Skip `EMERGE_DEFAULT_OPTS` and `EM_DEFAULT_OPTS`
-    #[arg(long)]
-    pub ignore_default_opts: bool,
-
     /// Atoms, package sets (`@world`), or ebuild paths to act on
     #[arg(positional, value_name = "ATOM")]
     pub atoms: Vec<String>,

@@ -37,6 +37,12 @@ reads `EMERGE_DEFAULT_OPTS`, then `EM_DEFAULT_OPTS`, then the command line.
 A scalar flag's last value wins, so the command line overrides both.
 `--ignore-default-opts` skips the two variables.
 
+The applets that merge read them too: `crossdev`, `toolchain`, `stages`, `setup`, `revdep` and
+`depclean`. Each takes only the words that mean the same to it as to emerge, such as `--jobs`,
+`--load-average`, `--ask` or `--with-bdeps`. A word emerge reads differently, such as its `-C`
+(unmerge, where `em crossdev -C` removes a target), or one the applet lacks, is dropped and listed as
+ignored.
+
 Each variable comes from the environment, or else from `make.conf` and
 `make.conf.d` under the config root. A prefix or local overlay's `make.conf`
 and `make.conf.d` are read after that and override it, including under

@@ -453,6 +453,7 @@ pub fn merge_resume_flags(saved: &MergeFlags, cli: &MergeFlags) -> MergeFlags {
         eta: cli.eta,
         tree: cli.tree,
         json: cli.json,
+        ignore_default_opts: cli.ignore_default_opts,
         // Job shape — saved base, CLI can only add.
         update: saved.update || cli.update,
         autounmask_write: saved.autounmask_write || cli.autounmask_write,

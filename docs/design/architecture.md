@@ -302,12 +302,17 @@ autounmask write UX, and the `em query depgraph` command shape.
 
 ## Default options
 
-`parse_cli_or_exit` parses the argv, and for an emerge run that did not pass
-`--ignore-default-opts` it parses again. The second argv is the kept words of
+`parse_cli_or_exit` parses the argv, and for an emerge run or another merging applet that did not
+pass `--ignore-default-opts` it parses again. The second argv is the kept words of
 `EMERGE_DEFAULT_OPTS`, then `EM_DEFAULT_OPTS`, then the original words. The
 words are inserted after the `emerge` applet word, wherever parent flags put
 it, and at the front otherwise, so a leading flag still routes into emerge. `Cli::color`, quiet, verbose and
 pretend are read from that second parse.
+
+For another applet the words go after its name. A group is kept only if, parsed for emerge, it changes
+nothing outside the option groups that applet also flattens (`MergeFlags`, `DepgraphFlags`, the
+activity, verbosity, arch, repo, pretend, VDB and root groups, as each has them), and the applet parses it
+into the same values. Otherwise it is dropped, so emerge's `-C` never becomes `em crossdev -C`.
 
 Words come from `winnow_args::response::split` (whitespace, quotes, one-byte
 escapes). `@file` is not read. An unclosed quote, a trailing `\`, or non-UTF-8

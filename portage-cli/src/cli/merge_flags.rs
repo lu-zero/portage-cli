@@ -118,6 +118,10 @@ pub struct MergeFlags {
     #[arg(short = 'l', long, value_name = "LOAD")]
     pub load_average: Option<f64>,
 
+    /// Skip `EMERGE_DEFAULT_OPTS` and `EM_DEFAULT_OPTS`
+    #[arg(long)]
+    pub ignore_default_opts: bool,
+
     /// Continue merging as much as possible even if some packages fail
     #[arg(
         long,
