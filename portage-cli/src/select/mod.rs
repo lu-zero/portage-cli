@@ -68,6 +68,37 @@ pub fn activate_pkgconf(roots: &Roots, target: &str, is_native: bool) -> Result<
     pkgconf::activate_pkgconf(roots, target, is_native)
 }
 
+/// What the `activate_*` calls left for the foreign `target` in `roots`' root, present on disk
+///
+/// The `<target>-*` links in `usr/bin`, the binutils link directory and the binutils and gcc
+/// selections. Shared files (`05binutils`, the pkg-config backend script) are not included.
+pub fn activation_paths(roots: &Roots, target: &str) -> Vec<Utf8PathBuf> {
+    let eprefix = env_d::eprefix(roots);
+    let prefix = format!("{target}-");
+    let mut paths: Vec<Utf8PathBuf> = std::fs::read_dir(eprefix.join("usr/bin"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(&prefix))
+        })
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_symlink()))
+        .filter_map(|e| Utf8PathBuf::from_path_buf(e.path()).ok())
+        .collect();
+    paths.push(eprefix.join("usr/libexec/gcc").join(target));
+    paths.extend(env_d::selection_paths::<binutils::BinutilsProfileType>(
+        roots, target,
+    ));
+    paths.extend(env_d::selection_paths::<compiler::GccProfileType>(
+        roots, target,
+    ));
+    paths.retain(|p| p.symlink_metadata().is_ok());
+    paths.sort();
+    paths
+}
+
 /// Dispatch `em select <module> <action>`
 pub async fn run(command: &SelectCommand, globals: &Cli) -> Result<()> {
     match command {
@@ -187,6 +218,54 @@ mod tests {
             let rest = l.strip_prefix("CHOST=")?;
             Some(rest.trim().trim_matches(['"', '\'']).to_string())
         })
+    }
+
+    #[test]
+    fn activation_paths_are_the_targets_links_and_selections_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let roots = Roots::default().with_config_overlay(Some(base.join("etc/portage")));
+        let t = "riscv64-unknown-linux-gnu";
+        let bin = base.join("usr/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for (name, link) in [
+            (format!("{t}-gcc"), true),
+            (format!("{t}-pkgfile"), false),
+            ("aarch64-unknown-linux-musl-gcc".into(), true),
+        ] {
+            let path = bin.join(name);
+            match link {
+                true => std::os::unix::fs::symlink("elsewhere", &path).unwrap(),
+                false => std::fs::write(&path, "").unwrap(),
+            }
+        }
+        std::fs::create_dir_all(base.join("usr/libexec/gcc").join(t)).unwrap();
+        let env_d = base.join("etc/env.d");
+        for file in [
+            format!("binutils/config-{t}"),
+            format!("gcc/config-{t}"),
+            format!("04gcc-{t}"),
+            "05binutils".into(),
+        ] {
+            let path = env_d.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+
+        let found: Vec<String> = activation_paths(&roots, t)
+            .iter()
+            .map(|p| p.strip_prefix(base).unwrap().to_string())
+            .collect();
+        assert_eq!(
+            found,
+            [
+                format!("etc/env.d/04gcc-{t}"),
+                format!("etc/env.d/binutils/config-{t}"),
+                format!("etc/env.d/gcc/config-{t}"),
+                format!("usr/bin/{t}-gcc"),
+                format!("usr/libexec/gcc/{t}"),
+            ]
+        );
     }
 
     // Under `--prefix`, the prefix's own make.conf overlay never sets

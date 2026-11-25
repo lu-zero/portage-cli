@@ -58,6 +58,10 @@ em crossdev [OPTIONS]
 | `--print-spec` | print the target's built-in sysroot spec as TOML (toolchains, libc, profile, who builds what) and exit — no writes |
 | `--init-target` | lay down the overlay alias + sysroot `make.conf`/`make.profile`, no building |
 | `--setup` | bootstrap the full cross toolchain (binutils → headers → gcc-stage1 → libc → gcc-stage2) into the sysroot; implies `--init-target` |
+| `-r` / `--resume` | with `--setup`, skip the steps an earlier run completed |
+| `--stage N` | bootstrap only through crossdev's stage `N` (0 binutils, 1 a bare C compiler, 2 kernel headers, 3 libc, 4 the full compiler and the extras); implies `--setup` |
+| `--ex-only` | build only the extras onto a target whose bootstrap is complete; implies `--setup` |
+| `-C` / `--clean` | uninstall the target: its `cross-<tuple>` packages, toolchain links, host config and sysroot |
 | `-L` / `--llvm` | use the LLVM/Clang model (`cross_llvm-<tuple>`: host clang cross-targets directly, no per-target compiler build) instead of GCC |
 | `--ex-pkg CATEGORY/PN` | build an extra package onto the target (repeatable); see [Extra packages](#extra-packages-ex-pkg---ex-gdb) below |
 | `--ex-gdb` | shorthand for `--ex-pkg dev-debug/gdb` |
@@ -168,6 +172,40 @@ first with `-p`:
 ```
 em crossdev -p --target riscv64-unknown-linux-gnu --setup
 ```
+
+### Build part of a toolchain, then the rest
+
+`--stage N` stops after crossdev's stage `N`; `--setup -r` later picks up where it stopped. The
+stages map onto em's steps (em builds gcc-stage1 before the headers, as crossdev does):
+
+| stage | gcc model | LLVM model |
+|---|---|---|
+| 0 | baselayout, binutils | baselayout, clang wrappers |
+| 1 | gcc-stage1 | kernel and libc headers, compiler-rt |
+| 2 | kernel headers | — |
+| 3 | libc | libc |
+| 4 | gcc-stage2, then the extras | libunwind, libc++abi, libc++ |
+
+```
+em crossdev --target riscv64-unknown-linux-gnu --stage 1
+em crossdev --target riscv64-unknown-linux-gnu --setup -r
+```
+
+`--ex-pkg` with a stage below 4 is an error. `--ex-only` builds just the extras, and refuses until
+the setup record shows the rest complete.
+
+### Uninstall a target
+
+```
+em crossdev -p --target riscv64-unknown-linux-gnu -C
+em crossdev --target riscv64-unknown-linux-gnu -C
+```
+
+Unmerges every installed `cross-<tuple>` package, then removes the `<tuple>-*` links and
+`env.d` selections, the alias `repos.conf`, the category's `package.*` and `env` files, the
+clang cross config, `usr/lib/gcc/<tuple>` and the whole sysroot. `-p` lists it and writes
+nothing; `-a` asks once. Files shared with other toolchains (`05binutils`, the pkg-config
+backend script) stay.
 
 ### Unprivileged, under `--prefix`
 

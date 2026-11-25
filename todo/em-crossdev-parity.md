@@ -33,8 +33,8 @@ source is GPL and this tree is MIT.
 
 | Item | Severity | Status | Detail |
 |---|---|---|---|
-| Partial stages `-s0..-s4`, `--ex-only` | high | 🟡 planned | `--stage N`; [[em-crossdev-stages-and-clean]] |
-| `-C/--clean`: uninstall a target's config, overlay, wrappers and sysroot | high | 🟡 planned | [[em-crossdev-stages-and-clean]] |
+| Partial stages `-s0..-s4`, `--ex-only` | high | ✅ 2026-11-25 | `--stage N`; [[em-crossdev-stages-and-clean]] |
+| `-C/--clean`: uninstall a target's config, overlay, wrappers and sysroot | high | ✅ 2026-11-25 | `-T <tuple> -C`; [[em-crossdev-stages-and-clean]] |
 | Component versions `--b/--g/--k/--l` and LLVM equivalents with depend atoms; `-S/--stable` | high | 🟡 partly | spec pins exist, no CLI ranges or stable selector; [[crossdev-target]], [[cross-sysroot-spec]] |
 | Per-component `--[bdgkl]cat/pkg/env` overrides | medium | 🔴 | component names are fixed by the tuple |
 | `--ex-gcc` extra frontends (ada/d/fortran/...) | medium | 🔴 | only `--ex-gdb` and `--ex-pkg` |

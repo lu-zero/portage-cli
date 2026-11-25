@@ -155,6 +155,9 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
         }
     };
 
+    if args.clean {
+        return clean(&target, globals).await;
+    }
     let derived = own_profile.then(|| DerivedProfile::of(&spec)).transpose()?;
 
     if args.show_target_cfg {
@@ -205,6 +208,84 @@ fn ex_pkg_atoms(args: &CrossdevArgs) -> Result<Vec<Cpn>> {
         atoms.push(Cpn::new("dev-debug", "gdb"));
     }
     Ok(atoms)
+}
+
+/// `em crossdev -T <tuple> -C`: unmerge the target's `cross-<tuple>` packages, then remove the
+/// toolchain links, host config, `usr/lib/gcc/<tuple>` and the sysroot
+///
+/// `-p` lists what goes; `-a` asks once for all of it.
+async fn clean(target: &CrossTarget, globals: &Cli) -> Result<()> {
+    reject_same_arch_target(&target.tuple, &host_chost())?;
+    let roots = globals.outer_roots();
+    let root = roots.merge_root().to_owned();
+    let category = target.category();
+    let vdb_dir = root.join("var/db/pkg");
+    let vdb = Vdb::open(&vdb_dir).with_context(|| format!("opening {vdb_dir}"))?;
+    let packages: Vec<_> = vdb
+        .packages()
+        .into_iter()
+        .filter(|pkg| pkg.category() == category)
+        .collect();
+    let mut paths = HostConfigPaths::of(target, globals).all();
+    paths.extend([
+        sysroot(target, globals),
+        root.join("usr/lib/gcc").join(&target.tuple),
+    ]);
+    paths.retain(|p| p.symlink_metadata().is_ok());
+    let links = globals
+        .outer_roots()
+        .with_own_config_root_if_self_contained();
+
+    println!("\n>>> Uninstalling cross target {}:\n", target.tuple);
+    for pkg in &packages {
+        println!(" {pkg}");
+    }
+    for path in &paths {
+        println!(" {path}");
+    }
+    println!(
+        " the {}-* links in usr/bin and their env.d selections\n",
+        target.tuple
+    );
+    if globals.pretend() {
+        return Ok(());
+    }
+    if globals.merge_flags().ask && !crate::merge::confirm_action("uninstall this cross target")? {
+        println!(">>> Quitting.");
+        return Ok(());
+    }
+
+    if !packages.is_empty() {
+        let exclude = packages.iter().map(|p| p.cpv().clone()).collect();
+        crate::emerge::execute_unmerge_batch(
+            globals,
+            &roots,
+            &vdb,
+            &packages,
+            &exclude,
+            "unmerge",
+            "Unmerging",
+        )
+        .await?;
+    }
+    paths.extend(crate::select::activation_paths(&links, &target.tuple));
+    paths.push(vdb_dir.join(&category));
+    for path in &paths {
+        remove_path(path)?;
+    }
+    println!(">>> cross target {} uninstalled", target.tuple);
+    Ok(())
+}
+
+/// Remove `path`, a whole directory or a file or link; already gone is fine
+fn remove_path(path: &Utf8Path) -> Result<()> {
+    let result = match path.symlink_metadata() {
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
+        Ok(_) => std::fs::remove_file(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => Err(e),
+    };
+    result.with_context(|| format!("removing {path}"))
 }
 
 /// The last stage `--stage` builds, checked against the extras named on the command line
@@ -2376,6 +2457,19 @@ struct HostConfigPaths {
 }
 
 impl HostConfigPaths {
+    /// Every path, for `-C` to remove
+    fn all(self) -> Vec<Utf8PathBuf> {
+        vec![
+            self.alias,
+            self.env_dir,
+            self.package_env,
+            self.accept_keywords,
+            self.mask,
+            self.unmask,
+            self.clang_cfg,
+        ]
+    }
+
     /// The paths for `target`: the setup root's `repos.conf`, and the config overlay when there
     /// is one (`--prefix`/`--local`), else the merge root's `etc/portage`
     fn of(target: &CrossTarget, globals: &Cli) -> Self {
@@ -2533,6 +2627,7 @@ mod tests {
             resume: false,
             stage: None,
             ex_only: false,
+            clean: false,
             ex_pkg: Vec::new(),
             ex_gdb: false,
             depgraph_flags: crate::cli::DepgraphFlags::default(),
@@ -2708,6 +2803,65 @@ mod tests {
         };
         let result = run(args, &cli).await;
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn clean_removes_what_the_target_left_and_nothing_shared() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = Utf8Path::from_path(dir.path()).unwrap();
+        let t = "riscv64-unknown-linux-gnu";
+        let cat = format!("cross-{t}");
+        let mine = [
+            format!("etc/portage/repos.conf/{OVERLAY_NAME}.{t}.conf"),
+            format!("etc/portage/env/{cat}/gcc.conf"),
+            format!("etc/portage/package.env/{cat}"),
+            format!("etc/portage/package.accept_keywords/{cat}"),
+            format!("etc/env.d/gcc/config-{t}"),
+            format!("usr/{t}/etc/portage/make.conf"),
+            format!("usr/lib/gcc/{t}/16/libgcc.a"),
+            format!("var/db/pkg/{cat}/.keep"),
+        ];
+        let shared = [
+            "etc/portage/package.env/cross-aarch64-unknown-linux-musl".to_string(),
+            "etc/env.d/05binutils".into(),
+            "usr/bin/pkgfile".into(),
+        ];
+        for file in mine.iter().chain(&shared) {
+            let path = prefix.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let link = prefix.join(format!("usr/bin/{t}-gcc"));
+        std::os::unix::fs::symlink("gone", &link).unwrap();
+
+        let run_clean = |extra: &'static str| {
+            let mut argv = vec!["--prefix", prefix.as_str(), "--target", t, "-C"];
+            argv.extend(Some(extra).filter(|e| !e.is_empty()));
+            parse_crossdev(&argv)
+        };
+        let cli = run_clean("-p");
+        let Some(crate::cli::Applet::Crossdev(args)) = &cli.applet else {
+            panic!("expected Applet::Crossdev");
+        };
+        run(args, &cli).await.unwrap();
+        assert!(
+            mine.iter().all(|f| prefix.join(f).exists()),
+            "-p removed something"
+        );
+
+        let cli = run_clean("");
+        let Some(crate::cli::Applet::Crossdev(args)) = &cli.applet else {
+            panic!("expected Applet::Crossdev");
+        };
+        run(args, &cli).await.unwrap();
+        for file in &mine {
+            assert!(!prefix.join(file).exists(), "{file} left behind");
+        }
+        assert!(link.symlink_metadata().is_err());
+        assert!(!prefix.join("usr").join(t).exists());
+        for file in &shared {
+            assert!(prefix.join(file).exists(), "{file} removed");
+        }
     }
 
     #[test]

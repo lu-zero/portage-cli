@@ -106,6 +106,16 @@ fn global_env_path<T: EnvDProfile>(roots: &Roots, target: &str) -> Utf8PathBuf {
         .join(format!("env.d/{}", file_name))
 }
 
+/// The files selecting a profile for `target`: its `config-<target>`, and the global env file
+/// when that one is per target (a shared one belongs to the native toolchain)
+pub(super) fn selection_paths<T: EnvDProfile>(roots: &Roots, target: &str) -> Vec<Utf8PathBuf> {
+    let mut paths = vec![current_config_path::<T>(roots, target)];
+    if T::global_env_uses_target() {
+        paths.push(global_env_path::<T>(roots, target));
+    }
+    paths
+}
+
 /// `CHOST` for the root being operated on — root-aware the same way
 /// [`super::get_chost`] is, but taking [`Roots`] directly since crossdev's
 /// entry points hand this `Cli::base_roots`, not a `&Cli`. Reading the

@@ -1382,7 +1382,7 @@ pub(crate) async fn installed_phase_shell(
 ///
 /// No `--pretend`/`--ask` — callers that already confirmed (blocker unmerge
 /// during a real merge) use this directly.
-async fn execute_unmerge_batch(
+pub(crate) async fn execute_unmerge_batch(
     cli: &cli::Cli,
     roots: &portage_resolve::Roots,
     vdb: &portage_vdb::Vdb,

@@ -1,6 +1,6 @@
 # `em crossdev`: partial stages (`--stage N`, `--ex-only`) and `-C/--clean`
 
-Status: 🟡 `--stage`/`--ex-only` landed and live-verified 2026-11-25; `-C` next. Two high rows of [[em-crossdev-parity]].
+Status: ✅ landed and live-verified 2026-11-25. Open: the two findings below. Two high rows of [[em-crossdev-parity]].
 Consumer: crossdev-stages' em backend (`sandbox setup --em`), which today can only run
 the whole `--setup` and has no way to drop a target.
 
@@ -84,6 +84,10 @@ Native `toolchain --setup` gets no flag.
   built (and `--ex-only` there has nothing to run). Not fixed yet.
 - The milestone record is keyed on the spec without its extras, so naming a new extra keeps
   the base steps done.
+- Blocker victims (`unmerge_blocker_victim(s)`) open the VDB and unmerge under `cli.roots()`,
+  which `-T` points at the sysroot even when the step merges into the outer root. Unchanged by
+  the unmerge-core `Roots` parameter (`2c07f04e`); a `cross-*` blocker would look in the wrong
+  VDB. Not hit yet.
 
 ## Tests
 
@@ -101,6 +105,8 @@ Native `toolchain --setup` gets no flag.
 1. ✅ `Level`, `--stage`, `--ex-only`. Live in a fresh crossdev-stages sandbox (k1 spec):
    `--stage 1` built binutils + gcc-stage1 only; `--setup -r` skipped those 3 and finished;
    `--ex-only` skipped the 6 base steps and reinstalled the extra; `--ex-only -r` skipped all 7.
-2. `host_config_paths` refactor, no behaviour change.
-3. `select::deactivate` and `-C`.
-4. Docs: `docs/user/crossdev.md`, applet table; mark the two parity rows.
+2. ✅ `HostConfigPaths` (`f7401c5c`); the unmerge core takes its `Roots` (`2c07f04e`).
+3. ✅ `select::activation_paths` and `-C`. Live in the same sandbox: `-C -p` changed nothing;
+   `-C` unmerged the 5 `cross-*` packages and left none of the 48 target paths; the native gcc
+   and `05binutils` were untouched; a fresh `--setup` then rebuilt the target (15 min).
+4. ✅ Docs and parity rows.

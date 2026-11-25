@@ -19,6 +19,13 @@ em crossdev [OPTIONS]
 * `--init-target` — Lay down the overlay + sysroot config without building anything
 * `--setup` — Bootstrap the cross toolchain into the prefix (`/usr/<tuple>`): the full intertwined sequence (binutils → headers → gcc-stage1 → libc → gcc-stage2). Implies `--init-target`.
 * `-r, --resume` — With `--setup`, skip the bootstrap steps an earlier run completed: steps recorded with the same spec whose packages are still installed. The first step that does not hold runs again, and every step after it.
+* `--stage <N>` — Bootstrap only through crossdev stage `N`: 0 binutils, 1 a bare C compiler, 2 kernel headers, 3 the C library, 4 the full compiler and the extras (the default)
+
+  Implies `--setup`; a later `--setup -r` continues where it stopped.
+* `--ex-only` — Build only the `--ex-pkg`/`--ex-gdb` packages, onto a target whose bootstrap is complete
+
+  Implies `--setup`.
+* `-C, --clean` — Uninstall the target: its `cross-<tuple>` packages, toolchain links, host config and sysroot. Effect: destructive (may delete or irreversibly overwrite).
 * `--show-target-cfg` — Print the derived target configuration and exit (no writes)
 * `--print-spec` — Print the target's built-in sysroot spec as TOML and exit (no writes)
 * `--ex-pkg <CATEGORY/PN>...` — Build an extra package onto the established cross target (may be given multiple times)

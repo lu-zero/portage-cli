@@ -3504,6 +3504,24 @@ pub struct CrossdevArgs {
     #[arg(long)]
     pub ex_only: bool,
 
+    /// Uninstall the target: its `cross-<tuple>` packages, toolchain links, host config and
+    /// sysroot
+    #[arg(
+        short = 'C',
+        long,
+        effect = "destructive",
+        conflicts(
+            "init_target",
+            "setup",
+            "resume",
+            "stage",
+            "ex_only",
+            "show_target_cfg",
+            "print_spec"
+        )
+    )]
+    pub clean: bool,
+
     /// Print the derived target configuration and exit (no writes)
     #[arg(long)]
     pub show_target_cfg: bool,

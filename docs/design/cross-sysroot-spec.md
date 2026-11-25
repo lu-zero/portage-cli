@@ -131,6 +131,12 @@ sysroot steps through `SysrootOverride`; and the host's cross-category keywords,
 `--setup -r` skips steps from the start while the record holds: same spec, same step, those packages still
 installed. The first step that does not hold runs again, and every step after it, so a changed spec rebuilds from
 the start. It resumes, it does not upgrade: a newer version in the tree does not invalidate a recorded step.
+The record is keyed on the spec without its `extra` list; extra steps are checked one by one, so a new extra
+leaves the toolchain done.
+
+Each step belongs to one of crossdev's stages (`stages::Level`). `--stage N` runs the plan up to stage `N`,
+and `--ex-only` runs only the extras once the record shows the rest complete; both are per-run choices, not
+spec keys.
 
 ## Still open
 
