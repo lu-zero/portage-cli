@@ -63,7 +63,7 @@ file, version atoms and `package.env` per toolchain open).
 
 | Item | Status | Detail |
 |------|--------|--------|
-| Spec: file `--target`, derived profile, pins, exceptions, mixed gcc+clang (clang-main riscv64 stage1 live ✅ 2026-10-22); `--setup -r` resumes from milestones (2026-10-22); cross/target gcc snapshot alignment open | 🟡 | [[cross-sysroot-spec]] |
+| Spec: file `--target`, derived profile, pins, exceptions, mixed gcc+clang (clang-main riscv64 stage1 live ✅ 2026-10-22); built-in via `em crossdev -L` on glibc, setup/`-r`/`-C` live ✅ 2026-11-25; `--setup -r` resumes from milestones (2026-10-22); cross/target gcc snapshot alignment open | 🟡 | [[cross-sysroot-spec]] |
 | R4: baselayout before any `acct-*` in a sysroot populate — em's bootstrap steps already order it; nothing to change (decided 2026-10-21) | ✅ | [[crossdev-stages-backend-api]] |
 | R1: board-root merges and `em stages --target T --root R` verified 2026-10-22. R8: `em portageq envvar` done 2026-10-22 | ✅ | [[crossdev-stages-backend-api]], [[portageq-workalike-plan]] |
 | Execution shape: decided 2026-10-25 — first crossdev-stages runs the em binary inside its own hakoniwa box (closure spike: fine single-threaded, breaks tokio's signal driver from a threaded caller); `em stages` for R3 | 🟡 decided | [[crossdev-stages-backend-api]] "Direction" |
