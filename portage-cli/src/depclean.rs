@@ -279,8 +279,16 @@ pub async fn run_with_targets(
 
     let exclude: HashSet<Cpv> = cleanlist.iter().map(|p| p.cpv().clone()).collect();
 
-    crate::emerge::run_unmerge_batch(cli, &vdb, &cleanlist, &exclude, "depclean", "Depcleaning")
-        .await
+    crate::emerge::run_unmerge_batch(
+        cli,
+        &cli.roots(),
+        &vdb,
+        &cleanlist,
+        &exclude,
+        "depclean",
+        "Depcleaning",
+    )
+    .await
 }
 
 #[cfg(test)]

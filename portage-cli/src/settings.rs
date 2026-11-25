@@ -146,7 +146,12 @@ async fn evaluate(key: &Key, repo: &Repository) -> Result<Option<Settings>> {
 
 /// The settings of the config root `cli` selects; `None` when it has no profile
 pub(crate) async fn load(cli: &Cli) -> Result<Option<Arc<Settings>>> {
-    cached(Key::of(&cli.roots()), &crate::crossdev::main_repo(cli)?).await
+    load_at(cli, &cli.roots()).await
+}
+
+/// [`load`] for `roots` instead of the invocation's own
+pub(crate) async fn load_at(cli: &Cli, roots: &Roots) -> Result<Option<Arc<Settings>>> {
+    cached(Key::of(roots), &crate::crossdev::main_repo(cli)?).await
 }
 
 /// Variables a build shell takes from the settings, because the profile and make.conf it

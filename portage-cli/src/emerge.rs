@@ -1291,7 +1291,7 @@ async fn remove_matched_packages(
     }
     println!();
 
-    run_unmerge_batch(cli, &vdb, &matched, &exclude, verb, &gerund).await
+    run_unmerge_batch(cli, &cli.roots(), &vdb, &matched, &exclude, verb, &gerund).await
 }
 
 /// The removal core shared by `-C`/`-P` ([`remove_matched_packages`]) and
@@ -1300,22 +1300,20 @@ async fn remove_matched_packages(
 /// registry, the per-package removal loop, and the final `env-update`.
 /// `verb`/`gerund` name the action in user-facing output — `gerund` verbatim
 /// in the per-package progress line, lower-cased in the no-profile warning.
+///
+/// `roots` is where the packages are installed: `cli.roots()` for an ordinary removal, the
+/// outer root for a cross target's host-side packages. BDEPEND-class tooling stays on
+/// `cli.host_roots()`.
 pub(crate) async fn run_unmerge_batch(
     cli: &cli::Cli,
+    roots: &portage_resolve::Roots,
     vdb: &portage_vdb::Vdb,
     packages: &[portage_vdb::InstalledPackage],
     exclude: &std::collections::HashSet<portage_atom::Cpv>,
     verb: &str,
     gerund: &str,
 ) -> Result<()> {
-    // Same root/shell setup `dispatch.rs`'s `Applet::Ebuild` arm uses:
-    // `roots()` for config/sysroot/eprefix (this *is* a merge-target
-    // operation, unlike `select`'s config-root-only concerns — see
-    // `select-target-flag-collision-fix` memory for why those differ), and
-    // the separate `host_roots()` for BDEPEND-class tooling, never `roots()`'s
-    // own value. Computed before the `--pretend` return too, since `-p`
-    // also needs `root` to preview any preserve-libs findings.
-    let roots = cli.roots();
+    // Before the `--pretend` return: `-p` previews preserve-libs findings under it too.
     let root = roots.merge_root().to_owned();
 
     if cli.pretend() {
@@ -1339,15 +1337,15 @@ pub(crate) async fn run_unmerge_batch(
         println!(">>> Quitting.");
         return Ok(());
     }
-    execute_unmerge_batch(cli, vdb, packages, exclude, verb, gerund).await
+    execute_unmerge_batch(cli, roots, vdb, packages, exclude, verb, gerund).await
 }
 
 /// A shell with the profile and settings loaded, for phases of installed packages.
 pub(crate) async fn installed_phase_shell(
     cli: &cli::Cli,
+    roots: &portage_resolve::Roots,
     doing: &str,
 ) -> Result<portage_repo::EbuildShell> {
-    let roots = cli.roots();
     let broot = cli.host_roots();
     let repo = crate::crossdev::main_repo(cli)?;
     let mut shell = repo.shell().await.context("creating shell")?;
@@ -1368,7 +1366,7 @@ pub(crate) async fn installed_phase_shell(
             doing.to_lowercase()
         );
     }
-    let settings = crate::settings::load(cli).await?;
+    let settings = crate::settings::load_at(cli, roots).await?;
     if let Some(settings) = &settings {
         crate::settings::seed_build_shell(&mut shell, settings).await?;
     }
@@ -1386,18 +1384,18 @@ pub(crate) async fn installed_phase_shell(
 /// during a real merge) use this directly.
 async fn execute_unmerge_batch(
     cli: &cli::Cli,
+    roots: &portage_resolve::Roots,
     vdb: &portage_vdb::Vdb,
     packages: &[portage_vdb::InstalledPackage],
     exclude: &std::collections::HashSet<portage_atom::Cpv>,
     verb: &str,
     gerund: &str,
 ) -> Result<()> {
-    let roots = cli.roots();
     let root = roots.merge_root().to_owned();
     // Scratch trees for pkg_prerm/postrm land where builds would
     // (`emerge_atoms_inner`'s relocation rule).
     let work_base = ebuild::default_work_base(roots.relocate_root());
-    let mut shell = installed_phase_shell(cli, gerund).await?;
+    let mut shell = installed_phase_shell(cli, roots, gerund).await?;
 
     // One shared graph + registry for the whole batch, not rebuilt per
     // package — see `preserve_libs::build_link_graph`'s doc.
@@ -1497,7 +1495,16 @@ async fn unmerge_blocker_victims(
     }
     let exclude: std::collections::HashSet<portage_atom::Cpv> =
         packages.iter().map(|p| p.cpv().clone()).collect();
-    execute_unmerge_batch(cli, &vdb, &packages, &exclude, "unmerge", "Unmerging").await
+    execute_unmerge_batch(
+        cli,
+        &cli.roots(),
+        &vdb,
+        &packages,
+        &exclude,
+        "unmerge",
+        "Unmerging",
+    )
+    .await
 }
 
 /// Unmerge one blocker victim at its computed position in the merge order
@@ -1514,7 +1521,16 @@ pub(crate) async fn unmerge_blocker_victim(cli: &cli::Cli, cpv: &portage_atom::C
     }
     let exclude: std::collections::HashSet<portage_atom::Cpv> =
         packages.iter().map(|p| p.cpv().clone()).collect();
-    execute_unmerge_batch(cli, &vdb, &packages, &exclude, "unmerge", "Unmerging").await
+    execute_unmerge_batch(
+        cli,
+        &cli.roots(),
+        &vdb,
+        &packages,
+        &exclude,
+        "unmerge",
+        "Unmerging",
+    )
+    .await
 }
 
 /// Resolve classified unmerge CPVs against the VDB. Missing entries are

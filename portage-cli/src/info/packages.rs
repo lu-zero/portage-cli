@@ -312,7 +312,8 @@ pub(super) async fn run_phase(cli: &Cli, cpv: &str) -> Result<()> {
     else {
         bail!("{cpv} is not installed");
     };
-    let mut shell = crate::emerge::installed_phase_shell(cli, "running pkg_info").await?;
+    let mut shell =
+        crate::emerge::installed_phase_shell(cli, &cli.roots(), "running pkg_info").await?;
     let roots = cli.roots();
     crate::ebuild::run_installed_info(
         &mut shell,
