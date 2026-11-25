@@ -63,8 +63,7 @@ em crossdev [OPTIONS]
 | `--ex-only` | build only the extras onto a target whose bootstrap is complete; implies `--setup` |
 | `-C` / `--clean` | uninstall the target: its `cross-<tuple>` packages, toolchain links, host config and sysroot |
 | `-L` / `--llvm` | use the LLVM/Clang model (`cross_llvm-<tuple>`: host clang cross-targets directly, no per-target compiler build) instead of GCC |
-| `--ex-pkg CATEGORY/PN` | build an extra package onto the target (repeatable); see [Extra packages](#extra-packages-ex-pkg---ex-gdb) below |
-| `--ex-gdb` | shorthand for `--ex-pkg dev-debug/gdb` |
+| `--ex-pkg CATEGORY/PN` | build an extra package onto the target (repeatable); see [Extra packages](#extra-packages-ex-pkg) below |
 
 Plus `-p`/`--pretend` (preview, write nothing), `-a`/`--ask` (preview and
 confirm before writing), `--prefix DIR`/`--local` (where the target lands —
@@ -322,7 +321,7 @@ resolving ordinary (non-cross-category) packages against the target sysroot
 — a different concern from naming a cross-category atom directly. Don't mix
 them for this use case.
 
-### Extra packages (`--ex-pkg`, `--ex-gdb`)
+### Extra packages (`--ex-pkg`)
 
 The base toolchain set (binutils/headers/gcc/libc) is fixed, but you can add
 more host-arch tools onto an established target — crossdev's own "Extra
@@ -338,7 +337,7 @@ bound it, e.g. `"<sys-devel/clang-crossdev-wrappers-24"`.
 
 ```
 # Build a cross-gdb (dev-debug/gdb) alongside the toolchain:
-em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-gdb
+em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-pkg dev-debug/gdb
 em crossdev --target riscv64-unknown-linux-gnu --setup
 
 # The Rust standard library for this target (sys-devel/rust-std — its own
@@ -348,14 +347,14 @@ em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-pkg sys-devel/
 em crossdev --target riscv64-unknown-linux-gnu --setup
 
 # Multiple extras, repeatable:
-em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-gdb --ex-pkg sys-devel/rust-std
+em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-pkg dev-debug/gdb --ex-pkg sys-devel/rust-std
 em crossdev --target riscv64-unknown-linux-gnu --setup
 ```
 
 Pick a genuine standalone host-arch tool for `--ex-pkg` — something that
 isn't already an ordinary transitive dependency of anything in the
 toolchain's own build closure (`sys-devel/rust-std`, like `dev-debug/gdb`,
-is built purpose-made for this — real crossdev's own `--ex-gdb` precedent).
+is built purpose-made for this).
 A widely-depended-on package (e.g. `dev-vcs/git`) is a poor choice: it's
 liable to already be pulled in transitively by something else in the
 closure (e.g. a doc-build BDEPEND), which only creates confusion about what
@@ -392,14 +391,11 @@ model. The real tool's wider option surface is not implemented:
 
 **Missing options:**
 
-- Stage selection `-s0..-s4` and `--ex-only`: em has only config-only
-  `--init-target` or the full `--setup` sequence.
-- `-C/--clean` to uninstall a target's config, overlay, wrappers and sysroot.
 - Per-component version selectors (`--b/--g/--k/--l`, LLVM equivalents) with
   depend atoms, and `-S/--stable`. A [spec file](#spec-files) can pin exact
   versions, but there is no CLI range or stable selector.
-- Per-component `--[bdgkl]cat/pkg/env` overrides and `--ex-gcc` extra
-  frontends.
+- Per-component `--[bdgkl]cat/pkg/env` overrides, `--ex-gcc` extra frontends
+  and `--ex-gdb` (use `--ex-pkg dev-debug/gdb`).
 - `-A/--abis`, `--host-abi`, `-f/--force`, `-P/--portage` and
   `--show-fail-log`. Note that `-f` means `--fetchonly` in em, so real
   crossdev command lines do not carry over.
@@ -433,7 +429,7 @@ Reference: [`crossdev`](./cli/crossdev.md).
   using `--target T` for ordinary builds — otherwise the sysroot has no
   `make.conf`/`repos.conf` and nothing resolves.
 - **Extras aren't sticky.** If you want `dev-debug/gdb` to keep resolving,
-  pass `--ex-gdb` every time you re-run `--init-target`/`--setup` — it's not
+  pass `--ex-pkg dev-debug/gdb` every time you re-run `--init-target`/`--setup` — it's not
   remembered from a previous run, on purpose (matches real crossdev).
 - **`cross-<CTARGET>/gcc` and `sys-devel/gcc` are different packages that can
   drift.** The former is the host-side cross-compiler built once by

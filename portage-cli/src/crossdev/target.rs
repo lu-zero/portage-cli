@@ -158,12 +158,7 @@ impl CrossTarget {
     /// table for package.env / keywords — so adding a package here without
     /// declaring its arch there trips `planned_packages_are_all_declared`.
     ///
-    /// `dev-debug/gdb` is deliberately NOT here: real crossdev only builds a
-    /// cross gdb when `--ex-gdb` is explicitly passed, same as any other
-    /// `--ex-pkg` — an opt-in extra, not part of the base
-    /// binutils/headers/gcc/libc toolchain (`em`'s own `--ex-gdb`/`--ex-pkg`
-    /// wire into it separately, see `crossdev::ex_pkg_atoms`). It was
-    /// previously here unconditionally by mistake.
+    /// A cross gdb is not part of the base toolchain: it is an `--ex-pkg dev-debug/gdb` extra.
     pub fn packages(&self) -> Vec<(&'static str, &'static str, PackageArch)> {
         let mut pkgs: Vec<(&'static str, &'static str)> = Vec::new();
         if self.llvm {
@@ -298,8 +293,8 @@ mod tests {
         assert_eq!(t.category(), "cross-riscv64-unknown-linux-gnu");
         assert_eq!(t.gentoo_arch(), "riscv");
         assert_eq!(t.profile_path(), "default/linux/riscv/23.0/rv64/lp64d");
-        // binutils, linux-headers, gcc, glibc — no gdb (that's --ex-gdb, an
-        // opt-in extra in real crossdev, not part of the base toolchain)
+        // binutils, linux-headers, gcc, glibc — no gdb (an --ex-pkg extra, not part
+        // of the base toolchain)
         assert!(
             t.packages()
                 .contains(&("sys-libs", "glibc", PackageArch::Target))

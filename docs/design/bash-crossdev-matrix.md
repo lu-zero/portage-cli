@@ -56,7 +56,7 @@ today keys `target_package` off `PackageArch::is_target()` — see
 |--------|-----------------|------|
 | B | sys-devel/binutils | host codegen (GCC model) |
 | G | sys-devel/gcc | host codegen (GCC model) |
-| D | dev-debug/gdb | host tool (`--ex-gdb` / extra) |
+| D | dev-debug/gdb | host tool (`--ex-pkg dev-debug/gdb`) |
 | K | sys-kernel/linux-headers | **target** env (K\|L) |
 | L | sys-libs/{glibc,musl,newlib,…} | **target** env (K\|L) |
 | C | sys-devel/clang-crossdev-wrappers | host (LLVM model) |
@@ -67,7 +67,7 @@ today keys `target_package` off `PackageArch::is_target()` — see
 | X | `--ex-pkg` extras | host env |
 
 LLVM pkglist (when `LLVM=yes`): K, L, R, C, A, P, U (plus optional extras).  
-GCC pkglist: K, L, B, G, D (D only if ex-gdb).
+GCC pkglist: K, L, B, G, D (D only as an `--ex-pkg` extra).
 
 Category prefix: `cross-<CTARGET>` (GCC) or `cross_llvm-<CTARGET>` (LLVM).
 

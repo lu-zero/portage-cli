@@ -192,22 +192,15 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
     );
 }
 
-/// Parse `--ex-pkg CATEGORY/PN` atoms (plus `--ex-gdb`'s `dev-debug/gdb`
-/// shorthand) into `(category, pn)` pairs: extra packages built onto an
-/// already-established cross target, after the base toolchain. These always
-/// run on the host (like `binutils`/`gcc`), never the target sysroot — real
-/// crossdev always takes `set_env`'s host-ABI branch for them.
+/// Parse the `--ex-pkg CATEGORY/PN` atoms: extra packages built onto an established cross
+/// target after the base toolchain, always on the host side like `binutils`/`gcc`
 fn ex_pkg_atoms(args: &CrossdevArgs) -> Result<Vec<Cpn>> {
-    let mut atoms = Vec::new();
-    for pkg in &args.ex_pkg {
-        let cpn = Cpn::parse(pkg)
-            .map_err(|e| anyhow::anyhow!("--ex-pkg {pkg:?} is not CATEGORY/PN: {e}"))?;
-        atoms.push(cpn);
-    }
-    if args.ex_gdb {
-        atoms.push(Cpn::new("dev-debug", "gdb"));
-    }
-    Ok(atoms)
+    args.ex_pkg
+        .iter()
+        .map(|pkg| {
+            Cpn::parse(pkg).map_err(|e| anyhow::anyhow!("--ex-pkg {pkg:?} is not CATEGORY/PN: {e}"))
+        })
+        .collect()
 }
 
 /// `em crossdev -T <tuple> -C`: unmerge the target's `cross-<tuple>` packages, then remove the
@@ -524,7 +517,7 @@ fn skipped_steps(
     let base = plan.base_len();
     anyhow::ensure!(
         plan.steps.len() > base,
-        "--ex-only needs packages to build: pass --ex-pkg or --ex-gdb"
+        "--ex-only needs packages to build: pass --ex-pkg"
     );
     let done = recorded();
     anyhow::ensure!(
@@ -1382,7 +1375,7 @@ fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) {
 /// instead of writing) and `-a` (confirm before writing) like any other mutating `em` path,
 /// instead of writing blindly.
 ///
-/// `extras` are `--ex-pkg`/`--ex-gdb` atoms (crossdev's own "Extra Fun"):
+/// `extras` are `--ex-pkg` atoms (crossdev's own "Extra Fun"):
 /// additional packages onto the established cross target, beyond
 /// [`CrossTarget::packages`]'s fixed base set — always host-arch, matching
 /// real crossdev's `set_env` treatment of `--ex-pkg`.
@@ -1496,7 +1489,7 @@ fn alias_repo_conf_entry(
 ) -> Result<config_plan::ConfigEntry> {
     // Validate every source package exists under ::gentoo, with a clear error
     // naming the cross package it's needed for, before declaring the alias.
-    // Covers `--ex-pkg`/`--ex-gdb` extras too — same requirement, same error
+    // Covers `--ex-pkg` extras too — same requirement, same error
     // shape, so a typo'd or nonexistent extra is rejected up front instead of
     // surfacing later as an opaque resolver `NoVersions`.
     for cpn in spec.packages() {
@@ -1600,8 +1593,8 @@ fn ensure_self_contained_prefix(globals: &Cli) -> Result<Utf8PathBuf> {
 }
 
 /// The whitespace-separated real-cpn list for `alias-packages`: the base set
-/// from [`CrossTarget::packages`] in stage order, followed by any `--ex-pkg`/
-/// `--ex-gdb` `extras`. The parser re-parses each token as a `Cpn`, so this
+/// from [`CrossTarget::packages`] in stage order, followed by any `--ex-pkg`
+/// `extras`. The parser re-parses each token as a `Cpn`, so this
 /// is pure config-file serialisation — no identity is carried as an opaque
 /// string downstream.
 fn alias_packages_line(spec: &spec::SysrootSpec) -> String {
@@ -2222,7 +2215,7 @@ fn cross_env_entries(
         });
         mappings.push_str(&env_mapping(&category, pkg, clang_built(target, spec, cpn)));
     }
-    // `--ex-pkg`/`--ex-gdb` extras: always the host-ABI branch, matching real
+    // `--ex-pkg` extras: always the host-ABI branch, matching real
     // crossdev's `for_each_extra_pkg set_portage X` (set_env's `case ${l} in
     // K|L) target ;; *) host` always falls to the host branch for `l=X`) —
     // and get the same host-mirrored keyword line as the base host-arch
@@ -2342,7 +2335,7 @@ fn host_cross_config(
         };
         keywords.push((atom, vec![AcceptToken::Any]));
     }
-    // `--ex-pkg`/`--ex-gdb` extras: always the host-ABI branch, like crossdev's own extras.
+    // `--ex-pkg` extras: always the host-ABI branch, like crossdev's own extras.
     if let Some(repo) = &repo {
         for dep in &spec.extra {
             let atom = extra_keyword(repo, &base, &category, dep)?;
@@ -2629,7 +2622,6 @@ mod tests {
             ex_only: false,
             clean: false,
             ex_pkg: Vec::new(),
-            ex_gdb: false,
             depgraph_flags: crate::cli::DepgraphFlags::default(),
             merge_flags: crate::cli::MergeFlags::default(),
             activity: crate::cli::ActivityArgs::default(),
@@ -3077,25 +3069,6 @@ mod tests {
         args.ex_pkg = vec!["not-a-cpn".to_owned()];
         let err = ex_pkg_atoms(&args).expect_err("bare package name rejected");
         assert!(format!("{err:#}").contains("not-a-cpn"));
-    }
-
-    #[test]
-    fn ex_gdb_is_sugar_for_ex_pkg_dev_debug_gdb() {
-        let mut args = crossdev_args(false);
-        args.ex_gdb = true;
-        let atoms = ex_pkg_atoms(&args).unwrap();
-        assert_eq!(atoms, vec![Cpn::new("dev-debug", "gdb")]);
-
-        // Combines with explicit --ex-pkg atoms too, in order.
-        args.ex_pkg = vec!["sys-devel/rust-std".to_owned()];
-        let atoms = ex_pkg_atoms(&args).unwrap();
-        assert_eq!(
-            atoms,
-            vec![
-                Cpn::new("sys-devel", "rust-std"),
-                Cpn::new("dev-debug", "gdb")
-            ]
-        );
     }
 
     // `--ex-pkg` extras: validated for existence like the base set, appended

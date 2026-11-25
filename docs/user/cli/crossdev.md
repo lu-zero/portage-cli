@@ -22,7 +22,7 @@ em crossdev [OPTIONS]
 * `--stage <N>` — Bootstrap only through crossdev stage `N`: 0 binutils, 1 a bare C compiler, 2 kernel headers, 3 the C library, 4 the full compiler and the extras (the default)
 
   Implies `--setup`; a later `--setup -r` continues where it stopped.
-* `--ex-only` — Build only the `--ex-pkg`/`--ex-gdb` packages, onto a target whose bootstrap is complete
+* `--ex-only` — Build only the `--ex-pkg` packages, onto a target whose bootstrap is complete
 
   Implies `--setup`.
 * `-C, --clean` — Uninstall the target: its `cross-<tuple>` packages, toolchain links, host config and sysroot. Effect: destructive (may delete or irreversibly overwrite).
@@ -33,7 +33,6 @@ em crossdev [OPTIONS]
   `CATEGORY/PN` — always runs on the host (like `binutils`/`gcc`), not the target sysroot, matching real crossdev's `--ex-pkg`.
 
   Applies to `--init-target`/`--setup` only; named per invocation, like real crossdev — not remembered across a later run that omits it.
-* `--ex-gdb` — Build a cross gdb (`dev-debug/gdb`) — shorthand for `--ex-pkg dev-debug/gdb`, crossdev's own `--ex-gdb`.
 * `-v, --verbose...` — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
 * `-q, --quiet` — Suppress non-error output
 * `--arch <ARCH>` — Target architecture for operations \[default: current system architecture\]

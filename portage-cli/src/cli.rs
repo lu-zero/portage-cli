@@ -3498,7 +3498,7 @@ pub struct CrossdevArgs {
     #[arg(long, value_name = "N", conflicts("ex_only"))]
     pub stage: Option<u8>,
 
-    /// Build only the `--ex-pkg`/`--ex-gdb` packages, onto a target whose bootstrap is complete
+    /// Build only the `--ex-pkg` packages, onto a target whose bootstrap is complete
     ///
     /// Implies `--setup`.
     #[arg(long)]
@@ -3539,11 +3539,6 @@ pub struct CrossdevArgs {
     /// like real crossdev — not remembered across a later run that omits it.
     #[arg(long, value_name = "CATEGORY/PN")]
     pub ex_pkg: Vec<String>,
-
-    /// Build a cross gdb (`dev-debug/gdb`) — shorthand for `--ex-pkg
-    /// dev-debug/gdb`, crossdev's own `--ex-gdb`.
-    #[arg(long)]
-    pub ex_gdb: bool,
 
     #[arg(flatten)]
     pub merge_flags: MergeFlags,
