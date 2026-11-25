@@ -270,7 +270,11 @@ impl LiveProjection {
                 }
             }
             // Diagnostics do not change session/inflight state.
-            ActivityEvent::PlanFailed { .. } | ActivityEvent::Diagnostic { .. } => {}
+            ActivityEvent::PlanFailed { .. }
+            | ActivityEvent::Diagnostic { .. }
+            | ActivityEvent::StepStart { .. }
+            | ActivityEvent::StepSkipped { .. }
+            | ActivityEvent::StepEnd { .. } => {}
         }
     }
 

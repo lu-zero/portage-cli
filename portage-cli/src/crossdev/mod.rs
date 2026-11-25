@@ -622,6 +622,7 @@ async fn run_staged(
         done_steps,
         extra_package_use,
     } = opts;
+    let run = StepRun::new(globals, plan.steps.len())?;
     let mut out = anstream::stdout();
     for (i, step) in plan.steps.iter().enumerate() {
         // Flush before building so progress survives `process::exit` on a
@@ -638,8 +639,10 @@ async fn run_staged(
         out.flush().ok();
         if i < done_steps {
             writeln!(out, "    done by an earlier run, skipped").ok();
+            run.emit(i, step, StepState::Skipped);
             continue;
         }
+        let started = run.emit(i, step, StepState::Start);
         // Sysroot baselayout must honour `--target` even when the plan-wide
         // flag forces outer EROOT for host-arch cross-* tools.
         let step_outer = if step.into_sysroot {
@@ -650,7 +653,7 @@ async fn run_staged(
         // A host-side `cross-*` step resolves against the outer EROOT's real profile, so it
         // reads only the host's pending entries; a sysroot step reads the sysroot's.
         let step_pending = pending.map(|p| if step_outer { &p.host } else { &p.sysroot });
-        crate::emerge_atoms(
+        let merged = crate::emerge_atoms(
             globals,
             &step.atoms,
             crate::EmergeOpts {
@@ -664,7 +667,10 @@ async fn run_staged(
                 update_world: false,
                 is_resume: false,
                 activity: None,
-                activity_session: Default::default(),
+                activity_session: crate::activity::ActivitySessionOpts {
+                    job_id: None,
+                    parent_job_id: Some(run.id.to_string()),
+                },
                 extra_aliases,
                 extra_path: &[],
                 autounmask_widen: true,
@@ -672,13 +678,97 @@ async fn run_staged(
                 pending_config: step_pending,
             },
         )
-        .await?;
-
-        if !globals.pretend() {
-            post_step(step)?;
-        }
+        .await;
+        let result = merged.and_then(|()| {
+            if globals.pretend() {
+                Ok(())
+            } else {
+                post_step(step)
+            }
+        });
+        run.emit(
+            i,
+            step,
+            StepState::End {
+                ok: result.is_ok(),
+                started,
+            },
+        );
+        result?;
     }
     Ok(())
+}
+
+enum StepState {
+    Start,
+    Skipped,
+    End { ok: bool, started: f64 },
+}
+
+/// A staged run's step events, on the activity outputs the user asked for
+struct StepRun {
+    bus: crate::activity::ActivityBus,
+    /// Each step's merge session carries it as `parent_job_id`
+    id: std::sync::Arc<str>,
+    of: u32,
+}
+
+impl StepRun {
+    fn new(globals: &Cli, steps: usize) -> Result<Self> {
+        let bus = crate::activity::ActivityBus::new();
+        let outputs = globals.effective_activity();
+        crate::activity::attach_jsonl_outputs(
+            &bus,
+            outputs.activity_fd,
+            outputs.activity_jsonl.as_deref(),
+        )?;
+        Ok(Self {
+            bus,
+            id: crate::activity::resolve_job_id(&Default::default(), None).into(),
+            of: steps as u32,
+        })
+    }
+
+    /// Emit step `i`'s event (1-based `index` on the wire); returns its time
+    fn emit(&self, i: usize, step: &stages::StageStep, state: StepState) -> f64 {
+        use crate::activity::{ACTIVITY_EVENT_VERSION as v, ActivityEvent};
+        let (job_id, index, of, label) = (
+            self.id.clone(),
+            i as u32 + 1,
+            self.of,
+            step.label.as_str().into(),
+        );
+        let at = ActivityEvent::now();
+        self.bus.emit(match state {
+            StepState::Start => ActivityEvent::StepStart {
+                v,
+                job_id,
+                index,
+                of,
+                label,
+                at,
+            },
+            StepState::Skipped => ActivityEvent::StepSkipped {
+                v,
+                job_id,
+                index,
+                of,
+                label,
+                at,
+            },
+            StepState::End { ok, started } => ActivityEvent::StepEnd {
+                v,
+                job_id,
+                index,
+                of,
+                label,
+                ok,
+                at,
+                seconds: at - started,
+            },
+        });
+        at
+    }
 }
 
 /// Whether `atom`'s package name is `pkg`
@@ -2890,6 +2980,84 @@ mod tests {
         for file in &shared {
             assert!(prefix.join(file).exists(), "{file} removed");
         }
+    }
+
+    #[tokio::test]
+    async fn a_staged_run_reports_its_steps_and_parents_their_sessions() {
+        use crate::activity::ActivityEvent;
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let jsonl = root.join("activity.jsonl");
+        let cli = crate::cli::parse_cli(&[
+            "em",
+            "--config-root",
+            root.as_str(),
+            "crossdev",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--activity-jsonl",
+            jsonl.as_str(),
+            "-p",
+        ]);
+        let step = |label: &str| stages::StageStep {
+            label: label.into(),
+            atoms: vec!["virtual/em-no-such-package".into()],
+            use_override: vec![],
+            nodeps: true,
+            into_sysroot: false,
+            level: stages::Level::Binutils,
+        };
+        let plan = stages::StagePlan {
+            steps: vec![step("done"), step("fails"), step("never")],
+        };
+        let result = run_staged(
+            RunStagedOpts {
+                plan: &plan,
+                globals: &cli,
+                depgraph_flags: Default::default(),
+                merge_flags: Default::default(),
+                use_outer_eroot: true,
+                target_only_installed_view: false,
+                extra_aliases: &[],
+                pending: None,
+                done_steps: 1,
+                extra_package_use: &[],
+            },
+            |_| Ok(()),
+        )
+        .await;
+        assert!(result.is_err());
+
+        let events: Vec<_> = std::fs::read_to_string(&jsonl)
+            .unwrap()
+            .lines()
+            .map(|line| ActivityEvent::from_jsonl_line(line).unwrap())
+            .collect();
+        let [
+            ActivityEvent::StepSkipped {
+                job_id: run,
+                index: 1,
+                of: 3,
+                ..
+            },
+            ActivityEvent::StepStart {
+                index: 2, label, ..
+            },
+            ActivityEvent::PlanFailed {
+                parent_job_id: Some(parent),
+                ..
+            },
+            ActivityEvent::StepEnd {
+                index: 2,
+                ok: false,
+                ..
+            },
+        ] = events.as_slice()
+        else {
+            panic!("{events:#?}");
+        };
+        assert_eq!(&**label, "fails");
+        assert_eq!(parent, run);
     }
 
     #[test]

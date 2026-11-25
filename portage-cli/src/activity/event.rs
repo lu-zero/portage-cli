@@ -260,6 +260,36 @@ pub enum ActivityEvent {
         msg: Arc<str>,
         at: f64,
     },
+    /// A staged run (crossdev/toolchain `--setup`, stage plans) begins step `index` of `of`
+    ///
+    /// `job_id` is the run's; each step's merge session carries it as `parent_job_id`.
+    StepStart {
+        v: u32,
+        job_id: Arc<str>,
+        index: u32,
+        of: u32,
+        label: Arc<str>,
+        at: f64,
+    },
+    /// A step an earlier run completed (`--setup -r`)
+    StepSkipped {
+        v: u32,
+        job_id: Arc<str>,
+        index: u32,
+        of: u32,
+        label: Arc<str>,
+        at: f64,
+    },
+    StepEnd {
+        v: u32,
+        job_id: Arc<str>,
+        index: u32,
+        of: u32,
+        label: Arc<str>,
+        ok: bool,
+        at: f64,
+        seconds: f64,
+    },
 }
 
 impl ActivityEvent {
@@ -282,7 +312,10 @@ impl ActivityEvent {
             | Self::PhaseLeave { job_id, .. }
             | Self::PkgEnd { job_id, .. }
             | Self::PlanFailed { job_id, .. }
-            | Self::Diagnostic { job_id, .. } => job_id,
+            | Self::Diagnostic { job_id, .. }
+            | Self::StepStart { job_id, .. }
+            | Self::StepSkipped { job_id, .. }
+            | Self::StepEnd { job_id, .. } => job_id,
         }
     }
 

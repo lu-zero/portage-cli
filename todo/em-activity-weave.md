@@ -29,13 +29,10 @@ the em process exits. No em change is needed for the channel itself.
    `EmergeOpts` exists; the crossdev loop passes the default today).
 3. `-q` with an activity output keeps the terminal to failures only (check what it prints today).
 
-## Shared crate (needs a go-ahead: new published crate)
+## No shared crate (Luca: "we can reimplement them")
 
-crossdev-stages uses crates.io dependencies and portage-cli is unpublished, so candy has to move to a
-crate both can use, e.g. `portage-activity`: `event.rs`, `bus.rs`, `history.rs` (ETA), `candy.rs`.
-Seams that stay in portage-cli: `From<query::depgraph::MergeRoot>`, `console::set_bars` (a callback),
-`style::warn_line!`/`C_BOLD`, `UNLIMITED_JOBS`. crossdev-stages is the second consumer, so this is not a
-speculative split. Release order: GitHub push/tag first, then `cargo publish`.
+crossdev-stages decodes the JSONL itself (its own serde types for the events it reads, skipping
+unknown ones, per `docs/user/activity.md`) and draws its own indicatif bars, modelled on candy.
 
 ## crossdev-stages side
 
@@ -56,7 +53,9 @@ speculative split. Release order: GitHub push/tag first, then `cargo publish`.
 
 ## Order
 
-1. em: step events and the shared run id, with tests on the event stream.
-2. Crate extraction (after the go-ahead), em using it unchanged.
-3. crossdev-stages: FIFO reader, quiet mode, then fancy on the shared candy.
-4. Candy improvements, live in a sandbox build.
+1. em: step events and the shared run id, with tests on the event stream. ✅ `step_start`/`step_skipped`/
+   `step_end` from `run_staged`, step sessions parented to the run id.
+2. crossdev-stages: FIFO reader, quiet mode, then fancy with its own bars. ✅ uncommitted there
+   (`src/activity.rs`, `--output plain|quiet|fancy`, `SandboxRunner::run_em`); live in llvm1 2026-11-25.
+3. Candy improvements (both sides), live in a sandbox build.
+4. Open: the `[n/N]` step headers are stdout text that ignores `-q`; harmless once em's stdout goes to a log.

@@ -66,12 +66,13 @@ impl JsonlFdSink {
 
 impl ActivitySink for JsonlFdSink {
     fn on_event(&self, event: &ActivityEvent) {
-        let Ok(line) = event.to_jsonl_line() else {
+        let Ok(mut line) = event.to_jsonl_line() else {
             return;
         };
+        line.push('\n');
+        // One write per line: writers sharing a FIFO stay whole up to PIPE_BUF.
         let mut f = self.file.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = writeln!(f, "{line}");
-        let _ = f.flush();
+        let _ = f.write_all(line.as_bytes());
     }
 }
 

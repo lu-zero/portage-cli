@@ -176,7 +176,17 @@ session starts sends one `plan_failed` event instead, with a `reason` and the
 | `other` | any other error before the merge started |
 
 The fd is duplicated, not taken over: every merge of a multi-step run (`crossdev
---setup`, `stages`) writes to it. `--activity-fd=-` (stdout) is rejected — it
+--setup`, `toolchain --setup`, `stages`) writes to it. Such a run also reports its steps,
+under a run `job_id` that each step's merge session carries as `parent_job_id`:
+
+```json
+{"v":1,"event":"step_skipped","job_id":"19b4…-777","index":1,"of":12,"label":"binutils",…}
+{"v":1,"event":"step_start","job_id":"19b4…-777","index":2,"of":12,"label":"gcc-stage1",…}
+{"v":1,"event":"session_start","job_id":"…","parent_job_id":"19b4…-777",…}
+{"v":1,"event":"step_end","job_id":"19b4…-777","index":2,"of":12,"label":"gcc-stage1","ok":true,"seconds":184.0,…}
+```
+
+`step_skipped` marks a step an earlier run finished (`--setup -r`). `--activity-fd=-` (stdout) is rejected — it
 collides with human output; use an FD. Unknown event types must be skipped by readers (forward compat). The
 `job_id` is the same key resume markers use, so completion, live status,
 history, and the bus all correlate.
