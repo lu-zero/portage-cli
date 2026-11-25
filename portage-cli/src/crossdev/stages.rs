@@ -315,6 +315,7 @@ pub fn toolchain_plan(
                 level: Level::Full,
             });
         }
+        steps.extend(extra_steps(kind, spec));
         return StagePlan { steps };
     }
 
@@ -530,17 +531,22 @@ pub fn toolchain_plan(
             level: Level::Full,
         });
     }
-    for dep in &spec.extra {
-        steps.push(StageStep {
-            label: format!("extra {}", dep.cpn.package),
-            atoms: vec![dep_atom(dep)],
-            use_override: vec![],
-            nodeps: false,
-            into_sysroot: false,
-            level: Level::Extra,
-        });
-    }
+    steps.extend(extra_steps(kind, spec));
     StagePlan { steps }
+}
+
+fn extra_steps<'a>(
+    kind: &'a BootstrapKind,
+    spec: &'a SysrootSpec,
+) -> impl Iterator<Item = StageStep> + 'a {
+    spec.extra.iter().map(|dep| StageStep {
+        label: format!("extra {}", dep.cpn.package),
+        atoms: vec![kind.atom(dep.cpn.category.as_str(), dep.cpn.package.as_str())],
+        use_override: vec![],
+        nodeps: false,
+        into_sysroot: false,
+        level: Level::Extra,
+    })
 }
 
 /// The per-slot clang configuration packages (`/etc/clang/<slot>/gentoo-*.cfg`)
@@ -899,15 +905,28 @@ mod tests {
     }
 
     #[test]
-    fn extras_are_built_after_the_toolchain() {
-        let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let extra = portage_atom::Cpn::new("dev-debug", "gdb");
-        let spec = SysrootSpec::builtin(&target, &[extra]);
-        let plan = toolchain_plan(&BootstrapKind::Cross(target), &spec, false, false);
-        let last = plan.steps.last().unwrap();
-        assert_eq!(last.label, "extra gdb");
-        assert_eq!(last.atoms, ["cross-riscv64-unknown-linux-gnu/gdb"]);
-        assert!(!last.into_sysroot);
+    fn extras_are_built_after_the_toolchain_in_both_models() {
+        for (tuple, llvm, cat) in [
+            (
+                "riscv64-unknown-linux-gnu",
+                false,
+                "cross-riscv64-unknown-linux-gnu",
+            ),
+            (
+                "aarch64-unknown-linux-musl",
+                true,
+                "cross_llvm-aarch64-unknown-linux-musl",
+            ),
+        ] {
+            let target = CrossTarget::parse(tuple, llvm).unwrap();
+            let extra = portage_atom::Cpn::new("dev-debug", "gdb");
+            let spec = SysrootSpec::builtin(&target, &[extra]);
+            let plan = toolchain_plan(&BootstrapKind::Cross(target), &spec, false, false);
+            let last = plan.steps.last().unwrap();
+            assert_eq!(last.label, "extra gdb", "{tuple}");
+            assert_eq!(last.atoms, [format!("{cat}/gdb")]);
+            assert!(!last.into_sysroot);
+        }
     }
 
     #[test]

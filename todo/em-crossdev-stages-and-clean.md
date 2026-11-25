@@ -80,14 +80,16 @@ Native `toolchain --setup` gets no flag.
 
 ## Found on the way
 
-- An LLVM-model plan returns before the extras loop, so its `--ex-pkg` packages are never
-  built (and `--ex-only` there has nothing to run). Not fixed yet.
+- ✅ An LLVM-model plan returned before the extras loop, so its `--ex-pkg` packages were never
+  built (and `--ex-only` there had nothing to run). Both cross paths now append `extra_steps`.
 - The milestone record is keyed on the spec without its extras, so naming a new extra keeps
   the base steps done.
 - Blocker victims (`unmerge_blocker_victim(s)`) open the VDB and unmerge under `cli.roots()`,
-  which `-T` points at the sysroot even when the step merges into the outer root. Unchanged by
-  the unmerge-core `Roots` parameter (`2c07f04e`); a `cross-*` blocker would look in the wrong
-  VDB. Not hit yet.
+  which `-T` points at the sysroot even when the step merges into the outer root. The classifier
+  reads `roots.merge_root()`'s VDB (`load_target_installed_with_cache`), so under
+  `use_outer_eroot` the victim is in the outer VDB, `packages_for_unmerge` misses it in the
+  sysroot's and the removal is silently skipped. Fix: pass the merge's `roots` into both
+  functions (`run_due_unmerges`, the parallel loop and `emerge.rs`'s two batches). Not hit yet.
 
 ## Tests
 
