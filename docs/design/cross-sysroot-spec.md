@@ -79,6 +79,8 @@ category, so glibc is allowed). `em crossdev -L` on a glibc tuple builds this sp
 wrappers and compiler-rt, libunwind (`static-libs`), libcxxabi and libcxx, each bound to the LLVM slot, and last
 the per-slot clang config packages (`clang-{rtlib,unwindlib,stdlib}-config`, `clang-linker-config`) into the
 sysroot: the target's own LLVM runtimes BDEPEND on them but read `${ESYSROOT}/etc/clang/<slot>/gentoo-*.cfg`.
+That step is `--nodeps`: under `features/llvm` their RDEPEND is the target's LLVM, lld and runtimes, which
+would cross-build all of LLVM into the sysroot (18 packages) and leave `-p` unresolvable on an empty sysroot.
 
 The per-target clang config (`/etc/clang/cross/<tuple>.cfg`) is written twice by the post-step hook: after
 gcc-stage2 it points at the cross gcc (`--gcc-install-dir`), after libcxx at LLVM's runtimes

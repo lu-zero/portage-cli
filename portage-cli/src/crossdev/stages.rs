@@ -514,7 +514,8 @@ pub fn toolchain_plan(
             });
         }
         // The target's own LLVM runtimes BDEPEND on these but read them from ESYSROOT
-        // (`--config=${ESYSROOT}/etc/clang/<slot>/…`), so the sysroot needs them too.
+        // (`--config=${ESYSROOT}/etc/clang/<slot>/…`), so the sysroot needs them too. `--nodeps`: under
+        // `features/llvm` their RDEPEND is the target's LLVM, lld and runtimes, which only the stage needs.
         let slot = spec
             .llvm_slot()
             .map(|s| format!(":{s}"))
@@ -526,7 +527,7 @@ pub fn toolchain_plan(
                 .map(|cfg| format!("{cfg}{slot}"))
                 .collect(),
             use_override: vec![],
-            nodeps: false,
+            nodeps: true,
             into_sysroot: true,
             level: Level::Full,
         });
@@ -731,7 +732,7 @@ mod tests {
                 "clang config (sysroot)",
             ]
         );
-        assert!(plan.steps[11].into_sysroot);
+        assert!(plan.steps[11].into_sysroot && plan.steps[11].nodeps);
         assert_eq!(
             plan.steps[11].atoms[0],
             "llvm-runtimes/clang-rtlib-config:23"
