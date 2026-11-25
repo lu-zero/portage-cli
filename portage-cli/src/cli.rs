@@ -3491,6 +3491,19 @@ pub struct CrossdevArgs {
     #[arg(short = 'r', long)]
     pub resume: bool,
 
+    /// Bootstrap only through crossdev stage `N`: 0 binutils, 1 a bare C compiler, 2 kernel
+    /// headers, 3 the C library, 4 the full compiler and the extras (the default)
+    ///
+    /// Implies `--setup`; a later `--setup -r` continues where it stopped.
+    #[arg(long, value_name = "N", conflicts("ex_only"))]
+    pub stage: Option<u8>,
+
+    /// Build only the `--ex-pkg`/`--ex-gdb` packages, onto a target whose bootstrap is complete
+    ///
+    /// Implies `--setup`.
+    #[arg(long)]
+    pub ex_only: bool,
+
     /// Print the derived target configuration and exit (no writes)
     #[arg(long)]
     pub show_target_cfg: bool,

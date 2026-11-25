@@ -81,6 +81,61 @@ pub struct StageStep {
     /// only seeds the outer prefix while libc writes under `usr/<tuple>/`.
     /// Keep the default merged-usr profile; match disk to it.
     pub into_sysroot: bool,
+    /// The crossdev stage this step belongs to
+    pub level: Level,
+}
+
+/// crossdev's cumulative stages (`--stage N`), plus the extras that follow the last one
+///
+/// A step's prerequisites (baselayout, a self-contained root's python) share its stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Level {
+    /// Stage 0: binutils, or the clang wrappers
+    Binutils,
+    /// Stage 1: a bare C compiler, or compiler-rt with the headers it needs
+    Compiler,
+    /// Stage 2: kernel headers
+    Headers,
+    /// Stage 3: the C library
+    Libc,
+    /// Stage 4: the full compiler, or the LLVM runtimes
+    Full,
+    /// `--ex-pkg` packages, built after stage 4
+    Extra,
+}
+
+impl Level {
+    /// The last level `--stage n` builds, `None` past stage 4; stage 4 includes the extras
+    pub fn of_stage(n: u8) -> Option<Self> {
+        [
+            Self::Binutils,
+            Self::Compiler,
+            Self::Headers,
+            Self::Libc,
+            Self::Extra,
+        ]
+        .get(usize::from(n))
+        .copied()
+    }
+}
+
+impl StagePlan {
+    /// The leading steps up to and including `last`
+    ///
+    /// Levels never decrease along a cross plan, so this keeps the milestone record valid.
+    pub fn through(mut self, last: Level) -> Self {
+        let keep = self.steps.iter().take_while(|s| s.level <= last).count();
+        self.steps.truncate(keep);
+        self
+    }
+
+    /// How many leading steps come before the extras
+    pub fn base_len(&self) -> usize {
+        self.steps
+            .iter()
+            .take_while(|s| s.level < Level::Extra)
+            .count()
+    }
 }
 
 /// An ordered sequence of [`StageStep`]s run against one root
@@ -191,6 +246,7 @@ pub fn toolchain_plan(
         use_override: owned(&["build"]),
         nodeps: false,
         into_sysroot: baselayout_into_sysroot,
+        level: Level::Binutils,
     });
 
     if let Some(clang) = spec
@@ -207,6 +263,7 @@ pub fn toolchain_plan(
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
+            level: Level::Binutils,
         });
         if spec.kernel_headers.is_some() {
             steps.push(StageStep {
@@ -215,6 +272,7 @@ pub fn toolchain_plan(
                 use_override: owned(&["headers-only"]),
                 nodeps: false,
                 into_sysroot: false,
+                level: Level::Compiler,
             });
         }
         // compiler-rt's builtins need the libc headers, and the full libc
@@ -225,6 +283,7 @@ pub fn toolchain_plan(
             use_override: owned(&["headers-only"]),
             nodeps: false,
             into_sysroot: false,
+            level: Level::Compiler,
         });
         steps.push(StageStep {
             label: "compiler-rt".into(),
@@ -232,6 +291,7 @@ pub fn toolchain_plan(
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
+            level: Level::Compiler,
         });
         steps.push(StageStep {
             label: "libc".into(),
@@ -239,6 +299,7 @@ pub fn toolchain_plan(
             use_override: owned(&["-headers-only"]),
             nodeps: false,
             into_sysroot: false,
+            level: Level::Libc,
         });
         for (rt, use_override) in [
             (&clang.unwind, owned(&["static-libs"])),
@@ -251,6 +312,7 @@ pub fn toolchain_plan(
                 use_override,
                 nodeps: false,
                 into_sysroot: false,
+                level: Level::Full,
             });
         }
         return StagePlan { steps };
@@ -287,6 +349,7 @@ pub fn toolchain_plan(
             use_override: owned(&["headers-only"]),
             nodeps: false,
             into_sysroot: false,
+            level: Level::Headers,
         });
     }
 
@@ -297,6 +360,7 @@ pub fn toolchain_plan(
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
+            level: Level::Binutils,
         });
         // Same reasoning as python above: `dev-perl/*` packages built via
         // `Module::Build`/`ExtUtils::MakeMaker` read real install paths out
@@ -311,6 +375,7 @@ pub fn toolchain_plan(
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
+            level: Level::Binutils,
         });
     }
 
@@ -328,6 +393,7 @@ pub fn toolchain_plan(
         use_override: binutils_use,
         nodeps: false,
         into_sysroot: false,
+        level: Level::Binutils,
     });
 
     // Native: seed compiler at BROOT builds full glibc; one full gcc after.
@@ -342,6 +408,7 @@ pub fn toolchain_plan(
                 use_override: vec![],
                 nodeps: true,
                 into_sysroot: false,
+                level: Level::Libc,
             });
         }
         steps.push(StageStep {
@@ -350,6 +417,7 @@ pub fn toolchain_plan(
             use_override: owned(GCC_DISABLE),
             nodeps: false,
             into_sysroot: false,
+            level: Level::Full,
         });
         return StagePlan { steps };
     }
@@ -371,6 +439,7 @@ pub fn toolchain_plan(
         use_override: stage1,
         nodeps: false,
         into_sysroot: false,
+        level: Level::Compiler,
     });
     if spec.kernel_headers.is_some() {
         // Target `linux-headers` into the sysroot does not satisfy
@@ -383,6 +452,7 @@ pub fn toolchain_plan(
                 use_override: owned(&["headers-only"]),
                 nodeps: false,
                 into_sysroot: false,
+                level: Level::Headers,
             });
         }
         steps.push(StageStep {
@@ -391,6 +461,7 @@ pub fn toolchain_plan(
             use_override: owned(&["headers-only"]),
             nodeps: false,
             into_sysroot: false,
+            level: Level::Headers,
         });
     }
     // Single full libc pass, no separate headers-only step: gcc-stage1
@@ -403,6 +474,7 @@ pub fn toolchain_plan(
         use_override: vec![],
         nodeps: false,
         into_sysroot: false,
+        level: Level::Libc,
     });
     let mut stage2 = owned(GCC_DISABLE);
     stage2.extend(owned(GCC_DISABLE_STAGE2));
@@ -412,6 +484,7 @@ pub fn toolchain_plan(
         use_override: stage2,
         nodeps: false,
         into_sysroot: false,
+        level: Level::Full,
     });
     // Mixed: the gcc toolchain built the libc; the per-target clang starts on gcc's
     // runtimes and builds LLVM's own for the target.
@@ -422,6 +495,7 @@ pub fn toolchain_plan(
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
+            level: Level::Full,
         });
         for (rt, use_override) in [
             (&clang.rtlib, vec![]),
@@ -435,6 +509,7 @@ pub fn toolchain_plan(
                 use_override,
                 nodeps: false,
                 into_sysroot: false,
+                level: Level::Full,
             });
         }
         // The target's own LLVM runtimes BDEPEND on these but read them from ESYSROOT
@@ -452,6 +527,7 @@ pub fn toolchain_plan(
             use_override: vec![],
             nodeps: false,
             into_sysroot: true,
+            level: Level::Full,
         });
     }
     for dep in &spec.extra {
@@ -461,6 +537,7 @@ pub fn toolchain_plan(
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
+            level: Level::Extra,
         });
     }
     StagePlan { steps }
@@ -516,6 +593,7 @@ pub fn gcc_refresh_plan(target: &CrossTarget, version: &str) -> StagePlan {
                 use_override: stage1,
                 nodeps: false,
                 into_sysroot: false,
+                level: Level::Compiler,
             },
             StageStep {
                 label: "gcc-stage2 (refresh)".into(),
@@ -523,6 +601,7 @@ pub fn gcc_refresh_plan(target: &CrossTarget, version: &str) -> StagePlan {
                 use_override: stage2,
                 nodeps: false,
                 into_sysroot: false,
+                level: Level::Full,
             },
         ],
     }
@@ -545,6 +624,7 @@ pub fn stage1_plan(stack: &ProfileStack, bootstrap_use: &[String]) -> Result<Sta
         use_override: vec!["build".to_string()],
         nodeps: true,
         into_sysroot: false,
+        level: Level::Binutils,
     }];
     let atoms: Vec<String> = stack
         .stage1_packages()?
@@ -559,6 +639,7 @@ pub fn stage1_plan(stack: &ProfileStack, bootstrap_use: &[String]) -> Result<Sta
         use_override,
         nodeps: false,
         into_sysroot: false,
+        level: Level::Full,
     });
     Ok(StagePlan { steps })
 }
@@ -578,6 +659,48 @@ mod tests {
 
     fn labels(plan: &StagePlan) -> Vec<&str> {
         plan.steps.iter().map(|s| s.label.as_str()).collect()
+    }
+
+    #[test]
+    fn cross_plans_climb_the_stages_so_each_stage_is_a_prefix() {
+        let gnu = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
+        let gpkg = SysrootSpec::builtin(&gnu, &[portage_atom::Cpn::new("dev-debug", "gdb")]);
+        let musl = CrossTarget::parse("aarch64-unknown-linux-musl", true).unwrap();
+        let mixed = crate::crossdev::spec::clang_main_spec();
+        let plans = [
+            toolchain_plan(&BootstrapKind::Cross(gnu.clone()), &gpkg, false, false),
+            toolchain_plan(&BootstrapKind::Cross(gnu), &gpkg, true, false),
+            plan_of(&BootstrapKind::Cross(musl), false, false),
+            toolchain_plan(
+                &BootstrapKind::Cross(mixed.cross_target().unwrap()),
+                &mixed,
+                false,
+                false,
+            ),
+        ];
+        for plan in &plans {
+            assert!(
+                plan.steps.is_sorted_by_key(|s| s.level),
+                "{:?}",
+                labels(plan)
+            );
+        }
+
+        let gcc = &plans[0];
+        let through = |n| labels(&gcc.clone().through(Level::of_stage(n).unwrap())).len();
+        assert_eq!(
+            labels(&gcc.clone().through(Level::Binutils)),
+            ["baselayout", "binutils"]
+        );
+        assert_eq!(through(1), 3);
+        assert_eq!(through(2), 4);
+        assert_eq!(through(3), 5);
+        assert_eq!(through(4), gcc.steps.len());
+        assert_eq!(gcc.base_len(), gcc.steps.len() - 1);
+        assert!(Level::of_stage(5).is_none());
+
+        let llvm = plans[2].clone().through(Level::Compiler);
+        assert_eq!(labels(&llvm).last(), Some(&"compiler-rt"));
     }
 
     #[test]

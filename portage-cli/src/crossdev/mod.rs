@@ -106,6 +106,8 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
         .target()
         .ok_or_else(|| anyhow::anyhow!("em crossdev needs a target tuple: pass --target/-T"))?;
     let extras = ex_pkg_atoms(args)?;
+    let last = stage_selection(args, &extras)?;
+    let building = args.setup || last.is_some() || args.ex_only;
     let own = own_spec(globals)?;
     // A spec from a file, or saved by an earlier one, gets the sysroot its own profile.
     let own_profile = own.is_some();
@@ -138,7 +140,7 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
                 target.llvm_slot = llvm_slot(&main_repo(globals)?);
             }
             let mut all_extras = extras.clone();
-            if args.setup {
+            if building {
                 let base = spec::SysrootSpec::builtin(&target, &[]).packages();
                 let mut recorded: Vec<Cpn> = alias_packages(&target, globals)
                     .into_iter()
@@ -177,8 +179,8 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
         .await
         .map(|_| ());
     }
-    if args.setup {
-        return setup(&target, globals, args, &spec, derived.as_ref()).await;
+    if building {
+        return setup(&target, globals, args, &spec, derived.as_ref(), last).await;
     }
     bail!(
         "em crossdev does setup only for now — pass --init-target to lay down the \
@@ -203,6 +205,21 @@ fn ex_pkg_atoms(args: &CrossdevArgs) -> Result<Vec<Cpn>> {
         atoms.push(Cpn::new("dev-debug", "gdb"));
     }
     Ok(atoms)
+}
+
+/// The last stage `--stage` builds, checked against the extras named on the command line
+fn stage_selection(args: &CrossdevArgs, extras: &[Cpn]) -> Result<Option<stages::Level>> {
+    let Some(n) = args.stage else {
+        return Ok(None);
+    };
+    let last = stages::Level::of_stage(n)
+        .with_context(|| format!("--stage {n}: crossdev stages are 0 to 4"))?;
+    if last < stages::Level::Full
+        && let Some(cpn) = extras.first()
+    {
+        bail!("--ex-pkg {cpn} is built after stage 4, not with --stage {n}");
+    }
+    Ok(Some(last))
 }
 
 /// The real packages the target's on-disk alias declares, if it has been initialized
@@ -234,11 +251,49 @@ async fn setup(
     args: &CrossdevArgs,
     spec: &spec::SysrootSpec,
     derived: Option<&DerivedProfile>,
+    last: Option<stages::Level>,
 ) -> Result<()> {
     // Same-tuple as host CHOST is not cross: ebuilds treat CTARGET==CHOST as
     // native and install into host paths (collisions with real packages).
     // Real crossdev has the same limit — reject early.
     reject_same_arch_target(&target.tuple, &host_chost())?;
+    // A self-contained `--root DIR` EPREFIX has no host-shared merged-usr
+    // skeleton or libs, so the plan needs the same from-scratch treatment as
+    // native. `outer_roots()`, not `roots()`: this must stay anchored to the
+    // outer EROOT even if `--target` happens to also be set on this
+    // invocation.
+    let self_contained = globals.outer_roots().is_self_contained_root();
+    let mut plan = stages::toolchain_plan(
+        &stages::BootstrapKind::Cross(target.clone()),
+        spec,
+        self_contained,
+        false,
+    );
+    if let Some(last) = last {
+        plan = plan.through(last);
+    }
+
+    // Milestones: what `-r` and `--ex-only` may skip, and the record each completed step
+    // updates. Extra steps are matched one by one, so the key leaves them out.
+    let sysroot_dir = sysroot(target, globals);
+    let spec_text = spec::SysrootSpec {
+        extra: Vec::new(),
+        ..spec.clone()
+    }
+    .to_toml()?;
+    let outer_root = globals.outer_roots().merge_root().to_owned();
+    let vdb_root = |step: &stages::StageStep| {
+        if step.into_sysroot {
+            sysroot_dir.clone()
+        } else {
+            outer_root.clone()
+        }
+    };
+    let recorded = || {
+        milestones::Milestones::load(&sysroot_dir, &spec_text)
+            .map_or(0, |m| m.done(&plan.steps, vdb_root))
+    };
+    let done_steps = skipped_steps(&plan, args, recorded).with_context(|| target.tuple.clone())?;
     // A spec file given here is the target's whole configuration; otherwise hand edits survive.
     let policy = if globals.target_spec().is_some() {
         config_plan::RefreshPolicy::Sync
@@ -264,18 +319,6 @@ async fn setup(
     if matches!(init_outcome, config_plan::Outcome::Declined) {
         return Ok(());
     }
-    // A self-contained `--root DIR` EPREFIX has no host-shared merged-usr
-    // skeleton or libs, so the plan needs the same from-scratch treatment as
-    // native. `outer_roots()`, not `roots()`: this must stay anchored to the
-    // outer EROOT even if `--target` happens to also be set on this
-    // invocation.
-    let self_contained = globals.outer_roots().is_self_contained_root();
-    let plan = stages::toolchain_plan(
-        &stages::BootstrapKind::Cross(target.clone()),
-        spec,
-        self_contained,
-        false,
-    );
     let mut out = anstream::stdout();
     let verb = if globals.pretend() {
         "Plan"
@@ -290,23 +333,7 @@ async fn setup(
     )
     .ok();
 
-    // Milestones: what `-r` may skip, and the record each completed step updates.
-    let sysroot_dir = sysroot(target, globals);
-    let spec_text = spec.to_toml()?;
-    let outer_root = globals.outer_roots().merge_root().to_owned();
-    let vdb_root = |step: &stages::StageStep| {
-        if step.into_sysroot {
-            sysroot_dir.clone()
-        } else {
-            outer_root.clone()
-        }
-    };
-    let done_steps = match args.resume {
-        true => milestones::Milestones::load(&sysroot_dir, &spec_text)
-            .map_or(0, |m| m.done(&plan.steps, vdb_root)),
-        false => 0,
-    };
-    if !args.resume && !globals.pretend() {
+    if done_steps == 0 && !globals.pretend() {
         milestones::Milestones::clear(&sysroot_dir)?;
     }
     let post_step = {
@@ -400,6 +427,30 @@ async fn setup(
         .ok();
     }
     Ok(())
+}
+
+/// How many leading steps of `plan` this run skips, given how many the milestones vouch for
+///
+/// `-r` skips what the record holds; `--ex-only` skips the whole base and needs it recorded.
+fn skipped_steps(
+    plan: &stages::StagePlan,
+    args: &CrossdevArgs,
+    recorded: impl FnOnce() -> usize,
+) -> Result<usize> {
+    if !args.ex_only {
+        return Ok(if args.resume { recorded() } else { 0 });
+    }
+    let base = plan.base_len();
+    anyhow::ensure!(
+        plan.steps.len() > base,
+        "--ex-only needs packages to build: pass --ex-pkg or --ex-gdb"
+    );
+    let done = recorded();
+    anyhow::ensure!(
+        done >= base,
+        "--ex-only needs a complete bootstrap: run --setup -r first"
+    );
+    Ok(if args.resume { done } else { base })
 }
 
 /// Cross post-step hook: activate the freshly-built toolchain
@@ -2455,6 +2506,8 @@ mod tests {
             show_target_cfg,
             print_spec: false,
             resume: false,
+            stage: None,
+            ex_only: false,
             ex_pkg: Vec::new(),
             ex_gdb: false,
             depgraph_flags: crate::cli::DepgraphFlags::default(),
@@ -2630,6 +2683,57 @@ mod tests {
         };
         let result = run(args, &cli).await;
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn stage_takes_0_to_4_and_extras_only_at_4() {
+        let mut args = crossdev_args(false);
+        let gdb = [Cpn::new("dev-debug", "gdb")];
+        assert_eq!(stage_selection(&args, &gdb).unwrap(), None);
+        args.stage = Some(1);
+        assert_eq!(
+            stage_selection(&args, &[]).unwrap(),
+            Some(stages::Level::Compiler)
+        );
+        assert!(stage_selection(&args, &gdb).is_err());
+        args.stage = Some(4);
+        assert_eq!(
+            stage_selection(&args, &gdb).unwrap(),
+            Some(stages::Level::Extra)
+        );
+        args.stage = Some(5);
+        assert!(stage_selection(&args, &[]).is_err());
+    }
+
+    #[test]
+    fn ex_only_skips_a_recorded_base_and_refuses_an_incomplete_one() {
+        let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
+        let plain = stages::toolchain_plan(
+            &stages::BootstrapKind::Cross(target.clone()),
+            &spec::SysrootSpec::builtin(&target, &[]),
+            false,
+            false,
+        );
+        let gdb = [Cpn::new("dev-debug", "gdb")];
+        let plan = stages::toolchain_plan(
+            &stages::BootstrapKind::Cross(target.clone()),
+            &spec::SysrootSpec::builtin(&target, &gdb),
+            false,
+            false,
+        );
+        let base = plan.base_len();
+        let mut args = crossdev_args(false);
+        assert_eq!(skipped_steps(&plan, &args, || base).unwrap(), 0);
+        args.resume = true;
+        assert_eq!(skipped_steps(&plan, &args, || 2).unwrap(), 2);
+
+        args.ex_only = true;
+        args.resume = false;
+        assert_eq!(skipped_steps(&plan, &args, || base + 1).unwrap(), base);
+        assert!(skipped_steps(&plan, &args, || base - 1).is_err());
+        assert!(skipped_steps(&plain, &args, || base).is_err());
+        args.resume = true;
+        assert_eq!(skipped_steps(&plan, &args, || base + 1).unwrap(), base + 1);
     }
 
     // Neither given: a clear error, not a panic or a silent bare-host guess

@@ -128,6 +128,7 @@ fn installed(vdb_root: &Utf8Path, atoms: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crossdev::stages::Level;
 
     fn step(label: &str, atom: &str) -> StageStep {
         StageStep {
@@ -136,6 +137,7 @@ mod tests {
             use_override: vec![],
             nodeps: false,
             into_sysroot: false,
+            level: Level::Binutils,
         }
     }
 
